@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+{% block title %}{{ facility.name }} – Dashboard{% endblock %}
+{% block content %}
+<section class="header">
+  <h1>{{ facility.name }}</h1>
+  <p class="muted">{{ today.strftime('%A, %d %B %Y') }} · {{ resident_count }} active residents</p>
+</section>
+
+<section class="cards">
+  <div class="card status-{{ today_stats.status }}">
+    <div class="card-label">Care minutes / resident (today)</div>
+    <div class="card-value">{{ today_stats.care_per_resident }}</div>
+    <div class="card-sub">Target {{ facility.ancc_target }}</div>
+  </div>
+  <div class="card status-{{ today_stats.rn_status }}">
+    <div class="card-label">RN minutes / resident (today)</div>
+    <div class="card-value">{{ today_stats.rn_per_resident }}</div>
+    <div class="card-sub">Target {{ facility.rn_target }}</div>
+  </div>
+</section>
+
+<section class="block">
+  <h2>Last 14 days</h2>
+  <canvas id="trend" height="120"></canvas>
+</section>
+
+<section class="block qtd">
+  <h2>Quarter to date</h2>
+  <p>
+    Averaging <strong>{{ q_avg.care_per_resident }}</strong> mins/resident across
+    {{ q_avg.days }} days since {{ q_start.strftime('%d %b') }}.
+    {% if q_gap >= 0 %}
+      <span class="badge ok">{{ q_gap }} above target</span>
+    {% else %}
+      <span class="badge {% if q_gap_pct < -5 %}bad{% else %}warn{% endif %}">
+        {{ q_gap }} mins ({{ q_gap_pct }}%) below target
+      </span>
+    {% endif %}
+  </p>
+  <p class="muted">RN average: {{ q_avg.rn_per_resident }} mins (target {{ facility.rn_target }})</p>
+</section>
+
+<section class="block">
+  <h2>Daily breakdown</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Date</th>
+        <th>Residents</th>
+        <th>Total care mins</th>
+        <th>RN mins</th>
+        <th>Care / resident</th>
+        <th>RN / resident</th>
+        <th>Status</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in last_14 %}
+      <tr>
+        <td>{{ r.date.strftime('%d %b') }}</td>
+        <td>{{ r.active_residents }}</td>
+        <td>{{ r.total_minutes }}</td>
+        <td>{{ r.rn_minutes }}</td>
+        <td>{{ r.care_per_resident }}</td>
+        <td>{{ r.rn_per_resident }}</td>
+        <td><span class="pill pill-{{ r.status }}">{{ r.status.replace('_', ' ') }}</span></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<p class="muted"><a href="{{ url_for('upload') }}">Upload new data</a></p>
+
+<script>
+  const data = {{ chart_data | tojson }};
+  const ctx = document.getElementById('trend').getContext('2d');
+  new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: data.labels,
+      datasets: [{
+        label: 'Care mins / resident',
+        data: data.values,
+        backgroundColor: data.colors,
+        borderWidth: 0,
+      }]
+    },
+    options: {
+      plugins: {
+        legend: { display: false },
+        annotation: {}
+      },
+      scales: {
+        y: {
+          beginAtZero: false,
+          suggestedMin: Math.min(...data.values, data.target) - 10,
+          suggestedMax: Math.max(...data.values, data.target) + 10,
+        }
+      }
+    },
+    plugins: [{
+      id: 'targetLine',
+      afterDraw(chart) {
+        const {ctx, chartArea: {left, right}, scales: {y}} = chart;
+        const yVal = y.getPixelForValue(data.target);
+        ctx.save();
+        ctx.strokeStyle = '#333';
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        ctx.moveTo(left, yVal);
+        ctx.lineTo(right, yVal);
+        ctx.stroke();
+        ctx.fillStyle = '#333';
+        ctx.font = '11px sans-serif';
+        ctx.fillText('Target ' + data.target, right - 70, yVal - 4);
+        ctx.restore();
+      }
+    }]
+  });
+</script>
+{% endblock %}

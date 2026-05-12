@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Upload data – Vero{% endblock %}
+{% block content %}
+<h1>Upload data</h1>
+<p class="muted">Upload your residents and shifts CSVs to generate the dashboard.</p>
+
+{% if errors %}
+<div class="errors">
+  <ul>{% for e in errors %}<li>{{ e }}</li>{% endfor %}</ul>
+</div>
+{% endif %}
+
+<form method="post" enctype="multipart/form-data" class="form">
+  <label>Facility name
+    <input type="text" name="facility_name" value="{{ facility.name if facility else 'Sunrise Aged Care' }}" required>
+  </label>
+  <div class="row">
+    <label>AN-ACC target (mins/resident/day)
+      <input type="number" step="0.1" name="ancc_target" value="{{ facility.ancc_target if facility else 215 }}">
+    </label>
+    <label>RN target (mins/resident/day)
+      <input type="number" step="0.1" name="rn_target" value="{{ facility.rn_target if facility else 44 }}">
+    </label>
+  </div>
+  <label>Residents CSV
+    <input type="file" name="residents_csv" accept=".csv" required>
+  </label>
+  <label>Shifts CSV
+    <input type="file" name="shifts_csv" accept=".csv" required>
+  </label>
+  <button type="submit">Upload</button>
+</form>
+
+<details class="muted">
+  <summary>Expected columns</summary>
+  <p><strong>residents.csv:</strong> resident_id, name, ancc_class, admitted_date, discharged_date</p>
+  <p><strong>shifts.csv:</strong> staff_id, staff_name, role, date, start_time, end_time, is_direct_care</p>
+</details>
+
+<form method="post" action="{{ url_for('clear') }}" class="inline-form" onsubmit="return confirm('Delete all data?');">
+  <button type="submit" class="link-button">Clear all data</button>
+</form>
+{% endblock %}
