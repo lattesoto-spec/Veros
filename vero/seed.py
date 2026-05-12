@@ -31,9 +31,9 @@ LAST_NAMES = ["Smith", "Jones", "Brown", "Wilson", "Taylor", "Johnson", "White",
 
 # Roster targets per shift. The "behind" rooster: morning -1 PCA, afternoon -1 PCA on some days.
 SHIFT_BLOCKS = [
-    ("morning", time(7, 0), time(15, 0), {"RN": 2, "EN": 2, "PCA": 6}),
-    ("afternoon", time(15, 0), time(23, 0), {"RN": 1, "EN": 2, "PCA": 5}),
-    ("night", time(23, 0), time(7, 0), {"RN": 1, "EN": 1, "PCA": 3}),
+    ("morning", time(7, 0), time(15, 0), {"RN": 4, "EN": 3, "PCA": 10}),
+    ("afternoon", time(15, 0), time(23, 0), {"RN": 2, "EN": 3, "PCA": 9}),
+    ("night", time(23, 0), time(7, 0), {"RN": 1, "EN": 2, "PCA": 6}),
 ]
 
 
@@ -60,7 +60,7 @@ def write_residents():
 def _build_staff():
     staff = []
     sid = 1
-    for role, count in (("RN", 6), ("EN", 6), ("PCA", 18)):
+    for role, count in (("RN", 8), ("EN", 10), ("PCA", 25)):
         for _ in range(count):
             staff.append({"staff_id": f"S{sid:03d}", "name": _name(), "role": role})
             sid += 1
