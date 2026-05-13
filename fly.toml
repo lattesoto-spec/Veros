@@ -1,0 +1,24 @@
+app = "veros"
+primary_region = "syd"
+
+[build]
+
+[env]
+  DATABASE_PATH = "/data/vero.db"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ["app"]
+
+[[mounts]]
+  source = "data"
+  destination = "/data"
+
+[[vm]]
+  memory = "512mb"
+  cpu_kind = "shared"
+  cpus = 1

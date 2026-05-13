@@ -28,6 +28,7 @@ npm-debug.log*
 # Local data
 backend/uploads/
 backend/data/
+*.db
 *.sqlite
 *.sqlite3
 
