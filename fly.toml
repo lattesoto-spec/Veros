@@ -1,24 +1,30 @@
-app = "veros"
-primary_region = "syd"
+# fly.toml app configuration file generated for veros on 2026-05-13T05:28:00Z
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'veros'
+primary_region = 'syd'
 
 [build]
 
 [env]
-  DATABASE_PATH = "/data/vero.db"
+  DATABASE_PATH = '/data/vero.db'
+
+[[mounts]]
+  source = 'data'
+  destination = '/data'
 
 [http_service]
   internal_port = 8080
   force_https = true
-  auto_stop_machines = "stop"
+  auto_stop_machines = 'stop'
   auto_start_machines = true
   min_machines_running = 0
-  processes = ["app"]
-
-[[mounts]]
-  source = "data"
-  destination = "/data"
+  processes = ['app']
 
 [[vm]]
-  memory = "512mb"
-  cpu_kind = "shared"
+  memory = '512mb'
+  cpu_kind = 'shared'
   cpus = 1
+  memory_mb = 256
