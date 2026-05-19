@@ -1,14 +1,17 @@
 {% extends "base.html" %}
 {% block title %}{{ facility.name }} – Dashboard{% endblock %}
 {% block content %}
-<section class="header">
-  <h1>{{ facility.name }}</h1>
-  <p class="muted">
-    {{ today.strftime('%A, %d %B %Y') }} · {{ resident_count }} active residents
-    {% if last_receipt %}
-      · last import {{ last_receipt.imported_at.strftime('%d %b %Y, %H:%M UTC') }}
-    {% endif %}
-  </p>
+<section class="page-header">
+  <div>
+    <p class="eyebrow">Dashboard</p>
+    <h1>{{ facility.name }}</h1>
+    <p class="muted">
+      {{ today.strftime('%A, %d %B %Y') }} · {{ resident_count }} active residents
+      {% if last_receipt %}
+        · last import {{ last_receipt.imported_at.strftime('%d %b %Y, %H:%M UTC') }}
+      {% endif %}
+    </p>
+  </div>
 </section>
 
 <section class="cards">
@@ -25,78 +28,107 @@
 </section>
 
 <section class="block">
-  <h2>Last 14 days</h2>
-  <canvas id="trend" height="120"></canvas>
+  <div class="section-card chart-card">
+    <div class="section-heading">
+      <div>
+        <h2>Last 14 days</h2>
+        <p class="muted">Daily care minutes per resident against target</p>
+      </div>
+    </div>
+    <canvas id="trend" height="120"></canvas>
+  </div>
 </section>
 
 <section class="block qtd">
-  <h2>Quarter to date</h2>
-  <p>
-    Averaging <strong>{{ q_avg.care_per_resident }}</strong> mins/resident across
-    {{ q_avg.days }} days since {{ q_start.strftime('%d %b') }}.
-    {% if q_gap >= 0 %}
-      <span class="badge ok">{{ q_gap }} above target</span>
+  <div class="section-card">
+    <div class="section-heading">
+      <div>
+        <h2>Quarter to date</h2>
+        <p class="muted">Performance since {{ q_start.strftime('%d %b') }}</p>
+      </div>
+    </div>
+    <p>
+      Averaging <strong>{{ q_avg.care_per_resident }}</strong> mins/resident across
+      {{ q_avg.days }} days since {{ q_start.strftime('%d %b') }}.
+      {% if q_gap >= 0 %}
+        <span class="badge ok">{{ q_gap }} above target</span>
+      {% else %}
+        <span class="badge {% if q_gap_pct < -5 %}bad{% else %}warn{% endif %}">
+          {{ q_gap }} mins ({{ q_gap_pct }}%) below target
+        </span>
+      {% endif %}
+    </p>
+    <p class="muted">RN average: {{ q_avg.rn_per_resident }} mins (target {{ facility.rn_target }})</p>
+  </div>
+</section>
+
+<section class="block">
+  <div class="section-card">
+    <div class="section-heading">
+      <div>
+        <h2>Daily breakdown</h2>
+        <p class="muted">Latest 14-day resident and staffing summary</p>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Residents</th>
+            <th>Total care mins</th>
+            <th>RN mins</th>
+            <th>Care / resident</th>
+            <th>RN / resident</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in last_14 %}
+          <tr>
+            <td>{{ r.date.strftime('%d %b') }}</td>
+            <td>{{ r.active_residents }}</td>
+            <td>{{ r.total_minutes }}</td>
+            <td>{{ r.rn_minutes }}</td>
+            <td>{{ r.care_per_resident }}</td>
+            <td>{{ r.rn_per_resident }}</td>
+            <td><span class="pill pill-{{ r.status }}">{{ r.status.replace('_', ' ') }}</span></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section class="block">
+  <div class="section-card">
+    <div class="section-heading">
+      <div>
+        <h2>Quarterly report</h2>
+        <p class="muted">Generate a Care Minutes Performance Statement-style PDF for QFR and annual audit use</p>
+      </div>
+    </div>
+    {% if quarters %}
+    <form method="get" action="{{ url_for('quarterly_report') }}" class="form row compact-form">
+      <label>Financial-year quarter
+        <select name="q">
+          {% for q in quarters %}
+            <option value="{{ q.year }}-Q{{ q.quarter }}" {% if loop.first %}selected{% endif %}>
+              {{ q.label }} ({{ q.start.strftime('%d %b %Y') }} – {{ q.end.strftime('%d %b %Y') }})
+            </option>
+          {% endfor %}
+        </select>
+      </label>
+      <button type="submit">Download PDF</button>
+    </form>
     {% else %}
-      <span class="badge {% if q_gap_pct < -5 %}bad{% else %}warn{% endif %}">
-        {{ q_gap }} mins ({{ q_gap_pct }}%) below target
-      </span>
+    <p class="muted">No shift data yet. Upload a roster to enable quarterly reporting.</p>
     {% endif %}
-  </p>
-  <p class="muted">RN average: {{ q_avg.rn_per_resident }} mins (target {{ facility.rn_target }})</p>
+  </div>
 </section>
 
-<section class="block">
-  <h2>Daily breakdown</h2>
-  <table>
-    <thead>
-      <tr>
-        <th>Date</th>
-        <th>Residents</th>
-        <th>Total care mins</th>
-        <th>RN mins</th>
-        <th>Care / resident</th>
-        <th>RN / resident</th>
-        <th>Status</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for r in last_14 %}
-      <tr>
-        <td>{{ r.date.strftime('%d %b') }}</td>
-        <td>{{ r.active_residents }}</td>
-        <td>{{ r.total_minutes }}</td>
-        <td>{{ r.rn_minutes }}</td>
-        <td>{{ r.care_per_resident }}</td>
-        <td>{{ r.rn_per_resident }}</td>
-        <td><span class="pill pill-{{ r.status }}">{{ r.status.replace('_', ' ') }}</span></td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</section>
-
-<section class="block">
-  <h2>Quarterly report</h2>
-  <p class="muted">Generate a Care Minutes Performance Statement-style PDF for the QFR / annual ACFR audit.</p>
-  {% if quarters %}
-  <form method="get" action="{{ url_for('quarterly_report') }}" class="form row">
-    <label>Financial-year quarter
-      <select name="q">
-        {% for q in quarters %}
-          <option value="{{ q.year }}-Q{{ q.quarter }}" {% if loop.first %}selected{% endif %}>
-            {{ q.label }} ({{ q.start.strftime('%d %b %Y') }} – {{ q.end.strftime('%d %b %Y') }})
-          </option>
-        {% endfor %}
-      </select>
-    </label>
-    <button type="submit">Download PDF</button>
-  </form>
-  {% else %}
-  <p class="muted">No shift data yet. Upload a roster to enable quarterly reporting.</p>
-  {% endif %}
-</section>
-
-<p class="muted"><a href="{{ url_for('upload') }}">Upload new data</a></p>
+<p class="muted section-link"><a href="{{ url_for('upload') }}">Upload new data</a></p>
 
 <script>
   const data = {{ chart_data | tojson }};

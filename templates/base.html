@@ -9,14 +9,17 @@
 </head>
 <body>
   <header class="nav">
-    <div class="brand">Carelog</div>
+    <div class="brand-block">
+      <div class="brand">Carelog</div>
+      <div class="brand-subtitle">Care operations dashboard</div>
+    </div>
     <nav>
       <a href="{{ url_for('dashboard') }}">Dashboard</a>
       <a href="{{ url_for('facility_view') }}">Facility</a>
       <a href="{{ url_for('upload') }}">Upload</a>
     </nav>
   </header>
-  <main class="container">
+  <main class="container app-shell">
     {% with msgs = get_flashed_messages() %}
       {% if msgs %}
         <div class="flash">{% for m in msgs %}<p>{{ m }}</p>{% endfor %}</div>

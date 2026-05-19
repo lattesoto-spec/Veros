@@ -1,18 +1,22 @@
 {% extends "base.html" %}
 {% block title %}Upload data – Carelog{% endblock %}
 {% block content %}
-<h1>Upload data</h1>
-<p class="muted">Upload your residents and shifts CSVs to generate the dashboard. Each upload replaces existing shift data.</p>
-
-{% if last_receipt %}
-<p class="muted">
-  Last import: {{ last_receipt.imported_at.strftime('%d %b %Y, %H:%M UTC') }} ·
-  {{ last_receipt.residents_imported }} residents, {{ last_receipt.shifts_imported }} shifts
-  {% if last_receipt.first_shift_date and last_receipt.last_shift_date %}
-    ({{ last_receipt.first_shift_date.strftime('%d %b') }} – {{ last_receipt.last_shift_date.strftime('%d %b %Y') }})
-  {% endif %}
-</p>
-{% endif %}
+<section class="page-header">
+  <div>
+    <p class="eyebrow">Upload</p>
+    <h1>Upload data</h1>
+    <p class="muted">Upload residents and shifts CSV files to refresh the reporting dataset.</p>
+    {% if last_receipt %}
+    <p class="muted">
+      Last import: {{ last_receipt.imported_at.strftime('%d %b %Y, %H:%M UTC') }} ·
+      {{ last_receipt.residents_imported }} residents, {{ last_receipt.shifts_imported }} shifts
+      {% if last_receipt.first_shift_date and last_receipt.last_shift_date %}
+        ({{ last_receipt.first_shift_date.strftime('%d %b') }} – {{ last_receipt.last_shift_date.strftime('%d %b %Y') }})
+      {% endif %}
+    </p>
+    {% endif %}
+  </div>
+</section>
 
 {% if errors %}
 <div class="errors">
@@ -20,40 +24,62 @@
 </div>
 {% endif %}
 
-<form method="post" enctype="multipart/form-data" class="form">
-  <label>Facility name
-    <input type="text" name="facility_name" value="{{ facility.name if facility else 'Sunrise Aged Care' }}" required>
-  </label>
-  <div class="row">
-    <label>AN-ACC target (mins/resident/day)
-      <input type="number" step="0.1" name="ancc_target" value="{{ facility.ancc_target if facility else 215 }}">
-    </label>
-    <label>RN target (mins/resident/day)
-      <input type="number" step="0.1" name="rn_target" value="{{ facility.rn_target if facility else 44 }}">
-    </label>
+<section class="block upload-layout">
+  <div class="section-card upload-card">
+    <div class="section-heading">
+      <div>
+        <h2>Dataset</h2>
+        <p class="muted">Provide the facility details and current source files</p>
+      </div>
+    </div>
+    <form method="post" enctype="multipart/form-data" class="form">
+      <label>Facility name
+        <input type="text" name="facility_name" value="{{ facility.name if facility else 'Sunrise Aged Care' }}" required>
+      </label>
+      <div class="row">
+        <label>AN-ACC target (mins/resident/day)
+          <input type="number" step="0.1" name="ancc_target" value="{{ facility.ancc_target if facility else 215 }}">
+        </label>
+        <label>RN target (mins/resident/day)
+          <input type="number" step="0.1" name="rn_target" value="{{ facility.rn_target if facility else 44 }}">
+        </label>
+      </div>
+      <label>Residents CSV
+        <input type="file" name="residents_csv" accept=".csv" required>
+      </label>
+      <label>Shifts CSV
+        <input type="file" name="shifts_csv" accept=".csv" required>
+      </label>
+      <button type="submit">Upload</button>
+    </form>
   </div>
-  <label>Residents CSV
-    <input type="file" name="residents_csv" accept=".csv" required>
-  </label>
-  <label>Shifts CSV
-    <input type="file" name="shifts_csv" accept=".csv" required>
-  </label>
-  <button type="submit">Upload</button>
-</form>
 
-<details class="muted" open>
-  <summary>Expected columns &amp; sample files</summary>
-  <p><strong>residents.csv:</strong> resident_id, name, ancc_class, admitted_date, discharged_date</p>
-  <p><strong>shifts.csv:</strong> staff_id, staff_name, role, date (YYYY-MM-DD), start_time (HH:MM), end_time (HH:MM), is_direct_care (true/false)</p>
-  <p>Role values: <code>RN</code>, <code>EN</code>, <code>PCA</code>. Rows that fail validation are skipped with a reason in the import summary; the upload does not fail because of a few bad rows.</p>
-  <p>
-    Download samples:
-    <a href="{{ url_for('sample_file', filename='residents.csv') }}">residents.csv</a> ·
-    <a href="{{ url_for('sample_file', filename='shifts.csv') }}">shifts.csv</a>
-  </p>
-</details>
+  <div class="section-card side-card">
+    <div class="section-heading">
+      <div>
+        <h2>File requirements</h2>
+        <p class="muted">Use the expected column structure for successful imports</p>
+      </div>
+    </div>
+    <details class="muted helper-details" open>
+      <summary>Expected columns &amp; sample files</summary>
+      <p><strong>residents.csv:</strong> resident_id, name, ancc_class, admitted_date, discharged_date</p>
+      <p><strong>shifts.csv:</strong> staff_id, staff_name, role, date (YYYY-MM-DD), start_time (HH:MM), end_time (HH:MM), is_direct_care (true/false)</p>
+      <p>Role values: <code>RN</code>, <code>EN</code>, <code>PCA</code>. Rows that fail validation are skipped with a reason in the import summary; the upload does not fail because of a few bad rows.</p>
+      <p>
+        Download samples:
+        <a href="{{ url_for('sample_file', filename='residents.csv') }}">residents.csv</a> ·
+        <a href="{{ url_for('sample_file', filename='shifts.csv') }}">shifts.csv</a>
+      </p>
+    </details>
 
-<form method="post" action="{{ url_for('clear') }}" class="inline-form" onsubmit="return confirm('Delete all data?');">
-  <button type="submit" class="link-button">Clear all data</button>
-</form>
+    <div class="danger-zone">
+      <p class="danger-title">Administrative reset</p>
+      <p class="muted">Removes all uploaded data from the current workspace.</p>
+      <form method="post" action="{{ url_for('clear') }}" class="inline-form" onsubmit="return confirm('Delete all data?');">
+        <button type="submit" class="link-button">Clear all data</button>
+      </form>
+    </div>
+  </div>
+</section>
 {% endblock %}

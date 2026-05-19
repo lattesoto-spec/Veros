@@ -1,52 +1,83 @@
 {% extends "base.html" %}
 {% block title %}{{ facility.name }} – Facility{% endblock %}
 {% block content %}
-<h1>{{ facility.name }}</h1>
-
-<section class="block">
-  <h2>Targets</h2>
-  <form method="post" action="{{ url_for('update_targets') }}" class="form row">
-    <label>AN-ACC target
-      <input type="number" step="0.1" name="ancc_target" value="{{ facility.ancc_target }}">
-    </label>
-    <label>RN target
-      <input type="number" step="0.1" name="rn_target" value="{{ facility.rn_target }}">
-    </label>
-    <button type="submit">Save</button>
-  </form>
+<section class="page-header">
+  <div>
+    <p class="eyebrow">Facility</p>
+    <h1>{{ facility.name }}</h1>
+    <p class="muted">Reference settings, residents, and staffing records</p>
+  </div>
 </section>
 
 <section class="block">
-  <h2>Residents ({{ residents|length }})</h2>
-  <table>
-    <thead><tr><th>ID</th><th>Name</th><th>AN-ACC class</th><th>Admitted</th><th>Discharged</th></tr></thead>
-    <tbody>
-      {% for r in residents %}
-      <tr>
-        <td>{{ r.resident_id }}</td>
-        <td>{{ r.name }}</td>
-        <td>{{ r.ancc_class }}</td>
-        <td>{{ r.admitted_date }}</td>
-        <td>{{ r.discharged_date or '' }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+  <div class="section-card">
+    <div class="section-heading">
+      <div>
+        <h2>Targets</h2>
+        <p class="muted">Maintain daily target thresholds for dashboard reporting</p>
+      </div>
+    </div>
+    <form method="post" action="{{ url_for('update_targets') }}" class="form row compact-form">
+      <label>AN-ACC target
+        <input type="number" step="0.1" name="ancc_target" value="{{ facility.ancc_target }}">
+      </label>
+      <label>RN target
+        <input type="number" step="0.1" name="rn_target" value="{{ facility.rn_target }}">
+      </label>
+      <button type="submit">Save</button>
+    </form>
+  </div>
 </section>
 
 <section class="block">
-  <h2>Staff ({{ staff|length }})</h2>
-  <table>
-    <thead><tr><th>ID</th><th>Name</th><th>Role</th></tr></thead>
-    <tbody>
-      {% for s in staff %}
-      <tr>
-        <td>{{ s.staff_id }}</td>
-        <td>{{ s.name }}</td>
-        <td>{{ s.role }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+  <div class="section-card">
+    <div class="section-heading">
+      <div>
+        <h2>Residents</h2>
+        <p class="muted">{{ residents|length }} current records loaded into the facility dataset</p>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>ID</th><th>Name</th><th>AN-ACC class</th><th>Admitted</th><th>Discharged</th></tr></thead>
+        <tbody>
+          {% for r in residents %}
+          <tr>
+            <td>{{ r.resident_id }}</td>
+            <td>{{ r.name }}</td>
+            <td>{{ r.ancc_class }}</td>
+            <td>{{ r.admitted_date }}</td>
+            <td>{{ r.discharged_date or '' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section class="block">
+  <div class="section-card">
+    <div class="section-heading">
+      <div>
+        <h2>Staff</h2>
+        <p class="muted">{{ staff|length }} staff records available for shift reporting</p>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>ID</th><th>Name</th><th>Role</th></tr></thead>
+        <tbody>
+          {% for s in staff %}
+          <tr>
+            <td>{{ s.staff_id }}</td>
+            <td>{{ s.name }}</td>
+            <td>{{ s.role }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
 </section>
 {% endblock %}
