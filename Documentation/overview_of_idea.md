@@ -1,14 +1,14 @@
-# Vero: Product Context Document
+# Carelog: Product Context Document
 
 Last updated: April 2026
 
 ---
 
-## What Vero is
+## What Carelog is
 
-Vero is a compliance software product for Australian residential aged care providers. It automates the specific regulatory reporting tasks that the Aged Care Act 2024 requires, starting with care minutes tracking, SIRS (Serious Incident Response Scheme) incident reporting, and audit-ready document generation.
+Carelog is a compliance software product for Australian residential aged care providers. It automates the specific regulatory reporting tasks that the Aged Care Act 2024 requires, starting with care minutes tracking, SIRS (Serious Incident Response Scheme) incident reporting, and audit-ready document generation.
 
-Vero is not a clinical care platform. It is not an electronic health record. It is not a rostering tool. It sits on top of whatever systems a provider already uses (HumanForce, iCare, spreadsheets, whatever) and pulls the data those systems hold into the specific outputs the regulator wants. The value proposition is simple: the Aged Care Quality and Safety Commission asks providers for specific reports in specific formats on specific deadlines. Vero generates those reports automatically instead of someone spending hours assembling them by hand.
+Carelog is not a clinical care platform. It is not an electronic health record. It is not a rostering tool. It sits on top of whatever systems a provider already uses (HumanForce, iCare, spreadsheets, whatever) and pulls the data those systems hold into the specific outputs the regulator wants. The value proposition is simple: the Aged Care Quality and Safety Commission asks providers for specific reports in specific formats on specific deadlines. Carelog generates those reports automatically instead of someone spending hours assembling them by hand.
 
 The target customer is the small-to-mid residential aged care provider running 1 to 10 facilities. These organisations carry the same compliance obligations as Opal or Estia (the largest operators in the country) but do not have compliance teams, IT departments, or the budget for enterprise software. They are currently managing compliance with spreadsheets, disconnected tools, and senior staff time.
 
@@ -167,13 +167,13 @@ Three co-founders, all enrolled at Monash University, participating in the FastT
 
 ## Product scope (current plan)
 
-### What Vero does (MVP)
+### What Carelog does (MVP)
 
 - Care minutes tracking: Connect to rostering/time sheet systems (starting with HumanForce). Calculate care minutes per resident per day against the facility's AN-ACC adjusted target. Show live performance, not end-of-quarter surprises
 - SIRS incident tracking: Log incidents, auto-calculate Priority 1 (24-hour) and Priority 2 deadlines, countdown alerts, notification templates ready to submit through the My Aged Care portal
 - Quarterly report generation: Produce the care minutes data in the format the Quarterly Financial Report requires. Reduce audit response time from hours to minutes
 
-### What Vero does not do
+### What Carelog does not do
 
 - Clinical documentation or electronic health records
 - Rostering or time sheet management (it reads from those systems, it does not replace them)
@@ -183,7 +183,7 @@ Three co-founders, all enrolled at Monash University, participating in the FastT
 
 ### Positioning
 
-Vero is a compliance layer, not a clinical platform. It sits on top of existing systems and turns the data they already hold into the specific outputs the regulator requires. It does not ask providers to rip and replace anything. It connects to what they have and fills the gap between operational data and regulatory reporting.
+Carelog is a compliance layer, not a clinical platform. It sits on top of existing systems and turns the data they already hold into the specific outputs the regulator requires. It does not ask providers to rip and replace anything. It connects to what they have and fills the gap between operational data and regulatory reporting.
 
 ---
 
@@ -199,7 +199,7 @@ Based on Statura Care's published pricing (the closest competitor):
 - Implementation and onboarding: $3,000-$10,000 (vendor-led)
 - Data migration: $2,000-$5,000
 
-Vero's pricing has not been set. Testing willingness to pay ($10-$15/bed/month for automated care minutes reporting and SIRS tracking) is an immediate next step.
+Carelog's pricing has not been set. Testing willingness to pay ($10-$15/bed/month for automated care minutes reporting and SIRS tracking) is an immediate next step.
 
 ---
 
@@ -227,7 +227,7 @@ Vero's pricing has not been set. Testing willingness to pay ($10-$15/bed/month f
 
 ## Communication style guidelines
 
-When writing about Vero or representing this product in any context:
+When writing about Carelog or representing this product in any context:
 
 - No jargon. No buzzwords. No inflated promises
 - Never say "revolutionary," "game-changing," "cutting-edge," "leverage," "synergy," "empower," or "unlock"

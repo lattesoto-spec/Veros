@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}Import complete – Carelog{% endblock %}
+{% block content %}
+<h1>Import complete</h1>
+<p class="muted">{{ facility.name }} · {{ receipt.imported_at.strftime('%d %b %Y, %H:%M UTC') }}</p>
+
+<section class="cards">
+  <div class="card status-on_track">
+    <div class="card-label">Residents imported</div>
+    <div class="card-value">{{ receipt.residents_imported }}</div>
+    <div class="card-sub">
+      {% if receipt.residents_skipped %}{{ receipt.residents_skipped }} skipped{% else %}0 skipped{% endif %}
+    </div>
+  </div>
+  <div class="card status-on_track">
+    <div class="card-label">Shifts imported</div>
+    <div class="card-value">{{ receipt.shifts_imported }}</div>
+    <div class="card-sub">
+      {% if receipt.shifts_skipped %}{{ receipt.shifts_skipped }} skipped{% else %}0 skipped{% endif %}
+      {% if receipt.first_shift_date and receipt.last_shift_date %}
+        · {{ receipt.first_shift_date.strftime('%d %b') }} – {{ receipt.last_shift_date.strftime('%d %b %Y') }}
+      {% endif %}
+    </div>
+  </div>
+</section>
+
+{% if resident_errors or shift_errors %}
+<section class="block">
+  <h2>Skipped rows</h2>
+  <p class="muted">These rows were not imported. Fix them in your CSV and re-upload to include them.</p>
+  {% if resident_errors %}
+    <h3>Residents</h3>
+    <ul class="errors-list">
+      {% for e in resident_errors[:50] %}<li>{{ e }}</li>{% endfor %}
+      {% if resident_errors|length > 50 %}<li class="muted">… and {{ resident_errors|length - 50 }} more</li>{% endif %}
+    </ul>
+  {% endif %}
+  {% if shift_errors %}
+    <h3>Shifts</h3>
+    <ul class="errors-list">
+      {% for e in shift_errors[:50] %}<li>{{ e }}</li>{% endfor %}
+      {% if shift_errors|length > 50 %}<li class="muted">… and {{ shift_errors|length - 50 }} more</li>{% endif %}
+    </ul>
+  {% endif %}
+</section>
+{% endif %}
+
+<section class="block">
+  <a href="{{ url_for('dashboard') }}"><button type="button">Open dashboard</button></a>
+  <a href="{{ url_for('upload') }}" class="muted" style="margin-left:12px;">Upload more</a>
+</section>
+{% endblock %}

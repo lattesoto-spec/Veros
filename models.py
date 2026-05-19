@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from flask_sqlalchemy import SQLAlchemy
 
 db = SQLAlchemy()
@@ -40,3 +42,16 @@ class Shift(db.Model):
     start_time = db.Column(db.Time, nullable=False)
     end_time = db.Column(db.Time, nullable=False)
     is_direct_care = db.Column(db.Boolean, nullable=False, default=True)
+
+
+class ImportReceipt(db.Model):
+    __tablename__ = "import_receipts"
+    id = db.Column(db.Integer, primary_key=True)
+    facility_id = db.Column(db.Integer, db.ForeignKey("facilities.id"), nullable=False)
+    imported_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    residents_imported = db.Column(db.Integer, nullable=False, default=0)
+    residents_skipped = db.Column(db.Integer, nullable=False, default=0)
+    shifts_imported = db.Column(db.Integer, nullable=False, default=0)
+    shifts_skipped = db.Column(db.Integer, nullable=False, default=0)
+    first_shift_date = db.Column(db.Date)
+    last_shift_date = db.Column(db.Date)

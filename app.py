@@ -3,10 +3,20 @@ import io
 import os
 from datetime import date, datetime, time, timedelta
 
-from flask import Flask, flash, redirect, render_template, request, url_for
+from flask import (
+    Flask,
+    Response,
+    flash,
+    redirect,
+    render_template,
+    request,
+    send_from_directory,
+    url_for,
+)
 
 from care_minutes import average, daily_stats, quarter_bounds, range_stats
-from models import Facility, Resident, Shift, Staff, db
+from models import Facility, ImportReceipt, Resident, Shift, Staff, db
+from reports import available_quarters, build_quarterly_pdf
 
 REQUIRED_RESIDENT_COLS = {"resident_id", "name", "ancc_class", "admitted_date", "discharged_date"}
 REQUIRED_SHIFT_COLS = {"staff_id", "staff_name", "role", "date", "start_time", "end_time", "is_direct_care"}
@@ -14,7 +24,7 @@ REQUIRED_SHIFT_COLS = {"staff_id", "staff_name", "role", "date", "start_time", "
 
 def create_app() -> Flask:
     app = Flask(__name__)
-    db_path = os.environ.get("DATABASE_PATH", os.path.join(os.path.dirname(__file__), "vero.db"))
+    db_path = os.environ.get("DATABASE_PATH", os.path.join(os.path.dirname(__file__), "carelog.db"))
     app.config["SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{db_path}"
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
     app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-change-me")
@@ -34,7 +44,12 @@ def create_app() -> Flask:
     def upload():
         if request.method == "GET":
             facility = Facility.query.first()
-            return render_template("upload.html", facility=facility, errors=[])
+            return render_template(
+                "upload.html",
+                facility=facility,
+                errors=[],
+                last_receipt=_latest_receipt(facility),
+            )
 
         errors = []
         name = (request.form.get("facility_name") or "").strip()
@@ -56,7 +71,13 @@ def create_app() -> Flask:
             errors.append("Shifts CSV is required.")
 
         if errors:
-            return render_template("upload.html", facility=Facility.query.first(), errors=errors), 400
+            facility = Facility.query.first()
+            return render_template(
+                "upload.html",
+                facility=facility,
+                errors=errors,
+                last_receipt=_latest_receipt(facility),
+            ), 400
 
         residents_text = residents_file.read().decode("utf-8-sig")
         shifts_text = shifts_file.read().decode("utf-8-sig")
@@ -72,7 +93,13 @@ def create_app() -> Flask:
             errors.append(f"Shifts CSV missing columns: {', '.join(sorted(missing_s))}")
 
         if errors:
-            return render_template("upload.html", facility=Facility.query.first(), errors=errors), 400
+            facility = Facility.query.first()
+            return render_template(
+                "upload.html",
+                facility=facility,
+                errors=errors,
+                last_receipt=_latest_receipt(facility),
+            ), 400
 
         facility = Facility.query.first()
         if facility:
@@ -84,56 +111,66 @@ def create_app() -> Flask:
             db.session.add(facility)
         db.session.flush()
 
-        for row in r_reader:
-            rid = row["resident_id"].strip()
-            existing = Resident.query.filter_by(facility_id=facility.id, resident_id=rid).first()
-            adm = _parse_date(row.get("admitted_date"))
-            dis = _parse_date(row.get("discharged_date"))
-            if existing:
-                existing.name = row["name"].strip()
-                existing.ancc_class = row.get("ancc_class", "").strip()
-                existing.admitted_date = adm
-                existing.discharged_date = dis
-            else:
-                db.session.add(Resident(
-                    facility_id=facility.id,
-                    resident_id=rid,
-                    name=row["name"].strip(),
-                    ancc_class=row.get("ancc_class", "").strip(),
-                    admitted_date=adm,
-                    discharged_date=dis,
-                ))
+        # Replace shifts on every upload (the ingestion contract).
+        Shift.query.filter_by(facility_id=facility.id).delete()
 
-        staff_cache = {s.staff_id: s for s in Staff.query.filter_by(facility_id=facility.id).all()}
+        r_imported, r_skipped, r_errors = _ingest_residents(facility, r_reader)
+        s_imported, s_skipped, s_errors, first_d, last_d = _ingest_shifts(facility, s_reader)
 
-        for row in s_reader:
-            sid = row["staff_id"].strip()
-            staff = staff_cache.get(sid)
-            if staff:
-                staff.name = row["staff_name"].strip()
-                staff.role = row["role"].strip().upper()
-            else:
-                staff = Staff(
-                    facility_id=facility.id,
-                    staff_id=sid,
-                    name=row["staff_name"].strip(),
-                    role=row["role"].strip().upper(),
-                )
-                db.session.add(staff)
-                db.session.flush()
-                staff_cache[sid] = staff
-
-            db.session.add(Shift(
-                staff_id=staff.id,
-                facility_id=facility.id,
-                date=_parse_date(row["date"]),
-                start_time=_parse_time(row["start_time"]),
-                end_time=_parse_time(row["end_time"]),
-                is_direct_care=str(row.get("is_direct_care", "true")).strip().lower() in ("true", "1", "yes"),
-            ))
-
+        receipt = ImportReceipt(
+            facility_id=facility.id,
+            residents_imported=r_imported,
+            residents_skipped=r_skipped,
+            shifts_imported=s_imported,
+            shifts_skipped=s_skipped,
+            first_shift_date=first_d,
+            last_shift_date=last_d,
+        )
+        db.session.add(receipt)
         db.session.commit()
-        return redirect(url_for("dashboard"))
+
+        return render_template(
+            "upload_summary.html",
+            facility=facility,
+            receipt=receipt,
+            resident_errors=r_errors,
+            shift_errors=s_errors,
+        )
+
+    @app.route("/report/quarter.pdf")
+    def quarterly_report():
+        facility = Facility.query.first()
+        if not facility:
+            return redirect(url_for("upload"))
+        q = (request.args.get("q") or "").strip()
+        try:
+            year_str, q_str = q.split("-Q")
+            year = int(year_str)
+            quarter = int(q_str)
+            if quarter not in (1, 2, 3, 4):
+                raise ValueError
+        except (ValueError, AttributeError):
+            flash("Pick a valid quarter to generate a report.")
+            return redirect(url_for("dashboard"))
+
+        pdf_bytes = build_quarterly_pdf(facility, year, quarter)
+        safe_name = "".join(c if c.isalnum() else "-" for c in facility.name).strip("-").lower()
+        filename = f"care-minutes-statement_{safe_name}_{year}-Q{quarter}.pdf"
+        return Response(
+            pdf_bytes,
+            mimetype="application/pdf",
+            headers={"Content-Disposition": f"attachment; filename={filename}"},
+        )
+
+    @app.route("/samples/<path:filename>")
+    def sample_file(filename):
+        if filename not in ("residents.csv", "shifts.csv"):
+            return ("Not found", 404)
+        return send_from_directory(
+            os.path.join(os.path.dirname(__file__), "sample_data"),
+            filename,
+            as_attachment=True,
+        )
 
     @app.route("/dashboard")
     def dashboard():
@@ -180,6 +217,8 @@ def create_app() -> Flask:
             q_gap_pct=q_gap_pct,
             q_start=q_start,
             resident_count=resident_count,
+            last_receipt=_latest_receipt(facility),
+            quarters=available_quarters(facility.id),
         )
 
     @app.route("/facility", methods=["GET"])
@@ -209,6 +248,7 @@ def create_app() -> Flask:
         Shift.query.delete()
         Staff.query.delete()
         Resident.query.delete()
+        ImportReceipt.query.delete()
         Facility.query.delete()
         db.session.commit()
         return redirect(url_for("upload"))
@@ -228,6 +268,112 @@ def _parse_time(value):
 
 def _color_for(status: str) -> str:
     return {"on_track": "#2f9e44", "at_risk": "#f08c00", "behind": "#c92a2a"}.get(status, "#888")
+
+
+def _latest_receipt(facility):
+    if not facility:
+        return None
+    return (
+        ImportReceipt.query.filter_by(facility_id=facility.id)
+        .order_by(ImportReceipt.imported_at.desc())
+        .first()
+    )
+
+
+def _ingest_residents(facility, reader):
+    imported = 0
+    skipped = 0
+    errors = []
+    for idx, row in enumerate(reader, start=2):  # row 1 is header
+        try:
+            rid = (row.get("resident_id") or "").strip()
+            if not rid:
+                raise ValueError("resident_id is blank")
+            name = (row.get("name") or "").strip()
+            if not name:
+                raise ValueError("name is blank")
+            adm = _parse_date(row.get("admitted_date"))
+            dis = _parse_date(row.get("discharged_date"))
+        except ValueError as e:
+            skipped += 1
+            errors.append(f"Row {idx}: {e}")
+            continue
+
+        existing = Resident.query.filter_by(facility_id=facility.id, resident_id=rid).first()
+        if existing:
+            existing.name = name
+            existing.ancc_class = (row.get("ancc_class") or "").strip()
+            existing.admitted_date = adm
+            existing.discharged_date = dis
+        else:
+            db.session.add(Resident(
+                facility_id=facility.id,
+                resident_id=rid,
+                name=name,
+                ancc_class=(row.get("ancc_class") or "").strip(),
+                admitted_date=adm,
+                discharged_date=dis,
+            ))
+        imported += 1
+    return imported, skipped, errors
+
+
+def _ingest_shifts(facility, reader):
+    imported = 0
+    skipped = 0
+    errors = []
+    first_d = None
+    last_d = None
+    staff_cache = {s.staff_id: s for s in Staff.query.filter_by(facility_id=facility.id).all()}
+
+    for idx, row in enumerate(reader, start=2):
+        try:
+            sid = (row.get("staff_id") or "").strip()
+            staff_name = (row.get("staff_name") or "").strip()
+            role = (row.get("role") or "").strip().upper()
+            if not sid:
+                raise ValueError("staff_id is blank")
+            if not role:
+                raise ValueError("role is blank")
+            d = _parse_date(row.get("date"))
+            if d is None:
+                raise ValueError("date is blank")
+            start = _parse_time(row.get("start_time") or "")
+            end = _parse_time(row.get("end_time") or "")
+        except ValueError as e:
+            skipped += 1
+            errors.append(f"Row {idx}: {e}")
+            continue
+
+        staff = staff_cache.get(sid)
+        if staff:
+            if staff_name:
+                staff.name = staff_name
+            staff.role = role
+        else:
+            staff = Staff(
+                facility_id=facility.id,
+                staff_id=sid,
+                name=staff_name or sid,
+                role=role,
+            )
+            db.session.add(staff)
+            db.session.flush()
+            staff_cache[sid] = staff
+
+        db.session.add(Shift(
+            staff_id=staff.id,
+            facility_id=facility.id,
+            date=d,
+            start_time=start,
+            end_time=end,
+            is_direct_care=str(row.get("is_direct_care", "true")).strip().lower() in ("true", "1", "yes"),
+        ))
+        imported += 1
+        first_d = d if first_d is None or d < first_d else first_d
+        last_d = d if last_d is None or d > last_d else last_d
+
+    return imported, skipped, errors, first_d, last_d
 
 
 app = create_app()

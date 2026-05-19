@@ -3,7 +3,12 @@
 {% block content %}
 <section class="header">
   <h1>{{ facility.name }}</h1>
-  <p class="muted">{{ today.strftime('%A, %d %B %Y') }} · {{ resident_count }} active residents</p>
+  <p class="muted">
+    {{ today.strftime('%A, %d %B %Y') }} · {{ resident_count }} active residents
+    {% if last_receipt %}
+      · last import {{ last_receipt.imported_at.strftime('%d %b %Y, %H:%M UTC') }}
+    {% endif %}
+  </p>
 </section>
 
 <section class="cards">
@@ -68,6 +73,27 @@
       {% endfor %}
     </tbody>
   </table>
+</section>
+
+<section class="block">
+  <h2>Quarterly report</h2>
+  <p class="muted">Generate a Care Minutes Performance Statement-style PDF for the QFR / annual ACFR audit.</p>
+  {% if quarters %}
+  <form method="get" action="{{ url_for('quarterly_report') }}" class="form row">
+    <label>Financial-year quarter
+      <select name="q">
+        {% for q in quarters %}
+          <option value="{{ q.year }}-Q{{ q.quarter }}" {% if loop.first %}selected{% endif %}>
+            {{ q.label }} ({{ q.start.strftime('%d %b %Y') }} – {{ q.end.strftime('%d %b %Y') }})
+          </option>
+        {% endfor %}
+      </select>
+    </label>
+    <button type="submit">Download PDF</button>
+  </form>
+  {% else %}
+  <p class="muted">No shift data yet. Upload a roster to enable quarterly reporting.</p>
+  {% endif %}
 </section>
 
 <p class="muted"><a href="{{ url_for('upload') }}">Upload new data</a></p>

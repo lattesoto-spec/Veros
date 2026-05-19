@@ -1,8 +1,8 @@
-# Vero Prototype: Build Spec
+# Carelog Prototype: Build Spec
 
 Last updated: May 2026
 
-This document describes everything needed to build and deploy the Vero prototype. The goal is a working web app you can put in front of a facility manager and ask: "If you could see this every morning, would it change how you staff?"
+This document describes everything needed to build and deploy the Carelog prototype. The goal is a working web app you can put in front of a facility manager and ask: "If you could see this every morning, would it change how you staff?"
 
 Not an MVP. A prototype. One user, one facility, CSV uploads, no integrations.
 
@@ -20,7 +20,7 @@ Not an MVP. A prototype. One user, one facility, CSV uploads, no integrations.
 ## File structure
 
 ```
-vero/
+carelog/
 ├── app.py                  # Flask app. All routes live here.
 ├── models.py               # SQLAlchemy models (4 tables)
 ├── care_minutes.py         # Care minutes calculation logic
@@ -291,15 +291,15 @@ CMD ["gunicorn", "--bind", "0.0.0.0:8080", "app:app"]
 Key settings:
 - `internal_port = 8080`
 - Mount a persistent volume at `/data` for the SQLite file
-- Set env var `DATABASE_PATH=/data/vero.db`
+- Set env var `DATABASE_PATH=/data/carelog.db`
 
 ### Deploy commands
 
 ```bash
 fly launch                                    # creates app
-fly volumes create vero_data --size 1         # 1GB persistent volume
+fly volumes create carelog_data --size 1         # 1GB persistent volume
 # edit fly.toml to add the volume mount
-fly deploy                                    # live at vero-xxx.fly.dev
+fly deploy                                    # live at carelog-xxx.fly.dev
 ```
 
 ### requirements.txt
