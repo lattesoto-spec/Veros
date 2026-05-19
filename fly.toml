@@ -1,10 +1,10 @@
-app = "carelog"
+app = "veros"
 primary_region = "syd"
 
 [build]
 
 [env]
-  DATABASE_PATH = "/data/carelog.db"
+  DATABASE_PATH = "/data/vero.db"
 
 [http_service]
   internal_port = 8080
