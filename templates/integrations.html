@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}Integrations – CareMin{% endblock %}
+{% block content %}
+<section class="page-header">
+  <div>
+    <p class="eyebrow">Integrations</p>
+    <h1>Connect your existing systems</h1>
+    <p class="muted">
+      Any CSV/Excel export from these platforms already imports through Universal Import with no
+      template. Direct API sync activates per platform once you supply that vendor's API credentials.
+    </p>
+  </div>
+</section>
+
+<section class="block">
+  <div class="section-card">
+    <div class="section-heading"><div><h2>Scheduled file fetch</h2><p class="muted">Works today: point CareMin at any URL that serves an export</p></div></div>
+    {% set cfg = configs.get('url_fetch') %}
+    <form method="post" class="form row compact-form">
+      <input type="hidden" name="platform" value="url_fetch">
+      <input type="hidden" name="action" value="configure">
+      <label>Export URL
+        <input type="url" name="url" placeholder="https://example.com/roster-export.csv"
+               value="{{ (cfg.config_json | fromjson).url if cfg else '' }}">
+      </label>
+      <button type="submit">Save</button>
+    </form>
+    {% if cfg %}
+    <form method="post" class="inline-form">
+      <input type="hidden" name="platform" value="url_fetch">
+      <input type="hidden" name="action" value="sync">
+      <button type="submit">Sync now</button>
+    </form>
+    <p class="muted">
+      {% if cfg.last_sync_at %}Last sync {{ cfg.last_sync_at.strftime('%d %b %Y %H:%M UTC') }} — {{ cfg.last_result }}{% else %}Never synced.{% endif %}
+    </p>
+    {% endif %}
+  </div>
+</section>
+
+<section class="block">
+  <div class="section-card">
+    <div class="section-heading"><div><h2>Platform connectors</h2><p class="muted">Status of each direct API</p></div></div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Platform</th><th>Category</th><th>API status</th><th>Needs</th><th>Today</th></tr></thead>
+        <tbody>
+        {% for p in platforms if p.key != 'url_fetch' %}
+          <tr>
+            <td><strong>{{ p.name }}</strong></td>
+            <td>{{ p.category }}</td>
+            <td><span class="pill pill-{{ 'on_track' if p.api_status == 'available' else 'at_risk' }}">{{ p.api_status.replace('_', ' ') }}</span></td>
+            <td class="muted">{{ p.auth }}</td>
+            <td class="muted">{{ p.note }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+{% endblock %}

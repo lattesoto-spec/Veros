@@ -35,10 +35,11 @@ def daily_stats(facility_id: int, day: date, ancc_target: float, rn_target: floa
         .all()
     )
 
-    total_minutes = sum(_minutes_between(s.start_time, s.end_time) for s, _ in shifts)
-    rn_minutes = sum(
-        _minutes_between(s.start_time, s.end_time) for s, st in shifts if st.role == "RN"
-    )
+    def worked(s):
+        return max(_minutes_between(s.start_time, s.end_time) - (s.break_minutes or 0), 0)
+
+    total_minutes = sum(worked(s) for s, _ in shifts)
+    rn_minutes = sum(worked(s) for s, st in shifts if st.role == "RN")
 
     per_res = total_minutes / residents if residents else 0
     rn_per_res = rn_minutes / residents if residents else 0

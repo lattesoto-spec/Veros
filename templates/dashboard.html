@@ -15,6 +15,11 @@
 </section>
 
 <section class="cards">
+  <div class="card status-{{ 'on_track' if compliance_pct and compliance_pct >= 100 else ('at_risk' if compliance_pct and compliance_pct >= 95 else 'behind') }}">
+    <div class="card-label">Compliance (quarter to date)</div>
+    <div class="card-value">{{ compliance_pct if compliance_pct is not none else '—' }}{% if compliance_pct is not none %}%{% endif %}</div>
+    <div class="card-sub">of AN-ACC target</div>
+  </div>
   <div class="card status-{{ today_stats.status }}">
     <div class="card-label">Care minutes / resident (today)</div>
     <div class="card-value">{{ today_stats.care_per_resident }}</div>
@@ -24,6 +29,33 @@
     <div class="card-label">RN minutes / resident (today)</div>
     <div class="card-value">{{ today_stats.rn_per_resident }}</div>
     <div class="card-sub">Target {{ facility.rn_target }}</div>
+  </div>
+  <div class="card status-{{ 'on_track' if coverage.full_coverage else 'at_risk' }}">
+    <div class="card-label">RN 24/7 coverage</div>
+    <div class="card-value">{{ coverage.coverage_pct }}%</div>
+    <div class="card-sub">{{ coverage.covered_minutes }} of 1440 mins</div>
+  </div>
+</section>
+
+<section class="block">
+  <div class="section-card">
+    <div class="section-heading">
+      <div>
+        <h2>Risk alerts</h2>
+        <p class="muted">
+          Gap detection and predictions ·
+          {% if data_age_days is not none %}data last imported {{ data_age_days }} day(s) ago{% else %}no imports yet{% endif %}
+          {% if audit_readiness is not none %} · audit readiness {{ audit_readiness }}%{% endif %}
+        </p>
+      </div>
+    </div>
+    {% for a in alerts %}
+      <p><span class="pill pill-{{ 'behind' if a.severity == 'high' else ('at_risk' if a.severity == 'medium' else 'on_track') }}">{{ a.severity }}</span> {{ a.message }}</p>
+    {% endfor %}
+    {% if data_age_days is not none and data_age_days > 7 %}
+      <p><span class="pill pill-at_risk">medium</span> Pending upload: newest import is {{ data_age_days }} days old — import the latest roster.</p>
+    {% endif %}
+    <p class="muted"><a href="{{ url_for('compliance_view') }}">Full compliance view →</a> · <a href="{{ url_for('scenarios') }}">Scenario planning →</a></p>
   </div>
 </section>
 
@@ -109,6 +141,12 @@
         <p class="muted">Generate a Care Minutes Performance Statement-style PDF for QFR and annual audit use</p>
       </div>
     </div>
+    <p class="muted">
+      More exports:
+      <a href="{{ url_for('board_report') }}">Board report (PDF)</a> ·
+      <a href="{{ url_for('export_summary_xlsx') }}">90-day summary (Excel)</a> ·
+      <a href="{{ url_for('export_daily_csv') }}">Daily breakdown (CSV)</a>
+    </p>
     {% if quarters %}
     <form method="get" action="{{ url_for('quarterly_report') }}" class="form row compact-form">
       <label>Financial-year quarter

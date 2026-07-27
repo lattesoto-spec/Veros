@@ -1,5 +1,6 @@
 import csv
 import io
+import json
 import os
 from datetime import date, datetime, time, timedelta
 
@@ -14,8 +15,33 @@ from flask import (
     url_for,
 )
 
+import exports as export_builders
 from care_minutes import average, daily_stats, quarter_bounds, range_stats
-from models import Facility, ImportReceipt, Resident, Shift, Staff, db
+from compliance import (
+    CALC_VERSION,
+    compliance_pct,
+    detect_gaps,
+    forecast_quarter,
+    monthly_breakdown,
+    range_breakdown,
+    rn_coverage,
+)
+from ingestion.analyzer import AnalyzerError
+from ingestion.mapping import MappingError
+from ingestion.pipeline import ingest_file
+from ingestion.reader import FileReadError
+from integrations.registry import BY_KEY, PLATFORMS
+from integrations.sync import SyncError, sync_platform
+from models import (
+    Facility,
+    FormatMapping,
+    ImportReceipt,
+    IntegrationConfig,
+    Resident,
+    Shift,
+    Staff,
+    db,
+)
 from reports import available_quarters, build_quarterly_pdf
 
 REQUIRED_RESIDENT_COLS = {"resident_id", "name", "ancc_class", "admitted_date", "discharged_date"}
@@ -24,14 +50,17 @@ REQUIRED_SHIFT_COLS = {"staff_id", "staff_name", "role", "date", "start_time", "
 
 def create_app() -> Flask:
     app = Flask(__name__)
-    db_path = os.environ.get("DATABASE_PATH", os.path.join(os.path.dirname(__file__), "carelog.db"))
+    db_path = os.environ.get("DATABASE_PATH", os.path.join(os.path.dirname(__file__), "caremin.db"))
     app.config["SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{db_path}"
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+    app.config["UPLOADS_DIR"] = os.path.join(os.path.dirname(db_path) or ".", "uploads")
     app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-change-me")
+    app.template_filter("fromjson")(json.loads)
     db.init_app(app)
 
     with app.app_context():
         db.create_all()
+        _migrate_sqlite(db)
 
     @app.route("/")
     def index():
@@ -137,6 +166,262 @@ def create_app() -> Flask:
             shift_errors=s_errors,
         )
 
+    @app.route("/import", methods=["GET", "POST"])
+    def universal_import():
+        facility = Facility.query.first()
+        if request.method == "GET":
+            return render_template(
+                "universal_import.html",
+                facility=facility,
+                errors=[],
+                known_formats=FormatMapping.query.order_by(FormatMapping.created_at.desc()).all(),
+                ai_ready=bool(os.environ.get("ANTHROPIC_API_KEY")),
+            )
+
+        errors = []
+        name = (request.form.get("facility_name") or "").strip()
+        files = [f for f in request.files.getlist("data_files") if f and f.filename]
+        if not name:
+            errors.append("Facility name is required.")
+        if not files:
+            errors.append("Upload at least one file.")
+        if errors:
+            return render_template(
+                "universal_import.html",
+                facility=facility,
+                errors=errors,
+                known_formats=FormatMapping.query.order_by(FormatMapping.created_at.desc()).all(),
+                ai_ready=bool(os.environ.get("ANTHROPIC_API_KEY")),
+            ), 400
+
+        if facility:
+            facility.name = name
+        else:
+            facility = Facility(name=name)
+            db.session.add(facility)
+        db.session.flush()
+
+        # Receipt is created first so every shift row can carry its id (lineage).
+        receipt = ImportReceipt(
+            facility_id=facility.id,
+            imported_by="web upload",
+            calc_version=CALC_VERSION,
+        )
+        db.session.add(receipt)
+        db.session.flush()
+
+        outcomes = []
+        payloads = []
+        try:
+            for f in files:
+                data = f.read()
+                payloads.append((f.filename, data))
+                outcomes.append(ingest_file(facility, f.filename, data, receipt=receipt))
+        except (FileReadError, MappingError, AnalyzerError) as e:
+            db.session.rollback()
+            return render_template(
+                "universal_import.html",
+                facility=Facility.query.first(),
+                errors=[str(e)],
+                known_formats=FormatMapping.query.order_by(FormatMapping.created_at.desc()).all(),
+                ai_ready=bool(os.environ.get("ANTHROPIC_API_KEY")),
+            ), 422
+
+        # Retain the source files as audit evidence.
+        upload_dir = os.path.join(app.config["UPLOADS_DIR"], str(receipt.id))
+        os.makedirs(upload_dir, exist_ok=True)
+        for fname, data in payloads:
+            safe = os.path.basename(fname) or "upload"
+            with open(os.path.join(upload_dir, safe), "wb") as fh:
+                fh.write(data)
+
+        receipt.residents_imported = sum(o.residents_imported for o in outcomes)
+        receipt.residents_skipped = 0
+        receipt.shifts_imported = sum(o.shifts_imported for o in outcomes)
+        receipt.shifts_skipped = sum(len(o.row_errors) for o in outcomes)
+        receipt.first_shift_date = min((o.first_shift_date for o in outcomes if o.first_shift_date), default=None)
+        receipt.last_shift_date = max((o.last_shift_date for o in outcomes if o.last_shift_date), default=None)
+        receipt.source_path = upload_dir
+        receipt.mapping_ids = ",".join(str(o.mapping_id) for o in outcomes if o.mapping_id)
+        db.session.commit()
+
+        return render_template("import_summary.html", facility=facility, outcomes=outcomes, receipt=receipt)
+
+    def _latest_data_date(facility):
+        latest = Shift.query.filter_by(facility_id=facility.id).order_by(Shift.date.desc()).first()
+        return latest.date if latest else date.today()
+
+    @app.route("/compliance")
+    def compliance_view():
+        facility = Facility.query.first()
+        if not facility:
+            return redirect(url_for("universal_import"))
+        today = _latest_data_date(facility)
+        fc = forecast_quarter(facility, today)
+        return render_template(
+            "compliance.html",
+            facility=facility,
+            today=today,
+            forecast=fc,
+            alerts=detect_gaps(facility, today),
+            coverage=rn_coverage(facility.id, today),
+            months=monthly_breakdown(facility.id, fc["q_start"], today) if fc else [],
+            week=range_breakdown(facility.id, today - timedelta(days=6), today),
+            calc_version=CALC_VERSION,
+        )
+
+    @app.route("/scenarios", methods=["GET", "POST"])
+    def scenarios():
+        facility = Facility.query.first()
+        if not facility:
+            return redirect(url_for("universal_import"))
+        today = _latest_data_date(facility)
+        base = forecast_quarter(facility, today)
+
+        params = {"rn_shifts_removed": 0, "agency_removed": False, "occupancy_delta": 0}
+        result = None
+        if request.method == "POST" and base:
+            try:
+                params["rn_shifts_removed"] = max(int(request.form.get("rn_shifts_removed") or 0), 0)
+                params["occupancy_delta"] = int(request.form.get("occupancy_delta") or 0)
+            except ValueError:
+                flash("Scenario inputs must be whole numbers.")
+            params["agency_removed"] = request.form.get("agency_removed") == "on"
+            result = forecast_quarter(facility, today, adjustments=params)
+
+        return render_template(
+            "scenarios.html",
+            facility=facility, today=today, base=base,
+            params=params, result=result,
+        )
+
+    @app.route("/export/daily.csv")
+    def export_daily_csv():
+        facility = Facility.query.first()
+        if not facility:
+            return redirect(url_for("universal_import"))
+        start, end = _export_range(facility)
+        text = export_builders.daily_csv(facility, start, end)
+        return Response(
+            text, mimetype="text/csv",
+            headers={"Content-Disposition":
+                     f"attachment; filename=care-minutes-daily_{start}_{end}.csv"},
+        )
+
+    @app.route("/export/summary.xlsx")
+    def export_summary_xlsx():
+        facility = Facility.query.first()
+        if not facility:
+            return redirect(url_for("universal_import"))
+        start, end = _export_range(facility)
+        blob = export_builders.summary_xlsx(facility, start, end)
+        return Response(
+            blob,
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition":
+                     f"attachment; filename=care-minutes-summary_{start}_{end}.xlsx"},
+        )
+
+    @app.route("/report/board.pdf")
+    def board_report():
+        facility = Facility.query.first()
+        if not facility:
+            return redirect(url_for("universal_import"))
+        blob = export_builders.board_pdf(facility, _latest_data_date(facility))
+        return Response(
+            blob, mimetype="application/pdf",
+            headers={"Content-Disposition": "attachment; filename=board-care-minutes-report.pdf"},
+        )
+
+    def _export_range(facility):
+        def _parse(name, fallback):
+            try:
+                return datetime.strptime(request.args.get(name, ""), "%Y-%m-%d").date()
+            except ValueError:
+                return fallback
+        latest = _latest_data_date(facility)
+        return _parse("start", latest - timedelta(days=89)), _parse("end", latest)
+
+    @app.route("/audit")
+    def audit():
+        facility = Facility.query.first()
+        if not facility:
+            return redirect(url_for("universal_import"))
+        receipts = (
+            ImportReceipt.query.filter_by(facility_id=facility.id)
+            .order_by(ImportReceipt.imported_at.desc()).all()
+        )
+        mappings = {m.id: m for m in FormatMapping.query.all()}
+        files_by_receipt = {}
+        for r in receipts:
+            if r.source_path and os.path.isdir(r.source_path):
+                files_by_receipt[r.id] = sorted(os.listdir(r.source_path))
+        with_files = sum(1 for r in receipts if r.id in files_by_receipt)
+        return render_template(
+            "audit.html",
+            facility=facility,
+            receipts=receipts,
+            mappings=mappings,
+            files_by_receipt=files_by_receipt,
+            readiness=round(with_files / len(receipts) * 100) if receipts else None,
+            calc_version=CALC_VERSION,
+        )
+
+    @app.route("/audit/file/<int:receipt_id>/<path:filename>")
+    def audit_file(receipt_id, filename):
+        receipt = ImportReceipt.query.get_or_404(receipt_id)
+        if not receipt.source_path:
+            return ("Not found", 404)
+        safe = os.path.basename(filename)
+        return send_from_directory(receipt.source_path, safe, as_attachment=True)
+
+    @app.route("/integrations", methods=["GET", "POST"])
+    def integrations_view():
+        facility = Facility.query.first()
+        configs = {c.platform: c for c in IntegrationConfig.query.all()}
+
+        if request.method == "POST":
+            action = request.form.get("action")
+            platform = request.form.get("platform", "")
+            if platform not in BY_KEY:
+                flash("Unknown platform.")
+                return redirect(url_for("integrations_view"))
+
+            if action == "configure":
+                cfg = configs.get(platform) or IntegrationConfig(platform=platform)
+                cfg.config_json = json.dumps({"url": (request.form.get("url") or "").strip()})
+                db.session.add(cfg)
+                db.session.commit()
+                flash(f"{BY_KEY[platform].name} configured.")
+            elif action == "sync":
+                cfg = configs.get(platform)
+                if not cfg:
+                    flash("Configure the connection first.")
+                elif not facility:
+                    flash("Create a facility (run one import) before syncing.")
+                else:
+                    try:
+                        outcomes = sync_platform(facility, cfg)
+                        db.session.commit()
+                        o = outcomes[0]
+                        flash(f"Synced {o.filename}: {o.shifts_imported} shifts, "
+                              f"{o.residents_imported} residents.")
+                    except (SyncError, FileReadError, MappingError, AnalyzerError) as e:
+                        db.session.rollback()
+                        cfg = IntegrationConfig.query.filter_by(platform=platform).first()
+                        if cfg:
+                            cfg.last_result = f"Failed: {e}"
+                            db.session.commit()
+                        flash(f"Sync failed: {e}")
+            return redirect(url_for("integrations_view"))
+
+        return render_template(
+            "integrations.html",
+            platforms=PLATFORMS,
+            configs=configs,
+            facility=facility,
+        )
+
     @app.route("/report/quarter.pdf")
     def quarterly_report():
         facility = Facility.query.first()
@@ -205,8 +490,27 @@ def create_app() -> Flask:
             .count()
         )
 
+        # Phase 6 additions
+        pct = compliance_pct(facility, today)
+        coverage = rn_coverage(facility.id, today)
+        alerts = detect_gaps(facility, today)
+        last_receipt = _latest_receipt(facility)
+        data_age_days = (
+            (date.today() - last_receipt.imported_at.date()).days if last_receipt else None
+        )
+        receipts = ImportReceipt.query.filter_by(facility_id=facility.id).all()
+        with_files = sum(
+            1 for r in receipts if r.source_path and os.path.isdir(r.source_path)
+        )
+        audit_readiness = round(with_files / len(receipts) * 100) if receipts else None
+
         return render_template(
             "dashboard.html",
+            compliance_pct=pct,
+            coverage=coverage,
+            alerts=alerts,
+            data_age_days=data_age_days,
+            audit_readiness=audit_readiness,
             facility=facility,
             today=today,
             today_stats=today_stats,
@@ -254,6 +558,35 @@ def create_app() -> Flask:
         return redirect(url_for("upload"))
 
     return app
+
+
+def _migrate_sqlite(db):
+    """create_all() never alters existing tables, so add columns introduced
+    after the first deploy by hand. Safe to run on every startup."""
+    from sqlalchemy import text
+
+    additions = {
+        "shifts": [
+            ("break_minutes", "INTEGER NOT NULL DEFAULT 0"),
+            ("is_agency", "BOOLEAN NOT NULL DEFAULT 0"),
+            ("import_receipt_id", "INTEGER"),
+            ("source_row", "INTEGER"),
+        ],
+        "import_receipts": [
+            ("source_path", "TEXT"),
+            ("imported_by", "TEXT"),
+            ("mapping_ids", "TEXT"),
+            ("calc_version", "TEXT"),
+        ],
+    }
+    for table, cols in additions.items():
+        existing = {
+            row[1] for row in db.session.execute(text(f"PRAGMA table_info({table})"))
+        }
+        for name, ddl in cols:
+            if name not in existing:
+                db.session.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
+    db.session.commit()
 
 
 def _parse_date(value):
@@ -381,3 +714,4 @@ app = create_app()
 
 if __name__ == "__main__":
     app.run(debug=True, port=8080)
+

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>{% block title %}Carelog{% endblock %}</title>
+  <title>{% block title %}CareMin{% endblock %}</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -10,13 +10,17 @@
 <body>
   <header class="nav">
     <div class="brand-block">
-      <div class="brand">Carelog</div>
+      <div class="brand">CareMin</div>
       <div class="brand-subtitle">Care operations dashboard</div>
     </div>
     <nav>
       <a href="{{ url_for('dashboard') }}">Dashboard</a>
+      <a href="{{ url_for('compliance_view') }}">Compliance</a>
+      <a href="{{ url_for('scenarios') }}">Scenarios</a>
+      <a href="{{ url_for('universal_import') }}">Import</a>
+      <a href="{{ url_for('integrations_view') }}">Integrations</a>
+      <a href="{{ url_for('audit') }}">Audit</a>
       <a href="{{ url_for('facility_view') }}">Facility</a>
-      <a href="{{ url_for('upload') }}">Upload</a>
     </nav>
   </header>
   <main class="container app-shell">

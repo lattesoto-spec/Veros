@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}Scenario planning – CareMin{% endblock %}
+{% block content %}
+<section class="page-header">
+  <div>
+    <p class="eyebrow">Scenario planning</p>
+    <h1>What if…</h1>
+    <p class="muted">Adjust staffing or occupancy from tomorrow onward and see the quarter recalculated instantly.</p>
+  </div>
+</section>
+
+{% if not base %}
+<section class="block"><div class="section-card"><p class="muted">Not enough data this quarter to model scenarios.</p></div></section>
+{% else %}
+<section class="block upload-layout">
+  <div class="section-card upload-card">
+    <div class="section-heading"><div><h2>Scenario</h2><p class="muted">Applied to every remaining day of the quarter</p></div></div>
+    <form method="post" class="form">
+      <label>RN sick / 8-hour RN shifts removed per day
+        <input type="number" name="rn_shifts_removed" min="0" max="20" value="{{ params.rn_shifts_removed }}">
+      </label>
+      <label>Occupancy change (residents; discharges negative, admissions positive)
+        <input type="number" name="occupancy_delta" min="-50" max="50" value="{{ params.occupancy_delta }}">
+      </label>
+      <label style="flex-direction:row;align-items:center;gap:.5rem;">
+        <input type="checkbox" name="agency_removed" {% if params.agency_removed %}checked{% endif %}>
+        Agency staff cancelled
+      </label>
+      <button type="submit">Recalculate</button>
+    </form>
+  </div>
+
+  <div class="section-card side-card">
+    <div class="section-heading"><div><h2>Baseline</h2><p class="muted">Current trajectory, no changes</p></div></div>
+    <p>Projected quarter-end: <strong>{{ base.projected_avg }}</strong> mins/resident/day
+      ({{ 'on track' if base.on_track else 'below target' }}, target {{ facility.ancc_target }})</p>
+    <p>Projected RN: <strong>{{ base.projected_rn_avg }}</strong> (target {{ facility.rn_target }})</p>
+  </div>
+</section>
+
+{% if result %}
+<section class="cards">
+  <div class="card status-{{ 'on_track' if result.on_track else 'behind' }}">
+    <div class="card-label">Scenario: projected quarter-end</div>
+    <div class="card-value">{{ result.projected_avg }}</div>
+    <div class="card-sub">
+      was {{ base.projected_avg }} ·
+      {% if result.on_track %}still on track
+      {% elif result.days_until_breach %}breaches target in {{ result.days_until_breach }} day(s)
+      {% else %}below target{% endif %}
+    </div>
+  </div>
+  <div class="card status-{{ 'on_track' if result.rn_on_track else 'behind' }}">
+    <div class="card-label">Scenario: projected RN</div>
+    <div class="card-value">{{ result.projected_rn_avg }}</div>
+    <div class="card-sub">was {{ base.projected_rn_avg }} · target {{ facility.rn_target }}</div>
+  </div>
+  <div class="card">
+    <div class="card-label">Scenario typical day</div>
+    <div class="card-value">{{ result.future_per_resident }}</div>
+    <div class="card-sub">mins/resident at {{ result.baseline_residents }} residents (was {{ base.future_per_resident }} at {{ base.baseline_residents }})</div>
+  </div>
+</section>
+{% endif %}
+{% endif %}
+{% endblock %}

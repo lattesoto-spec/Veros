@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block title %}Universal import – CareMin{% endblock %}
+{% block content %}
+<section class="page-header">
+  <div>
+    <p class="eyebrow">Universal import</p>
+    <h1>Upload any roster or resident export</h1>
+    <p class="muted">
+      CSV or Excel, from any system — Humanforce, AlayaCare, ShiftCare, payroll exports,
+      hand-made spreadsheets. CareMin inspects the structure, learns the format once,
+      and reuses the learned parser for every future upload.
+    </p>
+  </div>
+</section>
+
+{% if errors %}
+<div class="errors">
+  <ul>{% for e in errors %}<li>{{ e }}</li>{% endfor %}</ul>
+</div>
+{% endif %}
+
+{% if not ai_ready %}
+<div class="flash">
+  <p>ANTHROPIC_API_KEY is not set, so <em>new</em> formats can't be learned right now.
+  Uploads matching an already-learned format still import normally.</p>
+</div>
+{% endif %}
+
+<section class="block upload-layout">
+  <div class="section-card upload-card">
+    <div class="section-heading">
+      <div>
+        <h2>Import files</h2>
+        <p class="muted">Select one or more files — shifts, residents, or both</p>
+      </div>
+    </div>
+    <form method="post" enctype="multipart/form-data" class="form">
+      <label>Facility name
+        <input type="text" name="facility_name" value="{{ facility.name if facility else 'Sunrise Aged Care' }}" required>
+      </label>
+      <label>Data files (CSV, Excel, ZIP)
+        <div id="dropzone" style="border:2px dashed #bbb;border-radius:8px;padding:1.5rem;text-align:center;cursor:pointer;margin:.4rem 0;">
+          <span id="dropzone-label">Drag &amp; drop files here, or click to browse</span>
+          <input type="file" id="file-input" name="data_files" accept=".csv,.tsv,.txt,.xlsx,.xlsm,.xls,.zip" multiple required style="display:none">
+        </div>
+      </label>
+      <button type="submit">Import</button>
+    </form>
+    <script>
+      (function () {
+        var zone = document.getElementById("dropzone");
+        var input = document.getElementById("file-input");
+        var label = document.getElementById("dropzone-label");
+        function show() {
+          var names = Array.from(input.files).map(function (f) { return f.name; });
+          label.textContent = names.length ? names.join(", ") : "Drag & drop files here, or click to browse";
+        }
+        zone.addEventListener("click", function () { input.click(); });
+        input.addEventListener("change", show);
+        ["dragover", "dragenter"].forEach(function (ev) {
+          zone.addEventListener(ev, function (e) { e.preventDefault(); zone.style.borderColor = "#4a7"; });
+        });
+        ["dragleave", "drop"].forEach(function (ev) {
+          zone.addEventListener(ev, function (e) { e.preventDefault(); zone.style.borderColor = "#bbb"; });
+        });
+        zone.addEventListener("drop", function (e) {
+          input.files = e.dataTransfer.files;
+          show();
+        });
+      })();
+    </script>
+  </div>
+
+  <div class="section-card side-card">
+    <div class="section-heading">
+      <div>
+        <h2>How it works</h2>
+        <p class="muted">First upload of a format is analyzed; repeats are instant</p>
+      </div>
+    </div>
+    <details class="muted helper-details" open>
+      <summary>What happens to your file</summary>
+      <p>1. The file's <strong>structure</strong> (headers + a few sample rows) is analyzed to build a column mapping — the bulk of the data never leaves the server.</p>
+      <p>2. The mapping is validated against the whole file, then stored against the format's fingerprint.</p>
+      <p>3. Future uploads with the same structure reuse the stored mapping — instant, no AI cost.</p>
+    </details>
+    {% if known_formats %}
+    <details class="muted helper-details">
+      <summary>Learned formats ({{ known_formats|length }})</summary>
+      {% for m in known_formats %}
+      <p><code>{{ m.fingerprint[:12] }}</code> · {{ m.kinds }} · {{ m.source_filename or 'unknown file' }} · {{ m.created_at.strftime('%d %b %Y') }}</p>
+      {% endfor %}
+    </details>
+    {% endif %}
+  </div>
+</section>
+{% endblock %}

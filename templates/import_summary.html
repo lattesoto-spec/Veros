@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Import complete – CareMin{% endblock %}
+{% block content %}
+<section class="page-header">
+  <div>
+    <p class="eyebrow">Universal import</p>
+    <h1>Import complete</h1>
+    <p class="muted">
+      {{ receipt.shifts_imported }} shifts and {{ receipt.residents_imported }} residents imported
+      for {{ facility.name }}{% if receipt.shifts_skipped %} · {{ receipt.shifts_skipped }} rows skipped{% endif %}.
+    </p>
+  </div>
+</section>
+
+{% for o in outcomes %}
+<section class="block">
+  <div class="section-card">
+    <div class="section-heading">
+      <div>
+        <h2>{{ o.filename }}</h2>
+        <p class="muted">
+          Format <code>{{ o.fingerprint[:12] }}</code> ·
+          {% if o.mapping_reused %}known format — stored parser reused, no AI call
+          {% else %}new format — parser generated and saved for future uploads{% endif %}
+          {% if o.ai_usage %} ({{ o.ai_usage.calls }} AI call{{ 's' if o.ai_usage.calls != 1 }},
+          {{ o.ai_usage.input_tokens + o.ai_usage.output_tokens }} tokens){% endif %}
+        </p>
+      </div>
+    </div>
+    {% for r in o.results %}
+    <p>
+      <strong>{{ r.kind }}</strong> from sheet “{{ r.sheet }}”:
+      {{ r.records|length }} of {{ r.rows_seen - r.rows_filtered }} rows imported
+      {% if r.rows_filtered %} · {{ r.rows_filtered }} filtered (leave/non-shift rows){% endif %}
+    </p>
+    {% endfor %}
+    {% if o.warnings %}
+    <div class="errors">
+      <p><strong>Data quality warnings</strong></p>
+      <ul>{% for w in o.warnings %}<li>{{ w }}</li>{% endfor %}</ul>
+    </div>
+    {% endif %}
+    {% if o.row_errors %}
+    <details class="muted helper-details">
+      <summary>Skipped rows ({{ o.row_errors|length }})</summary>
+      {% for e in o.row_errors[:25] %}<p>{{ e }}</p>{% endfor %}
+      {% if o.row_errors|length > 25 %}<p>… and {{ o.row_errors|length - 25 }} more</p>{% endif %}
+    </details>
+    {% endif %}
+    <details class="muted helper-details">
+      <summary>Mapping spec</summary>
+      <pre>{{ o.spec | tojson(indent=2) }}</pre>
+    </details>
+  </div>
+</section>
+{% endfor %}
+
+<p><a href="{{ url_for('dashboard') }}">Go to dashboard →</a></p>
+{% endblock %}

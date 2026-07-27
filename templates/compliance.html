@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% block title %}Compliance – CareMin{% endblock %}
+{% block content %}
+<section class="page-header">
+  <div>
+    <p class="eyebrow">Compliance engine</p>
+    <h1>Care minutes compliance</h1>
+    <p class="muted">As at {{ today.strftime('%A, %d %B %Y') }} (latest data day) · calculation v{{ calc_version }}</p>
+  </div>
+</section>
+
+<section class="block">
+  <div class="section-card">
+    <div class="section-heading"><div><h2>Alerts</h2><p class="muted">Gap detection and predicted breaches</p></div></div>
+    {% for a in alerts %}
+      <p><span class="pill pill-{{ 'behind' if a.severity == 'high' else ('at_risk' if a.severity == 'medium' else 'on_track') }}">{{ a.severity }}</span> {{ a.message }}</p>
+    {% endfor %}
+  </div>
+</section>
+
+{% if forecast %}
+<section class="cards">
+  <div class="card status-{{ 'on_track' if forecast.qtd_avg >= facility.ancc_target else 'behind' }}">
+    <div class="card-label">Quarter-to-date average</div>
+    <div class="card-value">{{ forecast.qtd_avg }}</div>
+    <div class="card-sub">Target {{ facility.ancc_target }} mins/resident/day</div>
+  </div>
+  <div class="card status-{{ 'on_track' if forecast.on_track else 'behind' }}">
+    <div class="card-label">Projected quarter-end</div>
+    <div class="card-value">{{ forecast.projected_avg }}</div>
+    <div class="card-sub">
+      {% if forecast.on_track %}On track
+      {% elif forecast.days_until_breach %}Falls below target in {{ forecast.days_until_breach }} day(s)
+      {% else %}Below target at quarter end{% endif %}
+    </div>
+  </div>
+  <div class="card status-{{ 'on_track' if forecast.rn_on_track else 'behind' }}">
+    <div class="card-label">Projected RN quarter-end</div>
+    <div class="card-value">{{ forecast.projected_rn_avg }}</div>
+    <div class="card-sub">Target {{ facility.rn_target }} RN mins/resident/day</div>
+  </div>
+  <div class="card status-{{ 'on_track' if coverage.full_coverage else 'at_risk' }}">
+    <div class="card-label">RN 24/7 coverage (latest day)</div>
+    <div class="card-value">{{ coverage.coverage_pct }}%</div>
+    <div class="card-sub">{{ coverage.covered_minutes }} of 1440 minutes covered</div>
+  </div>
+</section>
+
+<section class="block">
+  <div class="section-card">
+    <div class="section-heading"><div><h2>Forecast basis</h2><p class="muted">Cumulative-average projection from the trailing 14 days</p></div></div>
+    <p class="muted">
+      {{ forecast.qtd_days }} days of data this quarter · {{ forecast.days_remaining }} days remaining ·
+      typical day going forward: {{ forecast.future_per_resident }} mins/resident
+      ({{ forecast.future_rn_per_resident }} RN) at {{ forecast.baseline_residents }} residents.
+      <a href="{{ url_for('scenarios') }}">Run a what-if scenario →</a>
+    </p>
+  </div>
+</section>
+
+{% if months %}
+<section class="block">
+  <div class="section-card">
+    <div class="section-heading"><div><h2>Quarter by month</h2></div></div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Month</th><th>Bed days</th><th>Total mins</th><th>RN</th><th>EN</th><th>PCA/PCW</th><th>Agency</th><th>Care/bed day</th><th>RN/bed day</th></tr></thead>
+        <tbody>
+        {% for m in months %}
+          <tr>
+            <td>{{ m.label }}</td><td>{{ m.bed_days }}</td><td>{{ m.total_minutes }}</td>
+            <td>{{ m.rn_minutes }}</td><td>{{ m.en_minutes }}</td><td>{{ m.pca_minutes }}</td>
+            <td>{{ m.agency_minutes }}</td><td>{{ m.care_per_bed_day }}</td><td>{{ m.rn_per_bed_day }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+{% endif %}
+
+<section class="block">
+  <div class="section-card">
+    <div class="section-heading"><div><h2>Last 7 days by role</h2></div></div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Date</th><th>Residents</th><th>Total</th><th>RN</th><th>EN</th><th>PCA/PCW</th><th>Other</th><th>Agency</th><th>Care/res</th><th>RN/res</th></tr></thead>
+        <tbody>
+        {% for r in week | reverse %}
+          <tr>
+            <td>{{ r.date.strftime('%d %b') }}</td><td>{{ r.residents }}</td><td>{{ r.total_minutes }}</td>
+            <td>{{ r.rn_minutes }}</td><td>{{ r.en_minutes }}</td><td>{{ r.pca_minutes }}</td>
+            <td>{{ r.other_minutes }}</td><td>{{ r.agency_minutes }}</td>
+            <td>{{ r.care_per_resident }}</td><td>{{ r.rn_per_resident }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+{% else %}
+<section class="block"><div class="section-card"><p class="muted">Not enough data this quarter to forecast — import at least one day of shifts.</p></div></section>
+{% endif %}
+{% endblock %}

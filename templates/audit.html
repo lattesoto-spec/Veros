@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}Audit trail – CareMin{% endblock %}
+{% block content %}
+<section class="page-header">
+  <div>
+    <p class="eyebrow">Audit trail</p>
+    <h1>Every number has evidence</h1>
+    <p class="muted">
+      Calculation version {{ calc_version }} ·
+      {% if readiness is not none %}{{ readiness }}% of imports retain their source file{% else %}no imports yet{% endif %}
+    </p>
+  </div>
+</section>
+
+<section class="block">
+  <div class="section-card">
+    <div class="section-heading"><div><h2>Imports</h2><p class="muted">Newest first. Shift rows store their import id and original file row for row-level lineage.</p></div></div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>#</th><th>When (UTC)</th><th>By</th><th>Shifts</th><th>Residents</th><th>Skipped</th><th>Date range</th><th>Parser</th><th>Calc</th><th>Source files</th></tr>
+        </thead>
+        <tbody>
+        {% for r in receipts %}
+          <tr>
+            <td>{{ r.id }}</td>
+            <td>{{ r.imported_at.strftime('%d %b %Y %H:%M') }}</td>
+            <td>{{ r.imported_by or '—' }}</td>
+            <td>{{ r.shifts_imported }}</td>
+            <td>{{ r.residents_imported }}</td>
+            <td>{{ r.shifts_skipped }}</td>
+            <td>
+              {% if r.first_shift_date and r.last_shift_date %}
+                {{ r.first_shift_date.strftime('%d %b') }} – {{ r.last_shift_date.strftime('%d %b %Y') }}
+              {% else %}—{% endif %}
+            </td>
+            <td>
+              {% if r.mapping_ids %}
+                {% for mid in r.mapping_ids.split(',') %}
+                  {% set m = mappings.get(mid | int) %}
+                  {% if m %}<code title="{{ m.source_filename }}">{{ m.fingerprint[:8] }}</code>{% endif %}
+                {% endfor %}
+              {% else %}—{% endif %}
+            </td>
+            <td>{{ r.calc_version or '—' }}</td>
+            <td>
+              {% if files_by_receipt.get(r.id) %}
+                {% for f in files_by_receipt[r.id] %}
+                  <a href="{{ url_for('audit_file', receipt_id=r.id, filename=f) }}">{{ f }}</a>{% if not loop.last %} · {% endif %}
+                {% endfor %}
+              {% else %}not retained{% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section class="block">
+  <div class="section-card">
+    <div class="section-heading"><div><h2>Learned parsers</h2><p class="muted">Mapping specs are versioned by structure fingerprint and never modified in place</p></div></div>
+    {% for m in mappings.values() | sort(attribute='created_at', reverse=true) %}
+      <details class="muted helper-details">
+        <summary><code>{{ m.fingerprint[:12] }}</code> · {{ m.kinds }} · learned {{ m.created_at.strftime('%d %b %Y') }} from {{ m.source_filename or 'unknown' }}</summary>
+        <pre>{{ m.spec_json }}</pre>
+      </details>
+    {% else %}
+      <p class="muted">No parsers learned yet.</p>
+    {% endfor %}
+    <p class="muted">Not yet tracked (needs user accounts): imported-by identity, value modifications, approvals. See Documentation/ROADMAP.md.</p>
+  </div>
+</section>
+{% endblock %}
