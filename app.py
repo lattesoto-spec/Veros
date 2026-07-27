@@ -183,6 +183,16 @@ def create_app() -> Flask:
                 known_formats=FormatMapping.query.order_by(FormatMapping.created_at.desc()).all(),
                 ai_ready=ai_ready(),
             ), 422
+        except Exception as e:  # safety net: never show a bare 500 for an import
+            app.logger.exception("Unexpected import failure")
+            db.session.rollback()
+            return render_template(
+                "universal_import.html",
+                facility=Facility.query.first(),
+                errors=[f"Unexpected error during import: {type(e).__name__}: {e}"],
+                known_formats=FormatMapping.query.order_by(FormatMapping.created_at.desc()).all(),
+                ai_ready=ai_ready(),
+            ), 500
 
         # Retain the source files as audit evidence.
         upload_dir = os.path.join(app.config["UPLOADS_DIR"], str(receipt.id))

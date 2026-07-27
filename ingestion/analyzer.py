@@ -251,7 +251,9 @@ def generate_mapping_spec(sheets: list[Sheet], filename: str = "") -> tuple[dict
             "ANTHROPIC_API_KEY) so new file formats can be learned. Already-learned "
             "formats still import without it."
         )
-    client = anthropic.Anthropic(api_key=api_key)
+    # Tight timeout + single retry keep the whole request comfortably inside
+    # the web worker's window; a hung call must never take the app down.
+    client = anthropic.Anthropic(api_key=api_key, timeout=45.0, max_retries=1)
     model = resolve_model()
 
     structure = _structure_payload(sheets)
@@ -268,22 +270,51 @@ def generate_mapping_spec(sheets: list[Sheet], filename: str = "") -> tuple[dict
     last_problems: list[str] = []
     for attempt in range(2):
         try:
-            response = client.messages.create(
-                model=model,
-                max_tokens=16000,
-                system=SYSTEM_PROMPT,
-                messages=messages,
-                output_config={"format": {"type": "json_schema", "schema": SPEC_SCHEMA}},
-            )
-        except anthropic.BadRequestError:
-            # Structured outputs unavailable on this account/model:
-            # fall back to a plain request and parse the JSON ourselves.
-            response = client.messages.create(
-                model=model,
-                max_tokens=16000,
-                system=SYSTEM_PROMPT + "\n\nRespond with ONLY the JSON spec object, no prose.",
-                messages=messages,
-            )
+            try:
+                response = client.messages.create(
+                    model=model,
+                    max_tokens=8192,
+                    system=SYSTEM_PROMPT,
+                    messages=messages,
+                    output_config={"format": {"type": "json_schema", "schema": SPEC_SCHEMA}},
+                )
+            except anthropic.BadRequestError:
+                # Structured outputs unavailable on this account/model:
+                # fall back to a plain request and parse the JSON ourselves.
+                response = client.messages.create(
+                    model=model,
+                    max_tokens=8192,
+                    system=SYSTEM_PROMPT + "\n\nRespond with ONLY the JSON spec object, no prose.",
+                    messages=messages,
+                )
+        except anthropic.AuthenticationError as e:
+            raise AnalyzerError(
+                "Anthropic rejected the API key — check it on the Settings page "
+                "(keys start with sk-ant- and are shown once at creation)."
+            ) from e
+        except anthropic.PermissionDeniedError as e:
+            raise AnalyzerError(
+                "The API key was accepted but lacks access — most often this means "
+                "the Anthropic account has no credit. Check console.anthropic.com → Billing."
+            ) from e
+        except anthropic.RateLimitError as e:
+            raise AnalyzerError(
+                "Anthropic rate limit hit — wait a minute and re-import."
+            ) from e
+        except anthropic.NotFoundError as e:
+            raise AnalyzerError(
+                f"Model '{model}' was not found for this account — reset the "
+                "analysis model to the default on the Settings page."
+            ) from e
+        except anthropic.APIConnectionError as e:
+            raise AnalyzerError(
+                "Could not reach the Anthropic API (network timeout). Try again; "
+                "if it persists, check the server's outbound connectivity."
+            ) from e
+        except anthropic.APIStatusError as e:
+            raise AnalyzerError(
+                f"Anthropic API error ({e.status_code}): {getattr(e, 'message', e)}"
+            ) from e
         usage["calls"] += 1
         usage["input_tokens"] += response.usage.input_tokens
         usage["output_tokens"] += response.usage.output_tokens

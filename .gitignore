@@ -37,3 +37,13 @@ backend/data/
 .idea/
 .vscode/
 *.swp
+/government_template/care-minutes-performance-statement-template.xlsx
+/Documentation/DATABASE_SETUP.md
+/test_data/format1_simple.csv
+/test_data/format2_humanforce.csv
+/test_data/format3_alayacare.xlsx
+/test_data/format4_payroll_hours.csv
+/test_data/format5_roster.txt
+/test_data/residents_clients.xlsx
+/Documentation/ROADMAP.md
+/Documentation/SETUP.md
