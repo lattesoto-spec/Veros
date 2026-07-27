@@ -24,15 +24,67 @@ body {
 a { color: #1d4ed8; text-decoration: none; }
 a:hover { text-decoration: underline; }
 
-.nav {
+.layout {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 24px;
-  padding: 18px 32px;
-  background: rgba(255, 255, 255, 0.9);
-  border-bottom: 1px solid rgba(201, 210, 221, 0.85);
-  backdrop-filter: blur(14px);
+  min-height: 100vh;
+}
+
+.sidebar {
+  width: 230px;
+  flex-shrink: 0;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
+  padding: 26px 18px;
+  background: var(--navy);
+  display: flex;
+  flex-direction: column;
+  gap: 26px;
+}
+
+.sidebar .brand { color: #f8fafc; }
+.sidebar .brand-subtitle { color: #94a3b8; }
+
+.side-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.nav-group {
+  margin: 14px 10px 6px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #64748b;
+}
+
+.side-nav a {
+  color: #cbd5e1;
+  font-size: 14px;
+  font-weight: 500;
+  padding: 9px 12px;
+  border-radius: 10px;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.side-nav a:hover {
+  background: rgba(148, 163, 184, 0.15);
+  color: #f8fafc;
+  text-decoration: none;
+}
+
+.side-nav a.active {
+  background: rgba(59, 130, 246, 0.25);
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.main-col {
+  flex: 1;
+  min-width: 0;
 }
 
 .brand-block {
@@ -53,27 +105,6 @@ a:hover { text-decoration: underline; }
   color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.08em;
-}
-
-.nav nav {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.nav nav a {
-  color: #334155;
-  font-size: 14px;
-  font-weight: 500;
-  padding: 10px 14px;
-  border-radius: 999px;
-  transition: background-color 0.15s ease, color 0.15s ease;
-}
-
-.nav nav a:hover {
-  background: #eef2ff;
-  color: #1e3a8a;
-  text-decoration: none;
 }
 
 .container {
@@ -433,14 +464,26 @@ button:hover {
 }
 
 @media (max-width: 720px) {
-  .nav {
+  .layout {
     flex-direction: column;
-    align-items: flex-start;
-    padding: 18px 20px;
   }
 
-  .nav nav {
+  .sidebar {
+    width: 100%;
+    height: auto;
+    position: static;
+    padding: 16px 20px;
+    gap: 12px;
+  }
+
+  .side-nav {
+    flex-direction: row;
     flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  .nav-group {
+    display: none;
   }
 
   .container {

@@ -15,10 +15,34 @@ from .mapping import run_spec, validate_results
 from .reader import Sheet
 
 # Haiku keeps per-format learning cheap; the validate-and-retry loop below
-# catches its occasional misses. Override with CAREMIN_ANALYZER_MODEL if a
-# stubborn format needs a stronger model.
-MODEL = os.environ.get("CAREMIN_ANALYZER_MODEL", "claude-haiku-4-5")
+# catches its occasional misses. Both the key and the model can be set on the
+# Settings page (stored in the DB) or via environment variables.
+DEFAULT_MODEL = "claude-haiku-4-5"
 SAMPLE_ROWS = 8
+
+
+def _setting(key: str):
+    try:
+        from models import get_setting
+        return get_setting(key)
+    except Exception:  # outside app context (e.g. offline tests)
+        return None
+
+
+def resolve_api_key() -> str | None:
+    return _setting("anthropic_api_key") or os.environ.get("ANTHROPIC_API_KEY")
+
+
+def resolve_model() -> str:
+    return (
+        _setting("analyzer_model")
+        or os.environ.get("CAREMIN_ANALYZER_MODEL")
+        or DEFAULT_MODEL
+    )
+
+
+def ai_ready() -> bool:
+    return bool(resolve_api_key())
 
 
 class AnalyzerError(Exception):
@@ -220,13 +244,15 @@ def _clean_spec(spec: dict) -> dict:
 def generate_mapping_spec(sheets: list[Sheet], filename: str = "") -> tuple[dict, dict]:
     """Ask Claude for a mapping spec; validate it against the actual file; retry
     once with error feedback. Returns (spec, usage_info)."""
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    api_key = resolve_api_key()
     if not api_key:
         raise AnalyzerError(
-            "ANTHROPIC_API_KEY is not set — universal import needs it to learn new "
-            "file formats. Known formats still import without it."
+            "No Anthropic API key configured — add one on the Settings page (or set "
+            "ANTHROPIC_API_KEY) so new file formats can be learned. Already-learned "
+            "formats still import without it."
         )
     client = anthropic.Anthropic(api_key=api_key)
+    model = resolve_model()
 
     structure = _structure_payload(sheets)
     messages = [{
@@ -243,7 +269,7 @@ def generate_mapping_spec(sheets: list[Sheet], filename: str = "") -> tuple[dict
     for attempt in range(2):
         try:
             response = client.messages.create(
-                model=MODEL,
+                model=model,
                 max_tokens=16000,
                 system=SYSTEM_PROMPT,
                 messages=messages,
@@ -253,7 +279,7 @@ def generate_mapping_spec(sheets: list[Sheet], filename: str = "") -> tuple[dict
             # Structured outputs unavailable on this account/model:
             # fall back to a plain request and parse the JSON ourselves.
             response = client.messages.create(
-                model=MODEL,
+                model=model,
                 max_tokens=16000,
                 system=SYSTEM_PROMPT + "\n\nRespond with ONLY the JSON spec object, no prose.",
                 messages=messages,

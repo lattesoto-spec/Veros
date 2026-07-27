@@ -21,7 +21,8 @@
 
 {% if not ai_ready %}
 <div class="flash">
-  <p>ANTHROPIC_API_KEY is not set, so <em>new</em> formats can't be learned right now.
+  <p>No Anthropic API key is configured, so <em>new</em> formats can't be learned right now —
+  add one in <a href="{{ url_for('settings') }}">Settings</a>.
   Uploads matching an already-learned format still import normally.</p>
 </div>
 {% endif %}
@@ -35,9 +36,11 @@
       </div>
     </div>
     <form method="post" enctype="multipart/form-data" class="form">
+      {% if not facility %}
       <label>Facility name
-        <input type="text" name="facility_name" value="{{ facility.name if facility else 'Sunrise Aged Care' }}" required>
+        <input type="text" name="facility_name" placeholder="Sunrise Aged Care" required>
       </label>
+      {% endif %}
       <label>Data files (CSV, Excel, ZIP)
         <div id="dropzone" style="border:2px dashed #bbb;border-radius:8px;padding:1.5rem;text-align:center;cursor:pointer;margin:.4rem 0;">
           <span id="dropzone-label">Drag &amp; drop files here, or click to browse</span>
@@ -83,6 +86,11 @@
       <p>1. The file's <strong>structure</strong> (headers + a few sample rows) is analyzed to build a column mapping — the bulk of the data never leaves the server.</p>
       <p>2. The mapping is validated against the whole file, then stored against the format's fingerprint.</p>
       <p>3. Future uploads with the same structure reuse the stored mapping — instant, no AI cost.</p>
+      <p>
+        No data handy? Try the samples:
+        <a href="{{ url_for('sample_file', filename='residents.csv') }}">residents.csv</a> ·
+        <a href="{{ url_for('sample_file', filename='shifts.csv') }}">shifts.csv</a>
+      </p>
     </details>
     {% if known_formats %}
     <details class="muted helper-details">

@@ -8,28 +8,37 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
-  <header class="nav">
-    <div class="brand-block">
-      <div class="brand">CareMin</div>
-      <div class="brand-subtitle">Care operations dashboard</div>
+  {% set ep = request.endpoint %}
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="brand-block">
+        <div class="brand">CareMin</div>
+        <div class="brand-subtitle">Care minutes engine</div>
+      </div>
+      <nav class="side-nav">
+        <p class="nav-group">Monitor</p>
+        <a href="{{ url_for('dashboard') }}" class="{{ 'active' if ep == 'dashboard' }}">Dashboard</a>
+        <a href="{{ url_for('compliance_view') }}" class="{{ 'active' if ep == 'compliance_view' }}">Compliance</a>
+        <a href="{{ url_for('scenarios') }}" class="{{ 'active' if ep == 'scenarios' }}">Scenarios</a>
+        <p class="nav-group">Data</p>
+        <a href="{{ url_for('universal_import') }}" class="{{ 'active' if ep == 'universal_import' }}">Import</a>
+        <a href="{{ url_for('integrations_view') }}" class="{{ 'active' if ep == 'integrations_view' }}">Integrations</a>
+        <a href="{{ url_for('audit') }}" class="{{ 'active' if ep == 'audit' }}">Audit trail</a>
+        <p class="nav-group">Setup</p>
+        <a href="{{ url_for('facility_view') }}" class="{{ 'active' if ep == 'facility_view' }}">Facility</a>
+        <a href="{{ url_for('settings') }}" class="{{ 'active' if ep == 'settings' }}">Settings</a>
+      </nav>
+    </aside>
+    <div class="main-col">
+      <main class="container app-shell">
+        {% with msgs = get_flashed_messages() %}
+          {% if msgs %}
+            <div class="flash">{% for m in msgs %}<p>{{ m }}</p>{% endfor %}</div>
+          {% endif %}
+        {% endwith %}
+        {% block content %}{% endblock %}
+      </main>
     </div>
-    <nav>
-      <a href="{{ url_for('dashboard') }}">Dashboard</a>
-      <a href="{{ url_for('compliance_view') }}">Compliance</a>
-      <a href="{{ url_for('scenarios') }}">Scenarios</a>
-      <a href="{{ url_for('universal_import') }}">Import</a>
-      <a href="{{ url_for('integrations_view') }}">Integrations</a>
-      <a href="{{ url_for('audit') }}">Audit</a>
-      <a href="{{ url_for('facility_view') }}">Facility</a>
-    </nav>
-  </header>
-  <main class="container app-shell">
-    {% with msgs = get_flashed_messages() %}
-      {% if msgs %}
-        <div class="flash">{% for m in msgs %}<p>{{ m }}</p>{% endfor %}</div>
-      {% endif %}
-    {% endwith %}
-    {% block content %}{% endblock %}
-  </main>
+  </div>
 </body>
 </html>

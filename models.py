@@ -5,6 +5,29 @@ from flask_sqlalchemy import SQLAlchemy
 db = SQLAlchemy()
 
 
+class AppSetting(db.Model):
+    """Simple key/value app configuration (API keys, model overrides)."""
+    __tablename__ = "app_settings"
+    key = db.Column(db.Text, primary_key=True)
+    value = db.Column(db.Text)
+
+
+def get_setting(key: str, default=None):
+    row = db.session.get(AppSetting, key)
+    return row.value if row and row.value else default
+
+
+def set_setting(key: str, value):
+    row = db.session.get(AppSetting, key)
+    if value:
+        if row:
+            row.value = value
+        else:
+            db.session.add(AppSetting(key=key, value=value))
+    elif row:
+        db.session.delete(row)
+
+
 class Facility(db.Model):
     __tablename__ = "facilities"
     id = db.Column(db.Integer, primary_key=True)
