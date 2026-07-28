@@ -1,10 +1,10 @@
-"""Generate 5 differently-formatted exports of the SAME underlying roster.
+"""Generate 7 differently-formatted exports of the SAME underlying roster.
 
 Every file encodes the identical set of worked shifts (13-15 Apr 2026), so a
 correct ingestion engine must produce identical care-minute totals from all
-five. Formats deliberately vary: delimiter, header names, date/time styles,
-12h vs 24h, durations vs start/end, Excel with preamble rows, junk rows to
-filter, split name columns, role vocabularies.
+seven. Formats deliberately vary: delimiter, header names, date/time styles,
+12h vs 24h, durations vs start/end, Excel with preamble rows, nested JSON,
+SQL dumps, junk rows to filter, split name columns, role vocabularies.
 """
 
 import csv
@@ -140,6 +140,73 @@ def fmt5_tsv():
             ])
 
 
+def fmt6_api_json():
+    """Nested JSON API extract: dotted paths, ISO datetimes, ragged keys."""
+    import json
+
+    records = []
+    for sid, day, start, end, direct in SHIFTS:
+        first, last, role = STAFF[sid]
+        rec = {
+            "employee": {"code": sid.replace("S", "EMP"), "displayName": f"{first} {last}"},
+            "classification": {"title": ROLE_WORDS[role][0]},
+            "startsAt": f"{day}T{start}:00",
+            "endsAt": f"{day}T{end}:00",
+            "serviceType": "direct_care" if direct else "administration",
+            "tags": ["rostered", "confirmed"],
+        }
+        if not direct:  # only some records carry this key
+            rec["costCentre"] = "Corporate"
+        records.append(rec)
+    doc = {
+        "exportedAt": "2026-04-16T02:00:00Z",
+        "facility": "Test Facility",
+        "shifts": records,
+    }
+    with open(os.path.join(HERE, "format6_api_extract.json"), "w") as f:
+        json.dump(doc, f, indent=2)
+
+
+def fmt7_sql_dump():
+    """Database dump: CREATE TABLE + multi-row INSERTs, quoted identifiers,
+    a schema-qualified table name, NULLs and leave rows to filter out."""
+    lines = [
+        "-- Roster database dump",
+        "/*!40101 SET NAMES utf8 */;",
+        "CREATE TABLE `roster_entries` (",
+        "  `entry_id` int NOT NULL AUTO_INCREMENT,",
+        "  `emp_ref` varchar(20) NOT NULL,",
+        "  `emp_name` varchar(100) DEFAULT NULL,",
+        "  `grade` varchar(50) DEFAULT NULL,",
+        "  `duty_date` date DEFAULT NULL,",
+        "  `commenced` time DEFAULT NULL,",
+        "  `ceased` time DEFAULT NULL,",
+        "  `entry_type` varchar(20) DEFAULT NULL,",
+        "  PRIMARY KEY (`entry_id`),",
+        "  KEY `idx_duty_date` (`duty_date`)",
+        ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;",
+    ]
+    values = []
+    for i, (sid, day, start, end, direct) in enumerate(SHIFTS, start=1):
+        first, last, role = STAFF[sid]
+        d = datetime.strptime(day, "%Y-%m-%d").strftime("%d/%m/%Y")
+        entry = "CARE" if direct else "ADMIN"
+        values.append(
+            f"({i},'{sid.replace('S', 'R')}','{last}, {first}','{ROLE_WORDS[role][1]}',"
+            f"'{d}','{start}:00','{end}:00','{entry}')"
+        )
+    # Non-shift rows a real dump carries; the mapping must filter them out.
+    values.append(f"({len(SHIFTS) + 1},'R001','Nguyen, Alice','RN Level 1','16/04/2026',NULL,NULL,'LEAVE')")
+    values.append(f"({len(SHIFTS) + 2},'R004','Okafor, David','Care Worker Gr2','16/04/2026',NULL,NULL,'LEAVE')")
+    lines.append(
+        "INSERT INTO `payroll`.`roster_entries` "
+        "(`entry_id`,`emp_ref`,`emp_name`,`grade`,`duty_date`,`commenced`,`ceased`,`entry_type`) VALUES\n"
+        + ",\n".join(values) + ";"
+    )
+    with open(os.path.join(HERE, "format7_dbdump.sql"), "w") as f:
+        f.write("\n".join(lines) + "\n")
+
+
 def residents_xlsx():
     """Resident list in a non-native shape."""
     from openpyxl import Workbook
@@ -158,7 +225,8 @@ if __name__ == "__main__":
     fmt3_alayacare_xlsx()
     fmt4_payroll_hours()
     fmt5_tsv()
+    fmt6_api_json()
+    fmt7_sql_dump()
     residents_xlsx()
-    total = sum(_minutes(s, e) for _, _, s, e, d in SHIFTS if d)
     direct = sum(_minutes(s, e) for _, _, s, e, d in SHIFTS if d)
-    print(f"Wrote 6 fixture files. Canonical direct-care minutes across 3 days: {direct}")
+    print(f"Wrote 8 fixture files. Canonical direct-care minutes across 3 days: {direct}")

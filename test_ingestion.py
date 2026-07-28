@@ -14,7 +14,7 @@ import sys
 from datetime import date
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(HERE, "test_data", "test_ingestion.db")
+DB_PATH = os.path.join(HERE, "sample_data/test_data", "test_ingestion.db")
 os.environ["DATABASE_PATH"] = DB_PATH
 
 FIXTURES = [
@@ -23,13 +23,15 @@ FIXTURES = [
     "format3_alayacare.xlsx",
     "format4_payroll_hours.csv",
     "format5_roster.txt",
+    "format6_api_extract.json",
+    "format7_dbdump.sql",
 ]
 RESIDENTS_FILE = "residents_clients.xlsx"
 DAYS = [date(2026, 4, 13), date(2026, 4, 14), date(2026, 4, 15)]
 
 
 def main():
-    fixture_dir = os.path.join(HERE, "test_data")
+    fixture_dir = os.path.join(HERE, "sample_data/test_data")
     if not all(os.path.exists(os.path.join(fixture_dir, f)) for f in FIXTURES + [RESIDENTS_FILE]):
         print("Generating fixtures...")
         import subprocess

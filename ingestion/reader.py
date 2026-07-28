@@ -1,4 +1,5 @@
-"""Read arbitrary CSV / Excel uploads into a uniform table structure.
+"""Read arbitrary uploads — CSV, Excel, JSON, SQL dumps, SQLite — into a
+uniform table structure.
 
 Every file, regardless of source system, becomes a list of Sheet objects:
 headers (from the detected header row) + rows of stringified cells.
@@ -24,7 +25,18 @@ class FileReadError(Exception):
     pass
 
 
-SUPPORTED_EXTENSIONS = (".csv", ".tsv", ".txt", ".xlsx", ".xlsm", ".xls", ".zip")
+JSON_EXTENSIONS = (".json", ".jsonl", ".ndjson")
+SQL_EXTENSIONS = (".sql",)
+SQLITE_EXTENSIONS = (".db", ".sqlite", ".sqlite3")
+# Everything a zip may contain (nested zips are not unpacked).
+UNPACKABLE_EXTENSIONS = (
+    (".csv", ".tsv", ".txt", ".xlsx", ".xlsm", ".xls")
+    + JSON_EXTENSIONS + SQL_EXTENSIONS + SQLITE_EXTENSIONS
+)
+SUPPORTED_EXTENSIONS = UNPACKABLE_EXTENSIONS + (".zip",)
+
+# SQLite files start with this regardless of extension.
+SQLITE_MAGIC = b"SQLite format 3\x00"
 
 
 def read_upload(filename: str, data: bytes) -> list[Sheet]:
@@ -36,6 +48,21 @@ def read_upload(filename: str, data: bytes) -> list[Sheet]:
         return _read_excel(data)
     if name.endswith(".xls"):
         return _read_xls(data)
+
+    from . import structured
+
+    # Sniff the magic bytes first: .db files are routinely named anything.
+    if data[:16] == SQLITE_MAGIC or name.endswith(SQLITE_EXTENSIONS):
+        return structured.read_sqlite(data)
+    if name.endswith(JSON_EXTENSIONS):
+        return structured.read_json(filename, data)
+    if name.endswith(SQL_EXTENSIONS):
+        return structured.read_sql(filename, data)
+    # Extension-less or oddly named uploads: fall back to content sniffing so
+    # a JSON body doesn't get mangled by the CSV parser.
+    head = data.lstrip()[:1]
+    if head in (b"[", b"{"):
+        return structured.read_json(filename, data)
     # Default: treat as delimited text (csv/tsv/txt).
     return [_read_delimited(filename, data)]
 
@@ -52,7 +79,7 @@ def _read_zip(data: bytes) -> list[Sheet]:
         base = info.filename.rsplit("/", 1)[-1]
         if info.is_dir() or base.startswith((".", "~")):
             continue
-        if not base.lower().endswith(SUPPORTED_EXTENSIONS[:-1]):  # no nested zips
+        if not base.lower().endswith(UNPACKABLE_EXTENSIONS):  # no nested zips
             continue
         for s in read_upload(base, zf.read(info)):
             s.name = f"{base}:{s.name}" if not s.name.startswith(base) else s.name

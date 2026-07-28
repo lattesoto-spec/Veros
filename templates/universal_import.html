@@ -6,9 +6,10 @@
     <p class="eyebrow">Universal import</p>
     <h1>Upload any roster or resident export</h1>
     <p class="muted">
-      CSV or Excel, from any system — Humanforce, AlayaCare, ShiftCare, payroll exports,
-      hand-made spreadsheets. CareMin inspects the structure, learns the format once,
-      and reuses the learned parser for every future upload.
+      CSV, Excel, JSON or a SQL dump, from any system — Humanforce, AlayaCare, ShiftCare,
+      payroll exports, API extracts, database backups, hand-made spreadsheets. CareMin
+      inspects the structure, learns the format once, and reuses the learned parser for
+      every future upload.
     </p>
   </div>
 </section>
@@ -32,7 +33,10 @@
     <div class="section-heading">
       <div>
         <h2>Import files</h2>
-        <p class="muted">Select one or more files — shifts, residents, or both</p>
+        <p class="muted">
+          Select one or more files — shifts, residents, or both.
+          Nested JSON and multi-table SQL dumps are unpacked automatically.
+        </p>
       </div>
     </div>
     <form method="post" enctype="multipart/form-data" class="form"
@@ -42,10 +46,10 @@
         <input type="text" name="facility_name" placeholder="Sunrise Aged Care" required>
       </label>
       {% endif %}
-      <label>Data files (CSV, Excel, ZIP)
+      <label>Data files (CSV, Excel, JSON, SQL, ZIP)
         <div id="dropzone" style="border:2px dashed #bbb;border-radius:8px;padding:1.5rem;text-align:center;cursor:pointer;margin:.4rem 0;">
           <span id="dropzone-label">Drag &amp; drop files here, or click to browse</span>
-          <input type="file" id="file-input" name="data_files" accept=".csv,.tsv,.txt,.xlsx,.xlsm,.xls,.zip" multiple required style="display:none">
+          <input type="file" id="file-input" name="data_files" accept=".csv,.tsv,.txt,.xlsx,.xlsm,.xls,.json,.jsonl,.ndjson,.sql,.db,.sqlite,.sqlite3,.zip" multiple required style="display:none">
         </div>
       </label>
       <button type="submit">Import</button>

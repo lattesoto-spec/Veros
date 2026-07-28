@@ -122,7 +122,7 @@ def shift_minutes(rec) -> int:
 
 
 def main():
-    fixture_dir = os.path.join(HERE, "test_data")
+    fixture_dir = os.path.join(HERE, "sample_data/test_data")
     totals = {}
     fingerprints = set()
 
