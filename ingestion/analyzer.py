@@ -100,87 +100,6 @@ Rules:
 - Each sheet's reported column_types (inferred from the data) are hints for choosing parse modes."""
 
 
-SPEC_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "targets": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "kind": {"type": "string", "enum": ["shifts", "residents"]},
-                    "sheet": {"type": ["string", "null"]},
-                    "fields": {
-                        "type": "object",
-                        "properties": {
-                            name: {"$ref": "#/$defs/field_spec"}
-                            for name in (
-                                "staff_id", "staff_name", "role", "date",
-                                "start_time", "end_time", "minutes", "break_minutes",
-                                "is_direct_care", "is_agency",
-                                "resident_id", "name", "ancc_class",
-                                "admitted_date", "discharged_date",
-                            )
-                        },
-                        "additionalProperties": False,
-                    },
-                    "row_filter": {
-                        "type": ["object", "null"],
-                        "properties": {
-                            "column": {"type": "string"},
-                            "include_values": {
-                                "type": ["array", "null"], "items": {"type": "string"}
-                            },
-                            "exclude_values": {
-                                "type": ["array", "null"], "items": {"type": "string"}
-                            },
-                        },
-                        "required": ["column", "include_values", "exclude_values"],
-                        "additionalProperties": False,
-                    },
-                },
-                "required": ["kind", "sheet", "fields", "row_filter"],
-                "additionalProperties": False,
-            },
-        },
-        "reasoning": {"type": "string"},
-    },
-    "required": ["targets", "reasoning"],
-    "additionalProperties": False,
-    "$defs": {
-        "field_spec": {
-            "type": "object",
-            "properties": {
-                "source": {"type": ["string", "null"]},
-                "column": {"type": ["string", "null"]},
-                "columns": {"type": ["array", "null"], "items": {"type": "string"}},
-                "separator": {"type": ["string", "null"]},
-                "value": {"type": ["string", "number", "boolean", "null"]},
-                "parse": {"type": ["string", "null"]},
-                "format": {"type": ["string", "null"]},
-                "multiply": {"type": ["number", "null"]},
-                "value_map": {
-                    "type": ["array", "null"],
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "from": {"type": "string"},
-                            "to": {"type": ["string", "number", "boolean"]},
-                        },
-                        "required": ["from", "to"],
-                        "additionalProperties": False,
-                    },
-                },
-                "normalize": {"type": ["string", "null"]},
-                "default": {"type": ["string", "number", "boolean", "null"]},
-            },
-            "required": [],
-            "additionalProperties": False,
-        }
-    },
-}
-
-
 def _structure_payload(sheets: list[Sheet]) -> str:
     from .inspect import infer_column_types
 
@@ -252,17 +171,19 @@ def generate_mapping_spec(sheets: list[Sheet], filename: str = "") -> tuple[dict
             "ANTHROPIC_API_KEY) so new file formats can be learned. Already-learned "
             "formats still import without it."
         )
-    # Tight timeout + single retry keep the whole request comfortably inside
-    # the web worker's window; a hung call must never take the app down.
+    # This runs in a background job, so it can afford to wait: generous read
+    # timeout, and the request is streamed so a slow generation keeps bytes
+    # flowing instead of tripping a read timeout.
     # local_address pins the outbound socket to IPv4: api.anthropic.com is
     # dual-stack, and on hosts with a broken IPv6 route (Fly machines) the
     # client otherwise burns the whole connect timeout on the AAAA address.
+    timeout = httpx.Timeout(240.0, connect=10.0)
     client = anthropic.Anthropic(
         api_key=api_key,
-        timeout=45.0,
-        max_retries=1,
+        timeout=timeout,
+        max_retries=2,
         http_client=httpx.Client(
-            timeout=45.0,
+            timeout=timeout,
             transport=httpx.HTTPTransport(local_address="0.0.0.0", retries=2),
         ),
     )
@@ -282,23 +203,16 @@ def generate_mapping_spec(sheets: list[Sheet], filename: str = "") -> tuple[dict
     last_problems: list[str] = []
     for attempt in range(2):
         try:
-            try:
-                response = client.messages.create(
-                    model=model,
-                    max_tokens=8192,
-                    system=SYSTEM_PROMPT,
-                    messages=messages,
-                    output_config={"format": {"type": "json_schema", "schema": SPEC_SCHEMA}},
-                )
-            except anthropic.BadRequestError:
-                # Structured outputs unavailable on this account/model:
-                # fall back to a plain request and parse the JSON ourselves.
-                response = client.messages.create(
-                    model=model,
-                    max_tokens=8192,
-                    system=SYSTEM_PROMPT + "\n\nRespond with ONLY the JSON spec object, no prose.",
-                    messages=messages,
-                )
+            # One plain streaming request; _extract_json tolerates prose or
+            # code fences around the spec, so no structured-output modes are
+            # needed.
+            with client.messages.stream(
+                model=model,
+                max_tokens=8192,
+                system=SYSTEM_PROMPT + "\n\nRespond with ONLY the JSON spec object, no prose.",
+                messages=messages,
+            ) as stream:
+                response = stream.get_final_message()
         except anthropic.AuthenticationError as e:
             raise AnalyzerError(
                 "Anthropic rejected the API key — check it on the Settings page "

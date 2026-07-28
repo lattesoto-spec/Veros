@@ -547,6 +547,33 @@ def create_app() -> Flask:
         report["https_default"] = timed(lambda: https("https://api.anthropic.com/v1/models"))
         report["https_ipv4_pinned"] = timed(lambda: https("https://api.anthropic.com/v1/models", ipv4_only=True))
         report["https_control_google"] = timed(lambda: https("https://www.google.com"))
+
+        # The decisive probe: a real, authenticated 1-token POST /v1/messages —
+        # the exact call an import makes, minus the payload. Uses the stored
+        # key server-side; the key never appears in the output.
+        from ingestion.analyzer import resolve_api_key, resolve_model
+
+        api_key = resolve_api_key()
+        if not api_key:
+            report["messages_post"] = {"ok": False, "error": "no API key configured"}
+        else:
+            def messages_post(streaming):
+                payload = {
+                    "model": resolve_model(),
+                    "max_tokens": 1,
+                    "messages": [{"role": "user", "content": "hi"}],
+                }
+                if streaming:
+                    payload["stream"] = True
+                headers = {"x-api-key": api_key, "anthropic-version": "2023-06-01"}
+                transport = httpx.HTTPTransport(local_address="0.0.0.0", retries=1)
+                with httpx.Client(timeout=20, transport=transport) as c:
+                    r = c.post("https://api.anthropic.com/v1/messages", json=payload, headers=headers)
+                    body = r.text[:120] if r.status_code != 200 else "OK"
+                    return f"HTTP {r.status_code}: {body}"
+
+            report["messages_post"] = timed(lambda: messages_post(streaming=False))
+            report["messages_post_stream"] = timed(lambda: messages_post(streaming=True))
         return report
 
     @app.route("/clear", methods=["POST"])
