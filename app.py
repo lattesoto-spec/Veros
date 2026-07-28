@@ -496,6 +496,59 @@ def create_app() -> Flask:
             flash("Targets must be numbers.")
         return redirect(url_for("dashboard"))
 
+    @app.route("/debug/network")
+    def debug_network():
+        """Server-side connectivity self-test for the Anthropic API — visit
+        after a deploy to see what this machine's network can actually reach.
+        Sends no credentials; every probe is capped at a few seconds."""
+        import socket
+        import time as _time
+
+        import httpx
+
+        report = {"env": {
+            k: os.environ[k]
+            for k in ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "NO_PROXY", "ANTHROPIC_BASE_URL")
+            if os.environ.get(k)
+        }}
+
+        def timed(fn):
+            t = _time.monotonic()
+            try:
+                detail = fn()
+                return {"ok": True, "detail": detail, "seconds": round(_time.monotonic() - t, 2)}
+            except Exception as e:
+                return {"ok": False, "error": f"{type(e).__name__}: {e}",
+                        "seconds": round(_time.monotonic() - t, 2)}
+
+        def dns():
+            infos = socket.getaddrinfo("api.anthropic.com", 443, proto=socket.IPPROTO_TCP)
+            return sorted({i[4][0] for i in infos})
+
+        report["dns"] = timed(dns)
+
+        report["tcp"] = {}
+        for addr in (report["dns"].get("detail") or []):
+            fam = socket.AF_INET6 if ":" in addr else socket.AF_INET
+
+            def connect(addr=addr, fam=fam):
+                with socket.socket(fam, socket.SOCK_STREAM) as s:
+                    s.settimeout(4)
+                    s.connect((addr, 443))
+                return "connected"
+
+            report["tcp"][addr] = timed(connect)
+
+        def https(url, ipv4_only=False):
+            transport = httpx.HTTPTransport(local_address="0.0.0.0") if ipv4_only else None
+            with httpx.Client(timeout=6, transport=transport) as c:
+                return f"HTTP {c.get(url).status_code}"
+
+        report["https_default"] = timed(lambda: https("https://api.anthropic.com/v1/models"))
+        report["https_ipv4_pinned"] = timed(lambda: https("https://api.anthropic.com/v1/models", ipv4_only=True))
+        report["https_control_google"] = timed(lambda: https("https://www.google.com"))
+        return report
+
     @app.route("/clear", methods=["POST"])
     def clear():
         Shift.query.delete()
