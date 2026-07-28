@@ -37,13 +37,15 @@ class ImportOutcome:
     receipt: object = None
 
 
-def get_or_create_mapping(sheets, filename: str) -> tuple[FormatMapping, bool, dict | None]:
+def get_or_create_mapping(sheets, filename: str, progress=None) -> tuple[FormatMapping, bool, dict | None]:
     """Returns (mapping, reused, ai_usage)."""
     fp = fingerprint(sheets)
     stored = FormatMapping.query.filter_by(fingerprint=fp).first()
     if stored:
         return stored, True, None
 
+    if progress:
+        progress("learning format (AI)")
     spec, usage = generate_mapping_spec(sheets, filename)
     mapping = FormatMapping(
         fingerprint=fp,
@@ -56,11 +58,15 @@ def get_or_create_mapping(sheets, filename: str) -> tuple[FormatMapping, bool, d
     return mapping, False, usage
 
 
-def ingest_file(facility, filename: str, data: bytes, receipt=None) -> ImportOutcome:
-    """`receipt` (optional ImportReceipt) stamps audit lineage onto every shift."""
+def ingest_file(facility, filename: str, data: bytes, receipt=None, progress=None) -> ImportOutcome:
+    """`receipt` (optional ImportReceipt) stamps audit lineage onto every shift.
+    `progress` (optional callable taking a stage string) receives live status
+    updates for the background-job status page."""
     sheets = read_upload(filename, data)
-    mapping, reused, usage = get_or_create_mapping(sheets, filename)
+    mapping, reused, usage = get_or_create_mapping(sheets, filename, progress=progress)
     spec = json.loads(mapping.spec_json)
+    if progress:
+        progress("extracting rows")
     results = run_spec(spec, sheets)
 
     outcome = ImportOutcome(

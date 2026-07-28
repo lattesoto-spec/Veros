@@ -35,7 +35,8 @@
         <p class="muted">Select one or more files — shifts, residents, or both</p>
       </div>
     </div>
-    <form method="post" enctype="multipart/form-data" class="form">
+    <form method="post" enctype="multipart/form-data" class="form"
+          onsubmit="var b=this.querySelector('button[type=submit]');b.disabled=true;b.textContent='Uploading…';">
       {% if not facility %}
       <label>Facility name
         <input type="text" name="facility_name" placeholder="Sunrise Aged Care" required>

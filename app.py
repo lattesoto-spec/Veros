@@ -24,9 +24,9 @@ from compliance import (
     range_breakdown,
     rn_coverage,
 )
+from ingestion import jobs as import_jobs
 from ingestion.analyzer import AnalyzerError, DEFAULT_MODEL, ai_ready, resolve_model
 from ingestion.mapping import MappingError
-from ingestion.pipeline import ingest_file
 from ingestion.reader import FileReadError
 from integrations.registry import BY_KEY, PLATFORMS
 from integrations.sync import SyncError, sync_platform
@@ -156,63 +156,45 @@ def create_app() -> Flask:
         else:
             facility = Facility(name=name)
             db.session.add(facility)
-        db.session.flush()
-
-        # Receipt is created first so every shift row can carry its id (lineage).
-        receipt = ImportReceipt(
-            facility_id=facility.id,
-            imported_by="web upload",
-            calc_version=CALC_VERSION,
-        )
-        db.session.add(receipt)
-        db.session.flush()
-
-        outcomes = []
-        payloads = []
-        try:
-            for f in files:
-                data = f.read()
-                payloads.append((f.filename, data))
-                outcomes.append(ingest_file(facility, f.filename, data, receipt=receipt))
-        except (FileReadError, MappingError, AnalyzerError) as e:
-            db.session.rollback()
-            return render_template(
-                "universal_import.html",
-                facility=Facility.query.first(),
-                errors=[str(e)],
-                known_formats=FormatMapping.query.order_by(FormatMapping.created_at.desc()).all(),
-                ai_ready=ai_ready(),
-            ), 422
-        except Exception as e:  # safety net: never show a bare 500 for an import
-            app.logger.exception("Unexpected import failure")
-            db.session.rollback()
-            return render_template(
-                "universal_import.html",
-                facility=Facility.query.first(),
-                errors=[f"Unexpected error during import: {type(e).__name__}: {e}"],
-                known_formats=FormatMapping.query.order_by(FormatMapping.created_at.desc()).all(),
-                ai_ready=ai_ready(),
-            ), 500
-
-        # Retain the source files as audit evidence.
-        upload_dir = os.path.join(app.config["UPLOADS_DIR"], str(receipt.id))
-        os.makedirs(upload_dir, exist_ok=True)
-        for fname, data in payloads:
-            safe = os.path.basename(fname) or "upload"
-            with open(os.path.join(upload_dir, safe), "wb") as fh:
-                fh.write(data)
-
-        receipt.residents_imported = sum(o.residents_imported for o in outcomes)
-        receipt.residents_skipped = 0
-        receipt.shifts_imported = sum(o.shifts_imported for o in outcomes)
-        receipt.shifts_skipped = sum(len(o.row_errors) for o in outcomes)
-        receipt.first_shift_date = min((o.first_shift_date for o in outcomes if o.first_shift_date), default=None)
-        receipt.last_shift_date = max((o.last_shift_date for o in outcomes if o.last_shift_date), default=None)
-        receipt.source_path = upload_dir
-        receipt.mapping_ids = ",".join(str(o.mapping_id) for o in outcomes if o.mapping_id)
+        # Commit now: the background worker needs the facility id, and the
+        # request must not hold an open transaction while the job runs.
         db.session.commit()
 
-        return render_template("import_summary.html", facility=facility, outcomes=outcomes, receipt=receipt)
+        # The slow work (AI format learning, extraction) happens in a
+        # background job so this request returns immediately — no gunicorn or
+        # proxy timeout can kill an import, however large the file.
+        payloads = [(f.filename, f.read()) for f in files]
+        job_id = import_jobs.start_job(app, facility.id, payloads, app.config["UPLOADS_DIR"])
+        return redirect(url_for("import_status", job_id=job_id))
+
+    @app.route("/import/status/<job_id>")
+    def import_status(job_id):
+        job = import_jobs.get_job(job_id)
+        if not job:
+            flash(
+                "That import job is no longer tracked (the server may have "
+                "restarted). Check the audit trail for the result."
+            )
+            return redirect(url_for("universal_import"))
+        return render_template("import_status.html", job=job)
+
+    @app.route("/import/status/<job_id>.json")
+    def import_status_json(job_id):
+        job = import_jobs.get_job(job_id)
+        if not job:
+            return {"status": "gone"}, 404
+        return {k: job[k] for k in ("id", "status", "error", "receipt_id", "files")}
+
+    @app.route("/import/summary/<int:receipt_id>")
+    def import_summary(receipt_id):
+        receipt = ImportReceipt.query.get_or_404(receipt_id)
+        outcomes = json.loads(receipt.summary_json) if receipt.summary_json else []
+        return render_template(
+            "import_summary.html",
+            facility=Facility.query.first(),
+            outcomes=outcomes,
+            receipt=receipt,
+        )
 
     def _latest_data_date(facility):
         latest = Shift.query.filter_by(facility_id=facility.id).order_by(Shift.date.desc()).first()
@@ -544,6 +526,7 @@ def _migrate_sqlite(db):
             ("imported_by", "TEXT"),
             ("mapping_ids", "TEXT"),
             ("calc_version", "TEXT"),
+            ("summary_json", "TEXT"),
         ],
     }
     for table, cols in additions.items():

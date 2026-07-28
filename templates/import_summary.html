@@ -30,7 +30,7 @@
     {% for r in o.results %}
     <p>
       <strong>{{ r.kind }}</strong> from sheet “{{ r.sheet }}”:
-      {{ r.records|length }} of {{ r.rows_seen - r.rows_filtered }} rows imported
+      {{ r.imported }} of {{ r.rows_seen - r.rows_filtered }} rows imported
       {% if r.rows_filtered %} · {{ r.rows_filtered }} filtered (leave/non-shift rows){% endif %}
     </p>
     {% endfor %}

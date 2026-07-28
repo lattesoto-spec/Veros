@@ -103,6 +103,7 @@ class ImportReceipt(db.Model):
     imported_by = db.Column(db.Text)      # placeholder until user accounts exist
     mapping_ids = db.Column(db.Text)      # FormatMapping ids used, comma-separated
     calc_version = db.Column(db.Text)
+    summary_json = db.Column(db.Text)     # per-file outcome snapshot for the summary page
 
 
 class IntegrationConfig(db.Model):

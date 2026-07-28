@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block title %}Importing… – CareMin{% endblock %}
+{% block content %}
+<section class="page-header">
+  <div>
+    <p class="eyebrow">Universal import</p>
+    <h1 id="status-title">Import in progress</h1>
+    <p class="muted" id="status-subtitle">
+      Files are processed one after another in the background — new formats are
+      learned first, then rows are extracted. You can leave this page; the
+      result will appear in the audit trail.
+    </p>
+  </div>
+</section>
+
+<div class="errors" id="job-error" style="display:none"><ul><li id="job-error-text"></li></ul></div>
+
+<section class="block">
+  <div class="section-card">
+    <div class="section-heading">
+      <div>
+        <h2>Files</h2>
+        <p class="muted" id="overall-stage">Starting…</p>
+      </div>
+    </div>
+    <ul id="file-list" style="list-style:none;padding:0;margin:0">
+      {% for f in job.files %}
+      <li style="padding:.5rem 0;border-bottom:1px solid #eee">
+        <strong>{{ f.filename }}</strong> — <span class="muted stage">{{ f.stage }}</span>
+      </li>
+      {% endfor %}
+    </ul>
+    <p id="done-link" style="display:none"><a href="#">View import summary →</a></p>
+    <p id="retry-link" style="display:none"><a href="{{ url_for('universal_import') }}">← Back to import</a></p>
+  </div>
+</section>
+
+<script>
+  (function () {
+    var jobId = {{ job.id | tojson }};
+    var items = document.querySelectorAll("#file-list li .stage");
+
+    function apply(job) {
+      job.files.forEach(function (f, i) {
+        if (!items[i]) return;
+        items[i].textContent = f.stage + (f.detail ? " — " + f.detail : "");
+      });
+      var running = job.files.filter(function (f) { return f.stage !== "waiting" && f.stage !== "done"; });
+      document.getElementById("overall-stage").textContent =
+        job.status === "queued" ? "Waiting to start…" :
+        running.length ? running[0].stage + "…" : "Working…";
+
+      if (job.status === "done") {
+        document.getElementById("status-title").textContent = "Import complete";
+        var link = document.getElementById("done-link");
+        link.style.display = "";
+        link.querySelector("a").href = "/import/summary/" + job.receipt_id;
+        document.getElementById("overall-stage").textContent = "All files processed.";
+        window.location = "/import/summary/" + job.receipt_id;
+        return true;
+      }
+      if (job.status === "failed") {
+        document.getElementById("status-title").textContent = "Import failed";
+        document.getElementById("job-error-text").textContent = job.error || "Unknown error.";
+        document.getElementById("job-error").style.display = "";
+        document.getElementById("overall-stage").textContent = "Nothing was imported — the database is unchanged.";
+        document.getElementById("retry-link").style.display = "";
+        return true;
+      }
+      return false;
+    }
+
+    function poll() {
+      fetch("/import/status/" + jobId + ".json")
+        .then(function (r) {
+          if (r.status === 404) throw new Error("gone");
+          return r.json();
+        })
+        .then(function (job) { if (!apply(job)) setTimeout(poll, 1200); })
+        .catch(function () {
+          // Transient network blip or server restart: keep trying slowly.
+          setTimeout(poll, 4000);
+        });
+    }
+    poll();
+  })();
+</script>
+{% endblock %}
