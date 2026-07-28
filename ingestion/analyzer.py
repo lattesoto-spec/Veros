@@ -10,6 +10,7 @@ import json
 import os
 
 import anthropic
+import httpx
 
 from .mapping import run_spec, validate_results
 from .reader import Sheet
@@ -253,7 +254,18 @@ def generate_mapping_spec(sheets: list[Sheet], filename: str = "") -> tuple[dict
         )
     # Tight timeout + single retry keep the whole request comfortably inside
     # the web worker's window; a hung call must never take the app down.
-    client = anthropic.Anthropic(api_key=api_key, timeout=45.0, max_retries=1)
+    # local_address pins the outbound socket to IPv4: api.anthropic.com is
+    # dual-stack, and on hosts with a broken IPv6 route (Fly machines) the
+    # client otherwise burns the whole connect timeout on the AAAA address.
+    client = anthropic.Anthropic(
+        api_key=api_key,
+        timeout=45.0,
+        max_retries=1,
+        http_client=httpx.Client(
+            timeout=45.0,
+            transport=httpx.HTTPTransport(local_address="0.0.0.0", retries=2),
+        ),
+    )
     model = resolve_model()
 
     structure = _structure_payload(sheets)
