@@ -1,6 +1,7 @@
 # macOS
 .DS_Store
-
+.env.example
+.env
 # Python
 __pycache__/
 *.py[cod]
