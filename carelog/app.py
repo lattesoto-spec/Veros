@@ -142,6 +142,44 @@ def create_app() -> Flask:
             print("Adopted existing rows: "
                   + ", ".join(f"{k}={v}" for k, v in adopted.items() if v))
 
+    @app.cli.command("promote-superuser")
+    @click.argument("email")
+    def promote_superuser(email):
+        """Make an existing account a platform owner."""
+        user = User.query.filter(db.func.lower(User.email) == email.strip().lower()).first()
+        if user is None:
+            raise SystemExit(f"No user with email {email}.")
+        user.is_superuser = True
+        db.session.commit()
+        print(f"{user.email} is now a platform owner (can create and enter client organisations).")
+
+    @app.cli.command("seed-demo")
+    @click.option("--name", default="Demo", help="Organisation name")
+    @click.option("--admin-email", default="demo@caremin.app")
+    @click.option("--password", required=True, help="Demo administrator password (12+ chars)")
+    @click.option("--days", default=60, help="Days of shift history to generate")
+    def seed_demo(name, admin_email, password, days):
+        """Create a self-contained demo organisation with sample care data.
+
+        Deliberately a separate tenant: demo data must never sit alongside a
+        real client's records.
+        """
+        from carelog.demo import build_demo_organization
+
+        init_db()
+        email = admin_email.strip().lower()
+        if User.query.filter(db.func.lower(User.email) == email).first():
+            raise SystemExit(f"A user with email {email} already exists.")
+        if len(password) < 12:
+            raise SystemExit("Password must be at least 12 characters.")
+        summary = build_demo_organization(name=name, admin_email=email,
+                                          password=password, days=days)
+        print(f"Demo organisation {summary['organization']!r} created.")
+        print(f"  administrator: {email} (must change password at first sign-in)")
+        print(f"  facility:      {summary['facility']}")
+        print(f"  data:          {summary['residents']} residents, {summary['staff']} staff, "
+              f"{summary['shifts']} shifts over {days} days")
+
     @app.route("/")
     def index():
         facility = current_facility()
@@ -884,6 +922,97 @@ def create_app() -> Flask:
         session.pop("facility_id", None)
         flash(f"{name} and all of its care data have been deleted.")
         return redirect(url_for("facilities_view"))
+
+    # ------------------------------------------------- platform owner console
+
+    @app.route("/platform")
+    @auth.superuser_required
+    def platform_console():
+        """Cross-organization view. This is the only place in the application
+        that deliberately reads across the tenant boundary."""
+        rows = []
+        for org in Organization.query.order_by(Organization.name).all():
+            facility_ids = [
+                f.id for f in Facility.query.filter_by(organization_id=org.id)
+            ]
+            latest = (
+                ImportReceipt.query.filter_by(organization_id=org.id)
+                .order_by(ImportReceipt.imported_at.desc()).first()
+            )
+            rows.append({
+                "org": org,
+                "users": User.query.filter_by(organization_id=org.id, is_active=True).count(),
+                "facilities": len(facility_ids),
+                "shifts": (
+                    Shift.query.filter(Shift.facility_id.in_(facility_ids)).count()
+                    if facility_ids else 0
+                ),
+                "residents": (
+                    Resident.query.filter(
+                        Resident.facility_id.in_(facility_ids),
+                        Resident.discharged_date.is_(None),
+                    ).count() if facility_ids else 0
+                ),
+                "last_import": latest.imported_at if latest else None,
+                "admins": User.query.filter_by(
+                    organization_id=org.id, role="administrator", is_active=True).all(),
+            })
+        return render_template(
+            "platform.html",
+            rows=rows,
+            roles=ROLES,
+            total_users=User.query.filter_by(is_active=True).count(),
+        )
+
+    @app.route("/platform/organizations/create", methods=["POST"])
+    @auth.superuser_required
+    def platform_create_org():
+        name = (request.form.get("name") or "").strip()
+        email = (request.form.get("admin_email") or "").strip().lower()
+        admin_name = (request.form.get("admin_name") or "").strip()
+        password = request.form.get("password") or ""
+
+        if not name:
+            flash("Organisation name is required.")
+        elif Organization.query.filter(db.func.lower(Organization.name) == name.lower()).first():
+            flash(f"An organisation called {name} already exists.")
+        elif not email or "@" not in email:
+            flash("A valid administrator email is required.")
+        elif User.query.filter(db.func.lower(User.email) == email).first():
+            flash("A user with that email already exists.")
+        elif (problem := auth.password_problem(password, password)):
+            flash(problem)
+        else:
+            org = Organization(name=name)
+            db.session.add(org)
+            db.session.flush()
+            user = auth.create_user(
+                organization_id=org.id, email=email, name=admin_name,
+                role="administrator", password=password, must_change_password=True,
+            )
+            db.session.flush()
+            auth.record("platform_org_created", "organization", org.id,
+                        f"{name} with administrator {email}")
+            db.session.commit()
+            flash(f"{name} created with {user.email} as its administrator. "
+                  "They must change the password at first sign-in.")
+        return redirect(url_for("platform_console"))
+
+    @app.route("/platform/act", methods=["POST"])
+    @auth.superuser_required
+    def platform_act():
+        org = auth.act_as_organization(request.form.get("organization_id", type=int))
+        db.session.commit()
+        flash(f"You are now working inside {org.name}.")
+        return redirect(url_for("dashboard"))
+
+    @app.route("/platform/act/stop", methods=["POST"])
+    @auth.superuser_required
+    def platform_stop_acting():
+        auth.act_as_organization(None)
+        db.session.commit()
+        flash("Returned to your own organisation.")
+        return redirect(url_for("platform_console"))
 
     # ------------------------------------------------------------- admin UI
 

@@ -64,6 +64,11 @@
         {% endif %}
         <a href="{{ url_for('settings') }}" class="{{ 'active' if ep == 'settings' }}">Settings</a>
 
+        {% if is_platform_owner %}
+        <p class="nav-group">Platform</p>
+        <a href="{{ url_for('platform_console') }}" class="{{ 'active' if ep == 'platform_console' }}">Organisations</a>
+        {% endif %}
+
         {% if has_permission('manage_users') or has_permission('view_security_log') %}
         <p class="nav-group">Administration</p>
         {% endif %}
@@ -87,6 +92,17 @@
       {% endif %}
     </aside>
     <div class="main-col">
+      {% if acting_org %}
+      <div class="acting-banner">
+        <span>
+          You are working inside <strong>{{ acting_org.name }}</strong> as platform owner.
+          Everything shown below is that client's data.
+        </span>
+        <form method="post" action="{{ url_for('platform_stop_acting') }}" class="inline-form">
+          <button type="submit" class="link-button">Leave {{ acting_org.name }}</button>
+        </form>
+      </div>
+      {% endif %}
       <main class="container app-shell">
         {% with msgs = get_flashed_messages() %}
           {% if msgs %}

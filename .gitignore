@@ -55,3 +55,8 @@ backend/data/
 carelog/**/__pycache__/
 .pytest_cache/
 .DS_Store
+
+# Vercel CLI state and pulled secrets — never commit
+.vercel/
+.env*.local
+.env.production.local
