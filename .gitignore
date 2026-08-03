@@ -1,6 +1,7 @@
 # macOS
 .DS_Store
-
+.env
+.env.example
 # Python
 __pycache__/
 *.py[cod]
@@ -54,3 +55,5 @@ backend/data/
 carelog/**/__pycache__/
 .pytest_cache/
 .DS_Store
+.vercel
+.env*
