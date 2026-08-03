@@ -49,3 +49,8 @@ backend/data/
 /sample_data/test_data/residents_clients.xlsx
 /Documentation/ROADMAP.md
 /Documentation/SETUP.md
+
+# packaged layout
+carelog/**/__pycache__/
+.pytest_cache/
+.DS_Store

@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Security log – CareMin{% endblock %}
+{% block content %}
+<section class="page-header">
+  <div>
+    <p class="eyebrow">Administration</p>
+    <h1>Security log</h1>
+    <p class="muted">
+      Sign-ins, permission changes and data changes for your organization.
+      Entries are append-only — the 500 most recent are shown.
+    </p>
+  </div>
+</section>
+
+<section class="block">
+  <div class="section-card">
+    <div style="overflow-x:auto">
+    <table class="data-table">
+      <thead><tr><th>When (UTC)</th><th>Who</th><th>Action</th><th>Object</th><th>Detail</th><th>IP</th></tr></thead>
+      <tbody>
+      {% for e in entries %}
+        <tr>
+          <td>{{ e.created_at.strftime('%d %b %Y %H:%M:%S') }}</td>
+          <td>{{ e.user_email or '—' }}</td>
+          <td><code>{{ e.action }}</code></td>
+          <td>{{ e.entity or '' }}{% if e.entity_id %} #{{ e.entity_id }}{% endif %}</td>
+          <td>{{ e.detail or '' }}</td>
+          <td class="muted">{{ e.ip_address or '' }}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="6" class="muted">Nothing recorded yet.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </div>
+</section>
+{% endblock %}

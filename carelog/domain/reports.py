@@ -22,9 +22,7 @@ from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
-from reportlab.platypus import (
-    PageBreak,
-    Paragraph,
+from reportlab.platypus import (    Paragraph,
     SimpleDocTemplate,
     Spacer,
     Table,
@@ -32,8 +30,7 @@ from reportlab.platypus import (
 )
 from sqlalchemy import or_
 
-from care_minutes import _minutes_between
-from models import Resident, Shift, Staff, db
+from carelog.models import Resident, Shift, Staff, db
 
 ROLES = [
     ("RN", "Registered Nurse"),
@@ -123,7 +120,7 @@ def compute_quarter_stats(facility_id: int, year: int, quarter: int) -> dict:
         )
         .all()
     )
-    from compliance import bucket_role, worked_minutes as shift_worked_minutes
+    from carelog.domain.compliance import bucket_role, worked_minutes as shift_worked_minutes
 
     for s, st in shifts:
         role = bucket_role(st.role)  # PCW/AIN/PCA all land in the PCA bucket

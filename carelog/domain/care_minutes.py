@@ -1,8 +1,8 @@
 from datetime import date, datetime, time, timedelta
 
-from sqlalchemy import and_, or_
+from sqlalchemy import or_
 
-from models import Resident, Shift, Staff, db
+from carelog.models import Resident, Shift, Staff, db
 
 
 def _minutes_between(start: time, end: time) -> int:

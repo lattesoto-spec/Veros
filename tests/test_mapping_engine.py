@@ -7,17 +7,21 @@ test_ingestion.py additionally exercises the AI spec generation.
 
 Run:  python test_mapping_engine.py
 """
-
 import os
 import sys
+
+# Run directly (`python tests/<name>.py`) as well as under pytest.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import os
 from collections import defaultdict
-from datetime import date, datetime, time
+from datetime import date, datetime
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-from ingestion.fingerprint import fingerprint
-from ingestion.mapping import run_spec, validate_results
-from ingestion.reader import read_upload
+from carelog.ingestion.fingerprint import fingerprint
+from carelog.ingestion.mapping import run_spec, validate_results
+from carelog.ingestion.reader import read_upload
 
 SPECS = {
     "format1_simple.csv": {"targets": [{

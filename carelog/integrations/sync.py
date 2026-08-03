@@ -10,7 +10,7 @@ import urllib.error
 import urllib.request
 from datetime import datetime
 
-from models import IntegrationConfig, db
+from carelog.models import IntegrationConfig, db
 
 MAX_BYTES = 20 * 1024 * 1024
 FETCH_TIMEOUT = 30
