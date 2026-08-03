@@ -1201,9 +1201,27 @@ def _receipt_files(receipt):
 
 
 def _database_uri() -> tuple[str, str]:
-    """DATABASE_URL (Postgres, managed hosts) wins; otherwise a local SQLite
-    file. Returns (uri, db_path) — db_path is only meaningful for SQLite."""
-    url = (os.environ.get("DATABASE_URL") or "").strip()
+    """Choose the connected database, with a local SQLite fallback.
+
+    Vercel's Neon Storage integration provides ``STORAGE_DATABASE_URL``. Use
+    it first on Vercel so a stale manually-created ``DATABASE_URL`` cannot
+    disconnect a production deployment. Other hosts continue to prefer the
+    conventional ``DATABASE_URL``.
+    """
+    vercel_url = (os.environ.get("STORAGE_DATABASE_URL") or "").strip()
+    database_url = (os.environ.get("DATABASE_URL") or "").strip()
+    candidates = (
+        (vercel_url, database_url)
+        if os.environ.get("VERCEL")
+        else (database_url, vercel_url)
+    )
+    url = next(
+        (
+            value for value in candidates
+            if value and value not in {"[SENSITIVE]", "STORAGE_DATABASE_URL"}
+        ),
+        "",
+    )
     if url:
         # Managed providers still hand out the legacy postgres:// scheme, and
         # psycopg3 is the driver that installs cleanly on serverless images.
@@ -1320,4 +1338,3 @@ app = create_app()
 
 if __name__ == "__main__":
     app.run(debug=True, port=8080)
-
