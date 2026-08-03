@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block title %}Users – CareMin{% endblock %}
+{% block content %}
+<section class="page-header">
+  <div>
+    <p class="eyebrow">Administration</p>
+    <h1>Users</h1>
+    <p class="muted">
+      Everyone who can sign in to {{ organization.name if organization else 'your organization' }}.
+      Each person sees only this organization's data.
+    </p>
+  </div>
+</section>
+
+<section class="block">
+  <div class="section-card">
+    <div class="section-heading">
+      <div><h2>People</h2><p class="muted">{{ users|length }} account{{ 's' if users|length != 1 }}</p></div>
+    </div>
+    <div style="overflow-x:auto">
+    <table class="data-table">
+      <thead>
+        <tr><th>Email</th><th>Name</th><th>Role</th><th>Status</th><th>Last sign-in</th><th></th></tr>
+      </thead>
+      <tbody>
+      {% for u in users %}
+        <tr{% if not u.is_active %} class="muted"{% endif %}>
+          <td>{{ u.email }}{% if u.is_superuser %} <span class="pill">platform admin</span>{% endif %}</td>
+          <td>{{ u.name or '—' }}</td>
+          <td>
+            <form method="post" action="{{ url_for('admin_update_user', user_id=u.id) }}" class="inline-form">
+              <input type="hidden" name="action" value="set_role">
+              <select name="role" onchange="this.form.submit()">
+                {% for key, meta in roles.items() %}
+                <option value="{{ key }}" {% if u.role == key %}selected{% endif %}>{{ meta.label }}</option>
+                {% endfor %}
+              </select>
+            </form>
+          </td>
+          <td>{% if u.is_active %}Active{% else %}Deactivated{% endif %}</td>
+          <td>{{ u.last_login_at.strftime('%d %b %Y %H:%M') if u.last_login_at else 'never' }}</td>
+          <td>
+            <form method="post" action="{{ url_for('admin_update_user', user_id=u.id) }}" class="inline-form">
+              <input type="hidden" name="action" value="{{ 'reactivate' if not u.is_active else 'deactivate' }}">
+              <button type="submit" class="link-button">{{ 'Reactivate' if not u.is_active else 'Deactivate' }}</button>
+            </form>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </div>
+</section>
+
+<section class="block">
+  <div class="section-card">
+    <div class="section-heading">
+      <div>
+        <h2>Add a user</h2>
+        <p class="muted">They will be asked to choose their own password at first sign-in.</p>
+      </div>
+    </div>
+    <form method="post" action="{{ url_for('admin_create_user') }}" class="form">
+      <label>Email <input type="email" name="email" required></label>
+      <label>Full name <input type="text" name="name"></label>
+      <label>Role
+        <select name="role">
+          {% for key, meta in roles.items() %}
+          <option value="{{ key }}">{{ meta.label }} — {{ meta.description }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>Temporary password <input type="password" name="password" required minlength="12"></label>
+      <label>Confirm password <input type="password" name="confirm_password" required minlength="12"></label>
+      <button type="submit">Add user</button>
+    </form>
+  </div>
+</section>
+
+<section class="block">
+  <div class="section-card">
+    <div class="section-heading"><div><h2>What each role can do</h2></div></div>
+    {% for key, meta in roles.items() %}
+    <p><strong>{{ meta.label }}</strong> — {{ meta.description }}</p>
+    {% endfor %}
+  </div>
+</section>
+{% endblock %}

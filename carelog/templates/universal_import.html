@@ -45,6 +45,16 @@
       <label>Facility name
         <input type="text" name="facility_name" placeholder="Sunrise Aged Care" required>
       </label>
+      {% elif facilities|length > 1 %}
+      <label>Import into
+        <select name="facility_id">
+          {% for f in facilities %}
+          <option value="{{ f.id }}" {% if f.id == facility.id %}selected{% endif %}>{{ f.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      {% else %}
+      <input type="hidden" name="facility_id" value="{{ facility.id }}">
       {% endif %}
       <label>Data files (CSV, Excel, JSON, SQL, ZIP)
         <div id="dropzone" style="border:2px dashed #bbb;border-radius:8px;padding:1.5rem;text-align:center;cursor:pointer;margin:.4rem 0;">

@@ -22,24 +22,18 @@ DEFAULT_MODEL = "claude-haiku-4-5"
 SAMPLE_ROWS = 8
 
 
-def _setting(key: str):
-    try:
-        from models import get_setting
-        return get_setting(key)
-    except Exception:  # outside app context (e.g. offline tests)
-        return None
-
-
 def resolve_api_key() -> str | None:
-    return _setting("anthropic_api_key") or os.environ.get("ANTHROPIC_API_KEY")
+    """Deployment configuration, not application data.
+
+    The key used to be storable in the database from the Settings page, which
+    meant a platform credential sat in tenant data and any administrator could
+    read or replace it. It now comes only from the environment.
+    """
+    return os.environ.get("ANTHROPIC_API_KEY")
 
 
 def resolve_model() -> str:
-    return (
-        _setting("analyzer_model")
-        or os.environ.get("CAREMIN_ANALYZER_MODEL")
-        or DEFAULT_MODEL
-    )
+    return os.environ.get("CAREMIN_ANALYZER_MODEL") or DEFAULT_MODEL
 
 
 def ai_ready() -> bool:

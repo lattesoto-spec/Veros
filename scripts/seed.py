@@ -6,7 +6,7 @@ The data is shaped so the dashboard reads ~210 mins/resident against a 217 targe
 import csv
 import os
 import random
-from datetime import date, datetime, time, timedelta
+from datetime import date, time, timedelta
 
 random.seed(42)
 

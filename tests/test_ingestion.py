@@ -7,13 +7,18 @@ reuse the stored mappings with zero AI calls.
 
 Run:  python test_ingestion.py
 """
+import os
+import sys
+
+# Run directly (`python tests/<name>.py`) as well as under pytest.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import json
 import os
 import sys
 from datetime import date
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(HERE, "sample_data/test_data", "test_ingestion.db")
 os.environ["DATABASE_PATH"] = DB_PATH
 
@@ -38,9 +43,9 @@ def main():
         subprocess.run([sys.executable, os.path.join(fixture_dir, "make_fixtures.py")], check=True)
 
     from app import app
-    from care_minutes import daily_stats
+    from carelog.domain.care_minutes import daily_stats
     from ingestion.pipeline import ingest_file
-    from models import Facility, db
+    from carelog.models import Facility, db
 
     outcomes = {}
     with app.app_context():

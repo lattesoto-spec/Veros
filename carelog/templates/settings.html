@@ -43,42 +43,30 @@
     </div>
     {% if ai_ready %}
       <p><span class="pill pill-on_track">connected</span>
-        {% if key_masked %}Key <code>{{ key_masked }}</code> saved here.
-        {% elif env_key %}Using the ANTHROPIC_API_KEY environment variable.{% endif %}
-      </p>
+        Using the <code>ANTHROPIC_API_KEY</code> environment variable.</p>
     {% else %}
-      <p><span class="pill pill-at_risk">not configured</span> Paste an API key to enable format learning.</p>
+      <p><span class="pill pill-at_risk">not configured</span>
+        Set <code>ANTHROPIC_API_KEY</code> in the deployment environment to enable format learning.</p>
     {% endif %}
-    <form method="post" class="form">
-      <input type="hidden" name="section" value="api">
-      <label>Anthropic API key
-        <input type="password" name="anthropic_api_key" placeholder="sk-ant-…" autocomplete="off">
-      </label>
-      <label>Analysis model
-        <select name="analyzer_model">
-          <option value="" {% if not model_setting %}selected{% endif %}>Default — Claude Haiku (cheapest)</option>
-          <option value="claude-sonnet-5" {% if model_setting == 'claude-sonnet-5' %}selected{% endif %}>Claude Sonnet (stronger, pricier)</option>
-          <option value="claude-opus-5" {% if model_setting == 'claude-opus-5' %}selected{% endif %}>Claude Opus (strongest)</option>
-        </select>
-      </label>
-      <p class="muted">Currently using: <code>{{ current_model }}</code></p>
-      <div class="form row compact-form" style="gap:12px;">
-        <button type="submit">Save AI settings</button>
-        {% if key_masked %}<button type="submit" name="clear_key" value="1" class="link-button">Remove saved key</button>{% endif %}
-      </div>
-    </form>
+    <p class="muted">Analysis model: <code>{{ current_model }}</code>
+      (override with <code>CAREMIN_ANALYZER_MODEL</code>; default <code>{{ default_model }}</code>).</p>
     <details class="muted helper-details">
-      <summary>Where do I get a key?</summary>
-      <p>Create one at <strong>console.anthropic.com → API keys</strong>. Each new file format costs a fraction of a cent to learn; repeat imports are free. See <code>Documentation/SETUP.md</code> for details.</p>
+      <summary>Why isn't this editable here?</summary>
+      <p>The API key is a platform credential, not customer data. Keeping it in the
+         deployment environment means it is never stored in the database, never visible
+         in this interface, and cannot be read or replaced by an account holder.</p>
+      <p>On Vercel: <strong>Project → Settings → Environment Variables</strong>.</p>
     </details>
 
+    {% if has_permission('manage_facility') %}
     <div class="danger-zone">
       <p class="danger-title">Administrative reset</p>
-      <p class="muted">Removes all imported data. Learned file formats are kept.</p>
-      <form method="post" action="{{ url_for('clear') }}" class="inline-form" onsubmit="return confirm('Delete all data?');">
+      <p class="muted">Deletes all imported data for {{ organization.name if organization else 'your organization' }}. Learned file formats are kept.</p>
+      <form method="post" action="{{ url_for('clear') }}" class="inline-form" onsubmit="return confirm('Delete all care data for your organization? This cannot be undone.');">
         <button type="submit" class="link-button">Clear all data</button>
       </form>
     </div>
+    {% endif %}
   </div>
 </section>
 {% endblock %}
