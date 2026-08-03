@@ -1,0 +1,16 @@
+# Keep the function bundle small and free of local state.
+*.db
+vero/
+caremin.db
+sample_data/test_data/
+tests/
+scripts/
+Documentation/
+government_template/
+__pycache__/
+.venv/
+venv/
+uploads/
+fly.toml
+Dockerfile
+.idea/

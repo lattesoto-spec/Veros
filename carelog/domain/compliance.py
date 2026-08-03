@@ -7,10 +7,9 @@ say which calculation logic produced them.
 
 from datetime import date, datetime, time, timedelta
 
-from sqlalchemy import or_
 
-from care_minutes import _minutes_between, active_residents_on, quarter_bounds
-from models import Resident, Shift, Staff, db
+from carelog.domain.care_minutes import _minutes_between, active_residents_on, quarter_bounds
+from carelog.models import Shift, Staff, db
 
 CALC_VERSION = "2026.07.1"
 

@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>{% block title %}CareMin{% endblock %}</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+  {% set ep = request.endpoint %}
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="brand-block">
+        <div class="brand">CareMin</div>
+        <div class="brand-subtitle">Care minutes engine</div>
+      </div>
+
+      {% if active_facility %}
+      <div class="facility-switcher">
+        <p class="switcher-label">Facility</p>
+        {% if org_facilities|length > 1 %}
+        <form method="post" action="{{ url_for('facility_switch') }}">
+          <input type="hidden" name="next" value="{{ request.path }}">
+          <select name="facility_id" onchange="this.form.submit()">
+            {% for f in org_facilities %}
+            <option value="{{ f.id }}" {% if f.id == active_facility.id %}selected{% endif %}>{{ f.name }}</option>
+            {% endfor %}
+          </select>
+        </form>
+        {% else %}
+        <p class="switcher-single">{{ active_facility.name }}</p>
+        {% endif %}
+      </div>
+      {% endif %}
+      <nav class="side-nav">
+        {# Only ever show what this role can actually open. #}
+        {% if has_permission('view_dashboard') %}
+        <p class="nav-group">Monitor</p>
+        <a href="{{ url_for('dashboard') }}" class="{{ 'active' if ep == 'dashboard' }}">Dashboard</a>
+        <a href="{{ url_for('compliance_view') }}" class="{{ 'active' if ep == 'compliance_view' }}">Compliance</a>
+        {% endif %}
+        {% if has_permission('run_scenarios') %}
+        <a href="{{ url_for('scenarios') }}" class="{{ 'active' if ep == 'scenarios' }}">Scenarios</a>
+        {% endif %}
+
+        {% if has_permission('import_data') or has_permission('view_audit') or has_permission('manage_integrations') %}
+        <p class="nav-group">Data</p>
+        {% endif %}
+        {% if has_permission('import_data') %}
+        <a href="{{ url_for('universal_import') }}" class="{{ 'active' if ep == 'universal_import' }}">Import</a>
+        {% endif %}
+        {% if has_permission('manage_integrations') %}
+        <a href="{{ url_for('integrations_view') }}" class="{{ 'active' if ep == 'integrations_view' }}">Integrations</a>
+        {% endif %}
+        {% if has_permission('view_audit') %}
+        <a href="{{ url_for('audit') }}" class="{{ 'active' if ep == 'audit' }}">Audit trail</a>
+        {% endif %}
+
+        <p class="nav-group">Setup</p>
+        {% if has_permission('view_dashboard') %}
+        <a href="{{ url_for('facilities_view') }}" class="{{ 'active' if ep == 'facilities_view' }}">Facilities</a>
+        <a href="{{ url_for('facility_view') }}" class="{{ 'active' if ep == 'facility_view' }}">Residents &amp; staff</a>
+        {% endif %}
+        <a href="{{ url_for('settings') }}" class="{{ 'active' if ep == 'settings' }}">Settings</a>
+
+        {% if has_permission('manage_users') or has_permission('view_security_log') %}
+        <p class="nav-group">Administration</p>
+        {% endif %}
+        {% if has_permission('manage_users') %}
+        <a href="{{ url_for('admin_users') }}" class="{{ 'active' if ep == 'admin_users' }}">Users</a>
+        {% endif %}
+        {% if has_permission('view_security_log') %}
+        <a href="{{ url_for('admin_security_log') }}" class="{{ 'active' if ep == 'admin_security_log' }}">Security log</a>
+        {% endif %}
+      </nav>
+
+      {% if current_user %}
+      <div class="user-block">
+        <p class="user-name">{{ current_user.name or current_user.email }}</p>
+        <p class="user-role">{{ role_label(current_user.role) }}{% if acting_org %} · viewing {{ acting_org.name }}{% endif %}</p>
+        <a href="{{ url_for('auth.change_password') }}">Change password</a>
+        <form method="post" action="{{ url_for('auth.logout') }}" class="inline-form">
+          <button type="submit" class="link-button">Sign out</button>
+        </form>
+      </div>
+      {% endif %}
+    </aside>
+    <div class="main-col">
+      <main class="container app-shell">
+        {% with msgs = get_flashed_messages() %}
+          {% if msgs %}
+            <div class="flash">{% for m in msgs %}<p>{{ m }}</p>{% endfor %}</div>
+          {% endif %}
+        {% endwith %}
+        {% block content %}{% endblock %}
+      </main>
+    </div>
+  </div>
+</body>
+</html>

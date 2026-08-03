@@ -10,7 +10,7 @@ import json
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 
-from models import FormatMapping, Resident, Shift, Staff, db
+from carelog.models import FormatMapping, Resident, Shift, Staff, db
 
 from .analyzer import generate_mapping_spec
 from .fingerprint import fingerprint
@@ -37,10 +37,18 @@ class ImportOutcome:
     receipt: object = None
 
 
-def get_or_create_mapping(sheets, filename: str, progress=None) -> tuple[FormatMapping, bool, dict | None]:
-    """Returns (mapping, reused, ai_usage)."""
+def get_or_create_mapping(sheets, filename: str, progress=None,
+                          organization_id=None) -> tuple[FormatMapping, bool, dict | None]:
+    """Returns (mapping, reused, ai_usage).
+
+    Learned specs are per-organization: a spec names the columns of a
+    customer's roster system, so reusing one across tenants would leak how
+    another customer's systems are laid out.
+    """
     fp = fingerprint(sheets)
-    stored = FormatMapping.query.filter_by(fingerprint=fp).first()
+    stored = FormatMapping.query.filter_by(
+        fingerprint=fp, organization_id=organization_id
+    ).first()
     if stored:
         return stored, True, None
 
@@ -48,6 +56,7 @@ def get_or_create_mapping(sheets, filename: str, progress=None) -> tuple[FormatM
         progress("learning format (AI)")
     spec, usage = generate_mapping_spec(sheets, filename)
     mapping = FormatMapping(
+        organization_id=organization_id,
         fingerprint=fp,
         spec_json=json.dumps(spec),
         source_filename=filename,
@@ -63,7 +72,10 @@ def ingest_file(facility, filename: str, data: bytes, receipt=None, progress=Non
     `progress` (optional callable taking a stage string) receives live status
     updates for the background-job status page."""
     sheets = read_upload(filename, data)
-    mapping, reused, usage = get_or_create_mapping(sheets, filename, progress=progress)
+    mapping, reused, usage = get_or_create_mapping(
+        sheets, filename, progress=progress,
+        organization_id=getattr(facility, "organization_id", None),
+    )
     spec = json.loads(mapping.spec_json)
     if progress:
         progress("extracting rows")

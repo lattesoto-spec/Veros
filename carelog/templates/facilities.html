@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% block title %}Facilities – CareMin{% endblock %}
+{% block content %}
+<section class="page-header">
+  <div>
+    <p class="eyebrow">Setup</p>
+    <h1>Facilities</h1>
+    <p class="muted">
+      The homes operated by {{ organization.name if organization else 'your organization' }}.
+      Care minutes, targets and evidence are tracked separately for each one.
+    </p>
+  </div>
+</section>
+
+<section class="block">
+  <div class="section-card">
+    <div class="section-heading">
+      <div>
+        <h2>Your facilities</h2>
+        <p class="muted">{{ facilities|length }} facilit{{ 'y' if facilities|length == 1 else 'ies' }} · targets are per facility</p>
+      </div>
+    </div>
+
+    {% if not facilities %}
+      <p class="muted">No facilities yet. Add one below, or run your first import.</p>
+    {% endif %}
+
+    {% for f in facilities %}
+    <div class="section-card facility-row {{ 'facility-active' if active and f.id == active.id }}">
+      <div class="section-heading">
+        <div>
+          <h2>{{ f.name }}
+            {% if active and f.id == active.id %}<span class="pill pill-on_track">viewing</span>{% endif %}
+          </h2>
+          <p class="muted">
+            {{ summary[f.id].shifts }} shift{{ 's' if summary[f.id].shifts != 1 }} ·
+            {{ summary[f.id].residents }} current resident{{ 's' if summary[f.id].residents != 1 }} ·
+            {% if summary[f.id].latest %}latest data {{ summary[f.id].latest.strftime('%d %b %Y') }}
+            {% else %}no data imported yet{% endif %}
+          </p>
+        </div>
+        {% if not (active and f.id == active.id) %}
+        <form method="post" action="{{ url_for('facility_switch') }}" class="inline-form">
+          <input type="hidden" name="facility_id" value="{{ f.id }}">
+          <input type="hidden" name="next" value="{{ url_for('facilities_view') }}">
+          <button type="submit">Switch to this facility</button>
+        </form>
+        {% endif %}
+      </div>
+
+      {% if has_permission('manage_facility') %}
+      <form method="post" action="{{ url_for('facility_update', facility_id=f.id) }}" class="form row compact-form">
+        <label>Name <input type="text" name="name" value="{{ f.name }}"></label>
+        <label>Care minutes target <input type="number" step="0.1" name="ancc_target" value="{{ f.ancc_target }}"></label>
+        <label>RN minutes target <input type="number" step="0.1" name="rn_target" value="{{ f.rn_target }}"></label>
+        <button type="submit">Save</button>
+      </form>
+      <details class="muted helper-details">
+        <summary>Delete this facility</summary>
+        <p>Removes {{ f.name }} along with every shift, resident, staff record and
+           import receipt belonging to it. This cannot be undone.</p>
+        <form method="post" action="{{ url_for('facility_delete', facility_id=f.id) }}"
+              class="inline-form"
+              onsubmit="return confirm('Delete {{ f.name }} and all of its care data? This cannot be undone.');">
+          <button type="submit" class="link-button">Delete {{ f.name }}</button>
+        </form>
+      </details>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+</section>
+
+{% if has_permission('manage_facility') %}
+<section class="block">
+  <div class="section-card">
+    <div class="section-heading">
+      <div>
+        <h2>Add a facility</h2>
+        <p class="muted">Targets default to the AN-ACC sector averages and can be changed later</p>
+      </div>
+    </div>
+    <form method="post" action="{{ url_for('facility_create') }}" class="form">
+      <label>Facility name <input type="text" name="name" placeholder="Sunrise Lodge" required></label>
+      <div class="form row compact-form">
+        <label>Care minutes target <input type="number" step="0.1" name="ancc_target" value="215"></label>
+        <label>RN minutes target <input type="number" step="0.1" name="rn_target" value="44"></label>
+      </div>
+      <button type="submit">Add facility</button>
+    </form>
+  </div>
+</section>
+{% endif %}
+{% endblock %}
