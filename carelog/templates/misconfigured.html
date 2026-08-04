@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Configuration needed – CareMin</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body class="auth-body">
+  <main class="auth-card" style="max-width:620px">
+    <p class="eyebrow">CareMin</p>
+    <h1>This deployment is not configured yet</h1>
+    <p class="muted">
+      The application started, but it is missing settings it cannot run without.
+      No data has been read or written.
+    </p>
+
+    <div class="errors">
+      <ul>
+        {% for p in problems %}<li>{{ p }}</li>{% endfor %}
+      </ul>
+    </div>
+
+    <p class="muted">
+      Once the variables are set, redeploy and this page will be replaced by the
+      sign-in screen. <code>/healthz</code> reports the same information as JSON.
+    </p>
+  </main>
+</body>
+</html>

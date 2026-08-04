@@ -82,7 +82,7 @@ ROLES: dict[str, dict] = {
 }
 
 # Endpoints reachable without a session.
-PUBLIC_ENDPOINTS = {"auth.login", "stylesheet", "static", "import_run"}
+PUBLIC_ENDPOINTS = {"auth.login", "stylesheet", "static", "import_run", "healthz"}
 
 
 def role_label(role: str) -> str:

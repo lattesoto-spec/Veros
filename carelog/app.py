@@ -66,12 +66,10 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 def create_app() -> Flask:
     app = Flask(__name__)
-    uri, db_path = _database_uri()
-    app.config["SQLALCHEMY_DATABASE_URI"] = uri
+    uri = _database_uri()
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
-    app.config["SQLALCHEMY_ENGINE_OPTIONS"] = _engine_options(uri)
     app.config["UPLOADS_DIR"] = os.environ.get(
-        "UPLOADS_DIR", os.path.join(os.path.dirname(db_path) or ".", "uploads")
+        "UPLOADS_DIR", os.path.join(ROOT, "uploads")
     )
     app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-change-me")
     app.config.update(
@@ -83,19 +81,71 @@ def create_app() -> Flask:
         PERMANENT_SESSION_LIFETIME=timedelta(hours=12),
     )
     app.template_filter("fromjson")(json.loads)
-    db.init_app(app)
-    auth.init_app(app)
 
-    # Creating tables on every cold start is slow and races with itself, so in
-    # production the schema is created once by `flask init-db` (see setup.sh).
-    # Local SQLite keeps the zero-setup behaviour.
+    # A misconfigured deployment must not take the whole function down at
+    # import time: that surfaces as FUNCTION_INVOCATION_FAILED on every path,
+    # including pages that never touch the database, and says nothing about
+    # the cause. Diagnose first, and never initialise the database layer with
+    # settings known to be wrong.
+    problems = _config_problems(uri)
+
+    def _register_health(current_problems):
+        @app.route("/healthz")
+        def healthz():
+            """Deployment health, answerable without a working database."""
+            return {
+                "ok": not current_problems,
+                "problems": current_problems,
+                "environment": "vercel" if os.environ.get("VERCEL") else "self-hosted",
+                "database": "configured" if uri else "MISSING",
+                "storage": "vercel_blob" if os.environ.get("BLOB_READ_WRITE_TOKEN") else "local",
+                "worker": import_jobs.worker_mode(),
+            }, (200 if not current_problems else 503)
+
+        @app.route("/style.css")
+        def stylesheet():
+            # On Vercel the CDN serves public/ before a request reaches this
+            # function; this fallback is what serves it everywhere else.
+            return send_from_directory(os.path.join(ROOT, "public"), "style.css")
+
+    if problems:
+        # Stop here: no engine, no session, no models — just the diagnosis.
+        _register_health(problems)
+
+        @app.before_request
+        def _configuration_gate():
+            if request.endpoint in ("healthz", "stylesheet"):
+                return None
+            return render_template("misconfigured.html", problems=problems), 503
+
+        return app
+
+    app.config["SQLALCHEMY_DATABASE_URI"] = uri
+    app.config["SQLALCHEMY_ENGINE_OPTIONS"] = _engine_options(uri)
+    db.init_app(app)
+
+    # Creating tables on every cold start is slow and races with itself, so on
+    # serverless the schema is created once by `flask init-db` (see setup.sh).
     if _auto_init_db(uri):
         with app.app_context():
-            init_db()
+            try:
+                init_db()
+            except Exception as e:
+                problems.append(f"The database could not be reached: {type(e).__name__}: {e}")
+
+    _register_health(problems)
+    if problems:
+        @app.before_request
+        def _database_gate():
+            if request.endpoint in ("healthz", "stylesheet"):
+                return None
+            return render_template("misconfigured.html", problems=problems), 503
+
+    auth.init_app(app)
 
     @app.cli.command("init-db")
     def init_db_command():
-        """Create missing tables (and patch legacy SQLite columns)."""
+        """Create any missing tables."""
         init_db()
         print(f"Schema ready on {db.engine.url.render_as_string(hide_password=True)}")
 
@@ -548,14 +598,6 @@ def create_app() -> Flask:
             pdf_bytes,
             mimetype="application/pdf",
             headers={"Content-Disposition": f"attachment; filename={filename}"},
-        )
-
-    @app.route("/style.css")
-    def stylesheet():
-        # On Vercel the CDN serves public/ before a request reaches this
-        # function; this fallback is what serves it everywhere else.
-        return send_from_directory(
-            os.path.join(ROOT, "public"), "style.css"
         )
 
     @app.route("/samples/<path:filename>")
@@ -1222,21 +1264,18 @@ def _database_uri() -> tuple[str, str]:
         ),
         "",
     )
-    if url:
-        # Managed providers still hand out the legacy postgres:// scheme, and
-        # psycopg3 is the driver that installs cleanly on serverless images.
-        if url.startswith("postgres://"):
-            url = url.replace("postgres://", "postgresql://", 1)
-        if url.startswith("postgresql://"):
-            url = url.replace("postgresql://", "postgresql+psycopg://", 1)
-        return url, ""
-    db_path = os.environ.get("DATABASE_PATH", os.path.join(ROOT, "caremin.db"))
-    return f"sqlite:///{db_path}", db_path
+    if not url:
+        return ""
+    # Managed providers still hand out the legacy postgres:// scheme, and
+    # psycopg3 is the driver that installs cleanly on serverless images.
+    if url.startswith("postgres://"):
+        url = url.replace("postgres://", "postgresql://", 1)
+    if url.startswith("postgresql://"):
+        url = url.replace("postgresql://", "postgresql+psycopg://", 1)
+    return url
 
 
 def _engine_options(uri: str) -> dict:
-    if uri.startswith("sqlite"):
-        return {}
     opts = {
         # Connections do not survive between serverless invocations, and a
         # pooled connection can be closed by the provider at any time.
@@ -1253,68 +1292,51 @@ def _engine_options(uri: str) -> dict:
     return opts
 
 
+def _config_problems(uri: str) -> list[str]:
+    """Deployment mistakes worth refusing to start on, phrased as instructions.
+
+    Postgres is the only supported database. There is deliberately no local
+    file fallback: it behaved differently from production on booleans, dates
+    and constraints, and on a serverless host it either crashed on a read-only
+    disk or silently discarded every write.
+    """
+    problems = []
+    if not uri:
+        problems.append(
+            "DATABASE_URL is not set for this environment. CareMin stores "
+            "everything in Postgres. On Vercel, set it under Project → Settings "
+            "→ Environment Variables — Preview and Production are configured "
+            "separately, so a variable ticked only for Production leaves preview "
+            "builds without a database. Locally, run `docker compose up -d` and "
+            "copy .env.example to .env."
+        )
+    if os.environ.get("VERCEL") and not os.environ.get("SECRET_KEY"):
+        problems.append(
+            "SECRET_KEY is not set, so sessions would be signed with the shared "
+            "development key and anyone could forge a login. Set it in the same "
+            "place as DATABASE_URL."
+        )
+    return problems
+
+
 def _auto_init_db(uri: str) -> bool:
+    """Create missing tables at start-up.
+
+    Off by default on serverless, where every cold start would repeat the
+    round trip and two instances could race; on by default locally so a fresh
+    checkout works after `docker compose up`.
+    """
     flag = (os.environ.get("AUTO_INIT_DB") or "").strip().lower()
     if flag in ("1", "true", "yes"):
         return True
     if flag in ("0", "false", "no"):
         return False
-    return uri.startswith("sqlite")  # dev convenience only
+    return not os.environ.get("VERCEL")
 
 
 def init_db():
-    """Create any missing tables, then patch legacy SQLite databases.
-
-    Fresh databases (including Postgres) get everything from create_all();
-    the column patching only matters for the original SQLite file, which
-    predates several columns.
-    """
+    """Create any missing tables."""
     db.create_all()
-    if db.engine.dialect.name == "sqlite":
-        _migrate_sqlite(db)
-
-
-def _migrate_sqlite(db):
-    """create_all() never alters existing tables, so add columns introduced
-    after the first deploy by hand. Safe to run repeatedly. SQLite only —
-    Postgres databases are created complete by create_all()."""
-    from sqlalchemy import text
-
-    additions = {
-        "shifts": [
-            ("break_minutes", "INTEGER NOT NULL DEFAULT 0"),
-            ("is_agency", "BOOLEAN NOT NULL DEFAULT 0"),
-            ("import_receipt_id", "INTEGER"),
-            ("source_row", "INTEGER"),
-        ],
-        "import_receipts": [
-            ("source_path", "TEXT"),
-            ("imported_by", "TEXT"),
-            ("mapping_ids", "TEXT"),
-            ("calc_version", "TEXT"),
-            ("summary_json", "TEXT"),
-            ("organization_id", "INTEGER"),
-            ("imported_by_user_id", "INTEGER"),
-        ],
-        # Multi-tenancy: existing rows keep NULL until `bootstrap-org
-        # --adopt-existing` claims them for the first organization.
-        "facilities": [("organization_id", "INTEGER")],
-        "format_mappings": [("organization_id", "INTEGER")],
-        "integration_configs": [("organization_id", "INTEGER")],
-        "import_jobs": [
-            ("organization_id", "INTEGER"),
-            ("started_by_user_id", "INTEGER"),
-        ],
-    }
-    for table, cols in additions.items():
-        existing = {
-            row[1] for row in db.session.execute(text(f"PRAGMA table_info({table})"))
-        }
-        for name, ddl in cols:
-            if name not in existing:
-                db.session.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
-    db.session.commit()
-
 
 
 def _color_for(status: str) -> str:

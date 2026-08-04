@@ -3,8 +3,8 @@ primary_region = "syd"
 
 [build]
 
-[env]
-  DATABASE_PATH = "/data/vero.db"
+# DATABASE_URL and the other secrets are set with `fly secrets set`.
+# There is no volume: state lives in Postgres and object storage.
 
 [http_service]
   internal_port = 8080
@@ -13,10 +13,6 @@ primary_region = "syd"
   auto_start_machines = true
   min_machines_running = 0
   processes = ["app"]
-
-[[mounts]]
-  source = "data"
-  destination = "/data"
 
 [[vm]]
   memory = "512mb"

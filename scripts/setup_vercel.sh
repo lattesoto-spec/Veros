@@ -149,6 +149,9 @@ ok "deployed to $BASE"
 
 # ---------------------------------------------------------------- 7. verify
 step "7/7  Verifying the live deployment"
+info "Deployment health (works even when misconfigured):"
+curl -fsS "$BASE/healthz" | python3 -m json.tool || warn "the deployment is not healthy — see the problems listed above"
+echo
 info "Database and storage self-test:"
 curl -fsS -H "x-debug-token: $DEBUG_TOKEN" "$BASE/debug/storage" | python3 -m json.tool \
   || warn "self-test did not return cleanly"
