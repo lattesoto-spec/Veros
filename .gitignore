@@ -1,7 +1,7 @@
 # macOS
 .DS_Store
-.env
 .env.example
+.env
 # Python
 __pycache__/
 *.py[cod]
@@ -55,5 +55,8 @@ backend/data/
 carelog/**/__pycache__/
 .pytest_cache/
 .DS_Store
-.vercel
-.env*
+
+# Vercel CLI state and pulled secrets — never commit
+.vercel/
+.env*.local
+.env.production.local
