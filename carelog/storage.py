@@ -197,8 +197,11 @@ class VercelBlobStorage(Storage):
         import httpx
 
         try:
+            # The pathname travels as a query parameter, not as the URL path:
+            # PUT https://blob.vercel-storage.com/?pathname=a%2Fb.csv
             return httpx.put(
-                f"{self.BASE}/{key.lstrip('/')}",
+                f"{self.BASE}/",
+                params={"pathname": key.lstrip("/")},
                 content=data,
                 headers=self._headers({
                     "x-vercel-blob-access": access,
@@ -307,7 +310,7 @@ class VercelBlobStorage(Storage):
 
         try:
             r = httpx.get(
-                f"{self.BASE}",
+                f"{self.BASE}/",
                 params={"prefix": prefix.lstrip("/"), "limit": "1000"},
                 headers=self._headers(),
                 timeout=30.0,
