@@ -1,0 +1,26 @@
+# Local Postgres, so development runs the same database as production.
+#
+#   docker compose up -d
+#   cp .env.example .env
+#   python -m flask --app app init-db
+#
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: caremin-db
+    environment:
+      POSTGRES_USER: caremin
+      POSTGRES_PASSWORD: caremin
+      POSTGRES_DB: caremin
+    ports:
+      - "5433:5432"        # 5433 to avoid clashing with a system Postgres
+    volumes:
+      - caremin-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U caremin"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  caremin-pgdata:

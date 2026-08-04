@@ -82,7 +82,7 @@ ROLES: dict[str, dict] = {
 }
 
 # Endpoints reachable without a session.
-PUBLIC_ENDPOINTS = {"auth.login", "stylesheet", "static", "import_run"}
+PUBLIC_ENDPOINTS = {"auth.login", "stylesheet", "static", "import_run", "healthz"}
 
 
 def role_label(role: str) -> str:
@@ -135,6 +135,47 @@ def require(permission: str):
             return fn(*args, **kwargs)
         return inner
     return outer
+
+
+def is_platform_owner() -> bool:
+    user = current_user()
+    return bool(user and user.is_superuser)
+
+
+def superuser_required(fn):
+    """Platform-owner routes. 404 rather than 403 — a customer administrator
+    has no business knowing the platform console exists."""
+    @functools.wraps(fn)
+    def inner(*args, **kwargs):
+        if not is_platform_owner():
+            abort(404)
+        return fn(*args, **kwargs)
+    return inner
+
+
+def act_as_organization(org_id: int | None):
+    """Enter (or leave) a client organization for support.
+
+    Everything downstream reads `current_organization_id()`, so setting this
+    makes the whole application render that customer's data — which is exactly
+    why it is superuser-only, audited, and shown as a banner on every page.
+    """
+    if not is_platform_owner():
+        abort(404)
+    if org_id is None:
+        previous = session.pop("acting_org_id", None)
+        session.pop("facility_id", None)
+        if previous:
+            record("platform_stopped_acting", "organization", previous)
+        return None
+    org = db.session.get(Organization, org_id)
+    if org is None:
+        abort(404)
+    session["acting_org_id"] = org.id
+    # The previously selected facility belongs to a different customer.
+    session.pop("facility_id", None)
+    record("platform_acting_as", "organization", org.id, org.name)
+    return org
 
 
 def owned_or_404(obj):
@@ -283,8 +324,10 @@ def init_app(app):
             "role_label": role_label,
             "org_facilities": facilities,
             "active_facility": app_module.current_facility() if user else None,
+            "is_platform_owner": is_platform_owner(),
             "acting_org": db.session.get(Organization, session["acting_org_id"])
             if user and user.is_superuser and session.get("acting_org_id") else None,
+            "home_org": db.session.get(Organization, user.organization_id) if user else None,
         }
 
 

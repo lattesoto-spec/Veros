@@ -528,13 +528,30 @@ button:hover {
 
 .user-block {
   margin-top: auto;
-  padding: 16px;
+  padding: 16px 0 0;
   border-top: 1px solid rgba(255, 255, 255, .12);
   font-size: .85rem;
 }
-.user-block .user-name { margin: 0; font-weight: 600; }
-.user-block .user-role { margin: 2px 0 8px; opacity: .7; }
-.user-block a, .user-block .link-button { display: block; opacity: .8; padding: 2px 0; }
+.user-block .user-name { margin: 0; font-weight: 600; color: #f8fafc; }
+.user-block .user-role { margin: 2px 0 10px; color: #94a3b8; font-size: .78rem; }
+
+/* The sidebar is dark, so these must not inherit the page's blue link colour
+   or the red of .link-button — both are unreadable against the navy. */
+.user-block a,
+.user-block .link-button {
+  display: block;
+  color: #cbd5e1;
+  font-weight: 500;
+  font-size: .82rem;
+  text-decoration: none;
+  padding: 3px 0;
+}
+.user-block a:hover,
+.user-block .link-button:hover {
+  color: #ffffff;
+  text-decoration: underline;
+  background: none;
+}
 
 .data-table { width: 100%; border-collapse: collapse; font-size: .9rem; }
 .data-table th, .data-table td {
@@ -552,18 +569,66 @@ button:hover {
 /* ------------------------------------------------------ facility switcher */
 
 .facility-switcher {
-  padding: 12px 16px;
+  padding: 0 0 16px;
   border-bottom: 1px solid rgba(255, 255, 255, .12);
 }
 .facility-switcher .switcher-label {
-  margin: 0 0 4px;
+  margin: 0 0 5px;
   font-size: .7rem;
   text-transform: uppercase;
   letter-spacing: .06em;
-  opacity: .6;
+  color: #64748b;
 }
-.facility-switcher select { width: 100%; padding: 5px 6px; font-size: .85rem; }
-.facility-switcher .switcher-single { margin: 0; font-weight: 600; font-size: .9rem; }
+.facility-switcher select {
+  width: 100%;
+  padding: 6px 8px;
+  font-size: .85rem;
+  color: #f8fafc;
+  background: rgba(255, 255, 255, .06);
+  border: 1px solid rgba(255, 255, 255, .16);
+  border-radius: 6px;
+}
+.facility-switcher select:focus {
+  outline: none;
+  border-color: #93c5fd;
+}
+.facility-switcher select option { color: #0f172a; background: #ffffff; }
+.facility-switcher .switcher-single {
+  margin: 0;
+  font-weight: 600;
+  font-size: .9rem;
+  color: #f8fafc;
+}
+.facility-switcher .inline-form { margin-top: 0; }
 
 .facility-row { margin-top: 14px; }
 .facility-active { border-left: 3px solid #2f9e44; }
+
+/* ------------------------------------------------------- platform console */
+
+.acting-banner {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 22px;
+  background: #7c2d12;
+  color: #ffedd5;
+  font-size: .88rem;
+}
+.acting-banner strong { color: #ffffff; }
+.acting-banner .inline-form { margin: 0; }
+.acting-banner .link-button { color: #ffedd5; }
+.acting-banner .link-button:hover { color: #ffffff; }
+
+.data-table tr.row-active { background: #f0fdf4; }
+.pill {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: .72rem;
+  font-weight: 600;
+  background: #e2e8f0;
+  color: #334155;
+}

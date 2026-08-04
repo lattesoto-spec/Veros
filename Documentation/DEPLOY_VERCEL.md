@@ -8,7 +8,7 @@ each piece is, why it exists, and what to do when something misbehaves.
 | Part | What it is | Why |
 | --- | --- | --- |
 | **Function** | The Flask app, deployed as one Vercel Function from `carelog/app.py` | Vercel finds the `app` object at a supported entrypoint; no wrapper needed |
-| **Database** | Neon Postgres, created through Vercel Storage | Replaces the single SQLite file. Managed backups, and no data loss when an instance is recycled |
+| **Database** | Neon Postgres, created through Vercel Storage | The only supported database. Managed backups, and no data loss when an instance is recycled |
 | **Blob store** | Vercel Blob, **private**, holding retained upload evidence | Serverless has no persistent disk. These are resident care records, so the store must not be public |
 
 Set all three to a **Sydney** region. This is Australian aged-care data, and
@@ -19,7 +19,8 @@ getting it wrong means recreating them.
 
 | Variable | Purpose |
 | --- | --- |
-| `DATABASE_URL` | Postgres connection string. `postgres://` and `postgresql://` are both accepted and rewritten to the psycopg driver |
+| `DATABASE_URL` | Optional explicit Postgres connection string. `postgres://` and `postgresql://` are both accepted and rewritten to the psycopg driver |
+| `STORAGE_DATABASE_URL` | Automatically added by Vercel's current Neon Storage connection and preferred by Vercel deployments |
 | `BLOB_READ_WRITE_TOKEN` | Vercel Blob credential. Its presence alone switches storage to the blob backend |
 | `SECRET_KEY` | Signs session cookies. Random, and never the dev default in production |
 | `WORKER_SECRET` | Required header on `/import/run/<job>`. Without it, anyone could trigger import workers |
@@ -73,6 +74,23 @@ prefix. It skips rows that already exist, so a failed run can just be repeated.
 Receipts created before the migration recorded an absolute disk path; the audit
 trail still serves those from the filesystem, so nothing breaks mid-transition.
 
+## When a deployment returns FUNCTION_INVOCATION_FAILED
+
+That error means the function could not start, so *every* path fails — a trace
+showing `GET /` does not mean the homepage is at fault, only that it was the
+first thing requested. Check `/healthz` first: it answers without a database
+and lists exactly what is missing.
+
+The usual cause is environment variables missing for the environment being
+deployed. **Vercel configures Preview and Production separately**, so a
+variable ticked only for Production leaves every preview build without a
+database. There is deliberately no local-file fallback, so a missing `DATABASE_URL`
+produces a page naming the variable rather than a crash — or worse, an app that
+appears to work while discarding every write.
+
+`scripts/setup_vercel.sh` sets every variable for production, preview and
+development, which avoids this entirely.
+
 ## Known limits and rough edges
 
 - **Uploads are capped at 4.5 MB per request.** This is a hard Vercel limit on
@@ -90,9 +108,28 @@ trail still serves those from the filesystem, so nothing breaks mid-transition.
   adds missing tables. Anything destructive (dropping or retyping a column)
   needs a real migration tool — Alembic is the natural next step.
 
+## Local development
+
+Postgres everywhere — the same engine locally as in production, so a dialect
+difference can never reach a customer:
+
+```bash
+docker compose up -d          # Postgres on 127.0.0.1:5433
+cp .env.example .env
+pip install -r requirements.txt
+python -m flask --app app init-db
+python -m flask --app app bootstrap-org --name "Local" \
+    --admin-email you@example.com --password 'a-long-dev-password' --superuser
+python app.py                 # http://127.0.0.1:8080
+```
+
+`flask --app app seed-demo --password '...'` fills a separate Demo organisation
+with sample data.
+
 ## Running elsewhere
 
-Nothing here is Vercel-only. With no `DATABASE_URL` the app uses SQLite; with no
-`BLOB_READ_WRITE_TOKEN` it stores evidence on disk; with `IMPORT_WORKER=thread`
-it runs imports in-process. That combination is exactly the Fly deployment, so
-the Dockerfile and `fly.toml` still work as a fallback.
+Nothing here is Vercel-only. Point `DATABASE_URL` at any Postgres; with no
+`BLOB_READ_WRITE_TOKEN` evidence is stored on local disk, and with
+`IMPORT_WORKER=thread` imports run in-process. That combination is the Fly
+deployment, so the Dockerfile and `fly.toml` still work as a fallback — set
+`DATABASE_URL` with `fly secrets set`, since there is no volume any more.

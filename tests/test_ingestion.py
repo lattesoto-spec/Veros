@@ -19,8 +19,12 @@ import sys
 from datetime import date
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DB_PATH = os.path.join(HERE, "sample_data/test_data", "test_ingestion.db")
-os.environ["DATABASE_PATH"] = DB_PATH
+# Tests run against the same engine as production. Start it with
+# `docker compose up -d`, or point DATABASE_URL at any scratch Postgres.
+os.environ.setdefault(
+    "DATABASE_URL", "postgresql://caremin:caremin@127.0.0.1:5433/caremin"
+)
+os.environ.setdefault("AUTO_INIT_DB", "1")
 
 FIXTURES = [
     "format1_simple.csv",

@@ -39,6 +39,47 @@ Permissions are declared in `carelog/auth.py`; routes are gated with
 platform operator, and grants access across organizations for support — it is
 not something a customer administrator can grant.
 
+## The platform owner console
+
+A superuser gets **Platform → Organisations**, the only place in the
+application that reads across the tenant boundary. From there you can:
+
+- see every client organisation with its administrators, user count,
+  facilities, residents, shifts and last import;
+- create a client organisation together with its first administrator in one
+  step (they set their own password at first sign-in, so you never hold it);
+- **enter** an organisation for support. The whole application then renders
+  that client's data, with a banner on every page saying whose data you are
+  looking at, until you leave.
+
+Entering and leaving are written to the audit log as `platform_acting_as` and
+`platform_stopped_acting`, and organisation creation as `platform_org_created`.
+Every platform route returns **404** to a non-superuser rather than 403 — a
+customer administrator has no business learning the console exists.
+
+To promote an existing account:
+
+```bash
+flask --app app promote-superuser you@example.com
+```
+
+## The demo environment
+
+The demo is a normal tenant with generated data, never a mode inside a real
+customer's organisation:
+
+```bash
+flask --app app seed-demo --password 'a-long-demo-password'
+```
+
+That creates a `Demo` organisation, its own administrator
+(`demo@caremin.app`), one facility and roughly 60 days of residents, staff and
+shifts, deliberately rostered a little under target so the dashboard shows
+amber rather than a flat green. The generator is seeded with a fixed value, so
+the demo looks the same every time it is rebuilt, and it writes rows directly
+rather than through the import pipeline — no Anthropic call, no cost, works
+offline.
+
 ## Creating the first account
 
 ```bash

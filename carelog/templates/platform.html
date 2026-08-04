@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block title %}Platform – CareMin{% endblock %}
+{% block content %}
+<section class="page-header">
+  <div>
+    <p class="eyebrow">Platform owner</p>
+    <h1>Client organisations</h1>
+    <p class="muted">
+      {{ rows|length }} organisation{{ 's' if rows|length != 1 }} ·
+      {{ total_users }} active user{{ 's' if total_users != 1 }}.
+      Each one is a sealed tenant; entering an organisation shows you exactly
+      what its own users see, and is recorded in their security log.
+    </p>
+  </div>
+</section>
+
+<section class="block">
+  <div class="section-card">
+    <div class="section-heading">
+      <div><h2>Organisations</h2></div>
+    </div>
+    <div style="overflow-x:auto">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Organisation</th><th>Administrators</th><th>Users</th>
+            <th>Facilities</th><th>Residents</th><th>Shifts</th>
+            <th>Last import</th><th></th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for r in rows %}
+          <tr {% if acting_org and acting_org.id == r.org.id %}class="row-active"{% endif %}>
+            <td>
+              <strong>{{ r.org.name }}</strong>
+              {% if home_org and home_org.id == r.org.id %}<span class="pill">yours</span>{% endif %}
+              {% if acting_org and acting_org.id == r.org.id %}<span class="pill pill-on_track">inside</span>{% endif %}
+            </td>
+            <td>
+              {% for a in r.admins %}{{ a.email }}{% if not loop.last %}<br>{% endif %}{% else %}
+              <span class="muted">none</span>{% endfor %}
+            </td>
+            <td>{{ r.users }}</td>
+            <td>{{ r.facilities }}</td>
+            <td>{{ r.residents }}</td>
+            <td>{{ r.shifts }}</td>
+            <td>{{ r.last_import.strftime('%d %b %Y') if r.last_import else '—' }}</td>
+            <td>
+              {% if acting_org and acting_org.id == r.org.id %}
+                <form method="post" action="{{ url_for('platform_stop_acting') }}" class="inline-form">
+                  <button type="submit" class="link-button">Leave</button>
+                </form>
+              {% else %}
+                <form method="post" action="{{ url_for('platform_act') }}" class="inline-form">
+                  <input type="hidden" name="organization_id" value="{{ r.org.id }}">
+                  <button type="submit">Enter</button>
+                </form>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section class="block">
+  <div class="section-card">
+    <div class="section-heading">
+      <div>
+        <h2>Add a client organisation</h2>
+        <p class="muted">Creates the tenant and its first administrator in one step</p>
+      </div>
+    </div>
+    <form method="post" action="{{ url_for('platform_create_org') }}" class="form">
+      <label>Organisation name <input type="text" name="name" placeholder="Sunrise Aged Care Group" required></label>
+      <label>Administrator email <input type="email" name="admin_email" required></label>
+      <label>Administrator name <input type="text" name="admin_name"></label>
+      <label>Temporary password <input type="password" name="password" required minlength="12"></label>
+      <p class="muted">
+        The administrator changes this at first sign-in, then adds their own
+        staff and facilities. You never need to hold their password afterwards.
+      </p>
+      <button type="submit">Create organisation</button>
+    </form>
+  </div>
+</section>
+
+<section class="block">
+  <div class="section-card">
+    <div class="section-heading"><div><h2>Demo environment</h2></div></div>
+    <p class="muted">
+      A demo organisation is a normal tenant with generated sample data, created
+      from the command line so it can be rebuilt at any time:
+    </p>
+    <pre>flask --app app seed-demo --password 'a-long-demo-password'</pre>
+    <p class="muted">
+      It is deliberately a separate organisation — demo data must never sit
+      beside a real client's records. Delete it by removing the organisation's
+      data from inside it, the same as any other tenant.
+    </p>
+  </div>
+</section>
+{% endblock %}

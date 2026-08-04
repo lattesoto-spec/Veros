@@ -32,9 +32,11 @@ carelog/
 
 public/                     Served by the CDN on Vercel; style.css lives here
 sample_data/                Downloadable samples; test_data/ holds generated fixtures
+docker-compose.yml          Local Postgres for development and tests
+.env.example                Copy to .env for local development
 scripts/
   setup_vercel.sh           Guided first-time deployment
-  migrate_to_postgres.py    SQLite -> Postgres + object storage
+  migrate_to_postgres.py    One-off rescue: reads an old SQLite file into Postgres
   seed.py                   Generates the sample CSVs
 tests/
   test_mapping_engine.py    Offline: mapping specs across all 7 fixture formats
