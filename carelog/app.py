@@ -58,7 +58,7 @@ from carelog.models import (
     db,
 )
 from carelog.domain.reports import available_quarters, build_quarterly_pdf
-from carelog.storage import LocalStorage, StorageError, build_storage
+from carelog.storage import LocalStorage, StorageError, build_storage, find_blob_token
 
 # Repository root — public/ and sample_data/ live beside the package, not in it.
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -98,7 +98,7 @@ def create_app() -> Flask:
                 "problems": current_problems,
                 "environment": "vercel" if os.environ.get("VERCEL") else "self-hosted",
                 "database": "configured" if uri else "MISSING",
-                "storage": "vercel_blob" if os.environ.get("BLOB_READ_WRITE_TOKEN") else "local",
+                "storage": "vercel_blob" if find_blob_token()[0] else "local",
                 "worker": import_jobs.worker_mode(),
             }, (200 if not current_problems else 503)
 

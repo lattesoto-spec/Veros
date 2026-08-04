@@ -98,10 +98,16 @@ class VercelBlobStorage(Storage):
 
     There is no official Python SDK, so this speaks the same HTTP protocol the
     JavaScript SDK uses: a PUT to the store host carrying the token, the API
-    version, and the store's access mode. Both the version and the access mode
-    are overridable (VERCEL_BLOB_API_VERSION, VERCEL_BLOB_ACCESS) because a
-    mismatch on either is rejected with a bare 403 — /debug/storage does a full
-    round trip and reports exactly what came back.
+    version, and the store's access mode.
+
+    The access mode is fixed when a store is created, and sending the wrong one
+    is rejected. Rather than make that an operator's problem, an upload that is
+    refused for a mode mismatch is retried once with the other mode and the
+    correct value is remembered — so VERCEL_BLOB_ACCESS only exists to skip
+    that one wasted round trip. VERCEL_BLOB_API_VERSION is likewise a safety
+    valve if Vercel moves the protocol. /debug/storage reports which variable
+    the token came from, the store id inside it, and whether the mode was
+    corrected.
     """
 
     BASE = "https://blob.vercel-storage.com"
@@ -111,6 +117,7 @@ class VercelBlobStorage(Storage):
     TOKEN_PREFIX = "vercel_blob_rw_"
 
     token_source: str | None = None
+    access_corrected: bool = False
 
     def __init__(self, token: str, api_version: str = "10", access: str = "private"):
         token = self._clean_token(token)
@@ -169,15 +176,15 @@ class VercelBlobStorage(Storage):
             detail = ""
         return detail or (response.text or "")[:200] or "no detail returned"
 
-    def put(self, key, data, content_type="application/octet-stream"):
+    def _put_once(self, key, data, content_type, access):
         import httpx
 
         try:
-            r = httpx.put(
+            return httpx.put(
                 f"{self.BASE}/{key.lstrip('/')}",
                 content=data,
                 headers=self._headers({
-                    "access": self.access,
+                    "access": access,
                     "x-content-type": content_type,
                     "x-cache-control-max-age": "31536000",
                     # Deterministic keys: the app already namespaces by job id,
@@ -189,6 +196,30 @@ class VercelBlobStorage(Storage):
             )
         except httpx.HTTPError as e:
             raise StorageError(f"Could not reach Vercel Blob: {e}") from e
+
+    @staticmethod
+    def _is_access_mismatch(response) -> bool:
+        try:
+            message = ((response.json() or {}).get("error") or {}).get("message", "")
+        except Exception:
+            message = response.text or ""
+        return "access on a" in message.lower() and "store" in message.lower()
+
+    def put(self, key, data, content_type="application/octet-stream"):
+        r = self._put_once(key, data, content_type, self.access)
+
+        # A store's access mode is fixed at creation and the API names the
+        # mismatch precisely, so correct it rather than making an operator
+        # guess at a config value the service already knows.
+        if r.status_code in (400, 403) and self._is_access_mismatch(r):
+            corrected = "private" if self.access == "public" else "public"
+            retry = self._put_once(key, data, content_type, corrected)
+            if retry.status_code < 300:
+                self.access = corrected      # remember for this process
+                self.access_corrected = True
+                return key
+            r = retry
+
         if r.status_code == 403:
             detail = self._explain(r)
             problem = self.token_problem()
@@ -207,8 +238,16 @@ class VercelBlobStorage(Storage):
                 f"to match how the store was created."
             )
         if r.status_code >= 300:
+            detail = self._explain(r)
+            if self._is_access_mismatch(r):
+                raise StorageError(
+                    f"Vercel Blob rejected the upload ({r.status_code}): {detail} "
+                    f"Both access modes were tried. Unset VERCEL_BLOB_ACCESS so the "
+                    f"store's own mode is detected, and confirm the token belongs to "
+                    f"the store you think it does."
+                )
             raise StorageError(
-                f"Vercel Blob rejected the upload ({r.status_code}): {self._explain(r)}"
+                f"Vercel Blob rejected the upload ({r.status_code}): {detail}"
             )
         return key
 
@@ -266,6 +305,7 @@ class VercelBlobStorage(Storage):
             "token_length": len(self.token),
             "token_store_id": (store[:10] + "…") if store else None,
             "token_problem": self.token_problem(),
+            "access_auto_corrected": self.access_corrected,
         }
 
 

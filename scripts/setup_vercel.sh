@@ -101,9 +101,12 @@ info "In the dashboard: ${BOLD}Storage → Create → Blob${OFF}"
 info "  • Region: ${BOLD}Sydney${OFF}, same reason as the database"
 info "  • Access: ${BOLD}Private${OFF} — these are resident care records, not public files"
 info "  • Connect it to this project"
-info "Then open the store's ${BOLD}.env.local${OFF} tab and copy BLOB_READ_WRITE_TOKEN."
+info "Connecting the store injects the token automatically. If you set an"
+info "environment-variable prefix, it arrives as <PREFIX>_READ_WRITE_TOKEN —"
+info "the app finds it under any name, so just press Enter to skip if it is"
+info "already connected. Otherwise paste it from the store's .env.local tab."
 echo
-ask BLOB_TOKEN "Paste BLOB_READ_WRITE_TOKEN:"
+read -r -p "    Paste the blob read-write token (or Enter to skip): " BLOB_TOKEN
 ok "token captured"
 
 # ------------------------------------------------------------------ 4. keys
@@ -131,7 +134,7 @@ put_env() { # put_env NAME VALUE
   ok "$name"
 }
 put_env DATABASE_URL          "$DATABASE_URL"
-put_env BLOB_READ_WRITE_TOKEN "$BLOB_TOKEN"
+[ -n "${BLOB_TOKEN:-}" ] && put_env BLOB_READ_WRITE_TOKEN "$BLOB_TOKEN" || ok "using the token the store integration injected"
 put_env SECRET_KEY            "$SECRET_KEY"
 put_env WORKER_SECRET         "$WORKER_SECRET"
 put_env DEBUG_TOKEN           "$DEBUG_TOKEN"
