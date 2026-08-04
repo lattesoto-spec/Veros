@@ -97,23 +97,37 @@ class VercelBlobStorage(Storage):
     """Vercel Blob via its REST API.
 
     There is no official Python SDK, so this speaks the same HTTP protocol the
-    JavaScript SDK uses. The API version header is pinned but overridable
-    (VERCEL_BLOB_API_VERSION) in case Vercel moves it — hit /debug/storage
-    after deploying to confirm the round trip works.
+    JavaScript SDK uses: a PUT to the store host carrying the token, the API
+    version, and the store's access mode. Both the version and the access mode
+    are overridable (VERCEL_BLOB_API_VERSION, VERCEL_BLOB_ACCESS) because a
+    mismatch on either is rejected with a bare 403 — /debug/storage does a full
+    round trip and reports exactly what came back.
     """
 
     BASE = "https://blob.vercel-storage.com"
 
-    def __init__(self, token: str, api_version: str = "7"):
+    def __init__(self, token: str, api_version: str = "10", access: str = "private"):
         if not token:
             raise StorageError("BLOB_READ_WRITE_TOKEN is not set.")
         self.token = token
         self.api_version = api_version
+        # Must match how the store was created; a mismatch is rejected with 403.
+        self.access = access
 
     def _headers(self, extra: dict | None = None) -> dict:
         h = {"authorization": f"Bearer {self.token}", "x-api-version": self.api_version}
         h.update(extra or {})
         return h
+
+    @staticmethod
+    def _explain(response) -> str:
+        """Vercel returns {"error": {"code", "message"}}; show that, not raw JSON."""
+        try:
+            err = (response.json() or {}).get("error") or {}
+            detail = " — ".join(str(v) for v in (err.get("code"), err.get("message")) if v)
+        except Exception:
+            detail = ""
+        return detail or (response.text or "")[:200] or "no detail returned"
 
     def put(self, key, data, content_type="application/octet-stream"):
         import httpx
@@ -123,18 +137,29 @@ class VercelBlobStorage(Storage):
                 f"{self.BASE}/{key.lstrip('/')}",
                 content=data,
                 headers=self._headers({
+                    "access": self.access,
                     "x-content-type": content_type,
+                    "x-cache-control-max-age": "31536000",
                     # Deterministic keys: the app already namespaces by job id,
-                    # and the audit trail needs to find files by exact name.
-                    "x-add-random-suffix": "0",
+                    # and the audit trail finds files by exact name. Re-running
+                    # a job must overwrite rather than fail.
                     "x-allow-overwrite": "1",
                 }),
                 timeout=60.0,
             )
         except httpx.HTTPError as e:
             raise StorageError(f"Could not reach Vercel Blob: {e}") from e
+        if r.status_code == 403:
+            raise StorageError(
+                f"Vercel Blob refused the upload (403: {self._explain(r)}). "
+                f"The token may belong to a different store, or the store's "
+                f"access mode may not be '{self.access}' — set VERCEL_BLOB_ACCESS "
+                f"to 'public' or 'private' to match how the store was created."
+            )
         if r.status_code >= 300:
-            raise StorageError(f"Vercel Blob rejected the upload ({r.status_code}): {r.text[:200]}")
+            raise StorageError(
+                f"Vercel Blob rejected the upload ({r.status_code}): {self._explain(r)}"
+            )
         return key
 
     def _blob_url(self, key: str) -> str:
@@ -153,7 +178,7 @@ class VercelBlobStorage(Storage):
         except httpx.HTTPError as e:
             raise StorageError(f"Could not download {key}: {e}") from e
         if r.status_code >= 300:
-            raise StorageError(f"Could not download {key} ({r.status_code}).")
+            raise StorageError(f"Could not download {key} ({r.status_code}): {self._explain(r)}")
         return r.content
 
     def _raw_list(self, prefix: str) -> list[dict]:
@@ -169,7 +194,7 @@ class VercelBlobStorage(Storage):
         except httpx.HTTPError as e:
             raise StorageError(f"Could not list blobs: {e}") from e
         if r.status_code >= 300:
-            raise StorageError(f"Could not list blobs ({r.status_code}): {r.text[:200]}")
+            raise StorageError(f"Could not list blobs ({r.status_code}): {self._explain(r)}")
         return r.json().get("blobs", [])
 
     def list(self, prefix):
@@ -183,7 +208,9 @@ class VercelBlobStorage(Storage):
 
     def describe(self):
         return {"backend": "vercel_blob", "api_version": self.api_version,
-                "token_present": bool(self.token)}
+                "access": self.access, "token_present": bool(self.token),
+                "token_store": self.token.split("_")[3][:12] + "…"
+                if self.token.count("_") >= 4 else None}
 
 
 # ------------------------------------------------------------------ factory
@@ -196,7 +223,9 @@ def build_storage(local_root: str) -> Storage:
         backend = "vercel_blob" if token else "local"
     if backend == "vercel_blob":
         return VercelBlobStorage(
-            token, os.environ.get("VERCEL_BLOB_API_VERSION", "7")
+            token,
+            os.environ.get("VERCEL_BLOB_API_VERSION", "10"),
+            os.environ.get("VERCEL_BLOB_ACCESS", "private"),
         )
     if backend == "local":
         return LocalStorage(local_root)
