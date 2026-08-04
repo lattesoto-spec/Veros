@@ -106,13 +106,53 @@ class VercelBlobStorage(Storage):
 
     BASE = "https://blob.vercel-storage.com"
 
+    # vercel_blob_rw_<STORE_ID>_<secret> — Vercel reads the store id out of the
+    # token itself, so a mangled token fails with "cannot get store id".
+    TOKEN_PREFIX = "vercel_blob_rw_"
+
+    token_source: str | None = None
+
     def __init__(self, token: str, api_version: str = "10", access: str = "private"):
+        token = self._clean_token(token)
         if not token:
             raise StorageError("BLOB_READ_WRITE_TOKEN is not set.")
         self.token = token
         self.api_version = api_version
         # Must match how the store was created; a mismatch is rejected with 403.
         self.access = access
+
+    @staticmethod
+    def _clean_token(raw: str) -> str:
+        """Undo the usual copy-paste damage.
+
+        Values pasted from a dashboard often arrive wrapped in quotes, with the
+        variable name still attached, or with a trailing newline. Vercel then
+        cannot parse a store id out of them and returns a bare 403.
+        """
+        token = (raw or "").strip().strip("\r\n").strip()
+        if token.upper().startswith("BLOB_READ_WRITE_TOKEN="):
+            token = token.split("=", 1)[1].strip()
+        if len(token) >= 2 and token[0] == token[-1] and token[0] in "\"'":
+            token = token[1:-1].strip()
+        return token
+
+    def token_problem(self) -> str | None:
+        """Why this token cannot identify a store, if it cannot."""
+        if not self.token.startswith(self.TOKEN_PREFIX):
+            shown = self.token[:14] + "…" if len(self.token) > 14 else self.token
+            if self.token.startswith("vercel_blob_r_"):
+                return ("this is a read-only blob token; uploads need the "
+                        "read-write token (vercel_blob_rw_…)")
+            return (f"does not start with {self.TOKEN_PREFIX!r} (starts with {shown!r}) — "
+                    "it may be a Vercel API token rather than a Blob store token")
+        if len(self.token.split("_")) < 5 or not self.token.split("_")[3]:
+            return ("has no store id segment — expected "
+                    "vercel_blob_rw_<STORE_ID>_<secret>, so the value looks truncated")
+        return None
+
+    def store_id(self) -> str | None:
+        parts = self.token.split("_")
+        return parts[3] if len(parts) >= 5 else None
 
     def _headers(self, extra: dict | None = None) -> dict:
         h = {"authorization": f"Bearer {self.token}", "x-api-version": self.api_version}
@@ -150,11 +190,21 @@ class VercelBlobStorage(Storage):
         except httpx.HTTPError as e:
             raise StorageError(f"Could not reach Vercel Blob: {e}") from e
         if r.status_code == 403:
+            detail = self._explain(r)
+            problem = self.token_problem()
+            if problem:
+                raise StorageError(
+                    f"Vercel Blob refused the upload (403: {detail}). The cause is "
+                    f"the token: it {problem}. Copy BLOB_READ_WRITE_TOKEN again from "
+                    f"the blob store's .env.local tab — the value only, with no "
+                    f"variable name and no surrounding quotes — and redeploy."
+                )
             raise StorageError(
-                f"Vercel Blob refused the upload (403: {self._explain(r)}). "
-                f"The token may belong to a different store, or the store's "
-                f"access mode may not be '{self.access}' — set VERCEL_BLOB_ACCESS "
-                f"to 'public' or 'private' to match how the store was created."
+                f"Vercel Blob refused the upload (403: {detail}). The token parses "
+                f"correctly for store {self.store_id()!r}, so either it belongs to a "
+                f"different store than the one connected to this project, or the "
+                f"store's access mode is not '{self.access}' — set VERCEL_BLOB_ACCESS "
+                f"to match how the store was created."
             )
         if r.status_code >= 300:
             raise StorageError(
@@ -207,26 +257,78 @@ class VercelBlobStorage(Storage):
         return sorted(out, key=lambda o: o.name)
 
     def describe(self):
-        return {"backend": "vercel_blob", "api_version": self.api_version,
-                "access": self.access, "token_present": bool(self.token),
-                "token_store": self.token.split("_")[3][:12] + "…"
-                if self.token.count("_") >= 4 else None}
+        store = self.store_id()
+        return {
+            "backend": "vercel_blob",
+            "api_version": self.api_version,
+            "access": self.access,
+            "token_from": self.token_source,
+            "token_length": len(self.token),
+            "token_store_id": (store[:10] + "…") if store else None,
+            "token_problem": self.token_problem(),
+        }
 
 
 # ------------------------------------------------------------------ factory
 
 
+# Values the dashboard substitutes for a masked secret; never a real token.
+_PLACEHOLDERS = {"[SENSITIVE]", "BLOB_READ_WRITE_TOKEN", "undefined", "null", ""}
+
+
+def find_blob_token() -> tuple[str, str | None]:
+    """Locate the Blob read-write token however it has been named.
+
+    Connecting a store to a Vercel project injects `<PREFIX>_READ_WRITE_TOKEN`
+    and `<PREFIX>_STORE_ID`, where the prefix is chosen at connection time — so
+    the documented name `BLOB_READ_WRITE_TOKEN` frequently does not exist, and
+    a value pasted from the dashboard can arrive as the literal "[SENSITIVE]".
+
+    A token that *looks* like a token therefore always wins over one that
+    merely has the right variable name. Returns (token, source variable name).
+    """
+    def clean(raw):
+        return VercelBlobStorage._clean_token(raw)
+
+    def usable(value):
+        return value and value not in _PLACEHOLDERS
+
+    candidates: list[tuple[str, str]] = []
+    exact = clean(os.environ.get("BLOB_READ_WRITE_TOKEN", ""))
+    if usable(exact):
+        candidates.append(("BLOB_READ_WRITE_TOKEN", exact))
+    # `<PREFIX>_READ_WRITE_TOKEN` — what the Vercel store integration injects.
+    for name, raw in sorted(os.environ.items()):
+        if name != "BLOB_READ_WRITE_TOKEN" and name.endswith("READ_WRITE_TOKEN"):
+            value = clean(raw)
+            if usable(value):
+                candidates.append((name, value))
+    # Last resort: anything whose value is shaped like a blob token.
+    for name, raw in sorted(os.environ.items()):
+        value = clean(raw)
+        if usable(value) and value.startswith(VercelBlobStorage.TOKEN_PREFIX):
+            candidates.append((name, value))
+
+    for name, value in candidates:
+        if value.startswith(VercelBlobStorage.TOKEN_PREFIX) and len(value.split("_")) >= 5:
+            return value, name
+    # Nothing valid: hand back the best guess so the error can explain why.
+    return (candidates[0][1], candidates[0][0]) if candidates else (exact, None)
+
+
 def build_storage(local_root: str) -> Storage:
     backend = (os.environ.get("STORAGE_BACKEND") or "").strip().lower()
-    token = os.environ.get("BLOB_READ_WRITE_TOKEN")
+    token, source = find_blob_token()
     if not backend:
         backend = "vercel_blob" if token else "local"
     if backend == "vercel_blob":
-        return VercelBlobStorage(
+        store = VercelBlobStorage(
             token,
             os.environ.get("VERCEL_BLOB_API_VERSION", "10"),
             os.environ.get("VERCEL_BLOB_ACCESS", "private"),
         )
+        store.token_source = source
+        return store
     if backend == "local":
         return LocalStorage(local_root)
     raise StorageError(f"Unknown STORAGE_BACKEND {backend!r} (use 'local' or 'vercel_blob').")
