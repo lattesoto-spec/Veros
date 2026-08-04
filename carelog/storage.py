@@ -119,12 +119,16 @@ class VercelBlobStorage(Storage):
     token_source: str | None = None
     access_corrected: bool = False
 
-    def __init__(self, token: str, api_version: str = "10", access: str = "private"):
+    def __init__(self, token: str, api_version: str = "12", access: str = "private",
+                 store_id: str | None = None):
         token = self._clean_token(token)
         if not token:
             raise StorageError("BLOB_READ_WRITE_TOKEN is not set.")
         self.token = token
         self.api_version = api_version
+        # An explicit id wins: OIDC tokens carry no store id, and Vercel's own
+        # examples pass <PREFIX>_STORE_ID alongside the credential.
+        self._store_id = self.normalize_store_id(store_id) if store_id else None
         # Must match how the store was created; a mismatch is rejected with 403.
         self.access = access
 
@@ -157,12 +161,25 @@ class VercelBlobStorage(Storage):
                     "vercel_blob_rw_<STORE_ID>_<secret>, so the value looks truncated")
         return None
 
+    @staticmethod
+    def normalize_store_id(store_id: str) -> str:
+        """Vercel writes the id as `store_XXX` but addresses it as `XXX`."""
+        store_id = (store_id or "").strip().strip("\"'")
+        return store_id[len("store_"):] if store_id.startswith("store_") else store_id
+
     def store_id(self) -> str | None:
+        if self._store_id:
+            return self._store_id
         parts = self.token.split("_")
         return parts[3] if len(parts) >= 5 else None
 
     def _headers(self, extra: dict | None = None) -> dict:
         h = {"authorization": f"Bearer {self.token}", "x-api-version": self.api_version}
+        store = self.store_id()
+        if store:
+            # The SDK sends this because the id is not always derivable from
+            # the credential; harmless when it is.
+            h["x-vercel-blob-store-id"] = store
         h.update(extra or {})
         return h
 
@@ -184,7 +201,7 @@ class VercelBlobStorage(Storage):
                 f"{self.BASE}/{key.lstrip('/')}",
                 content=data,
                 headers=self._headers({
-                    "access": access,
+                    "x-vercel-blob-access": access,
                     "x-content-type": content_type,
                     "x-cache-control-max-age": "31536000",
                     # Deterministic keys: the app already namespaces by job id,
@@ -252,7 +269,15 @@ class VercelBlobStorage(Storage):
         return key
 
     def _blob_url(self, key: str) -> str:
-        """Resolve a key to its download URL via the store listing."""
+        """Blobs live at <store>.<access>.blob.vercel-storage.com/<pathname>.
+
+        Constructing it avoids a listing round trip; the listing is still the
+        fallback, since a store whose access mode differs from ours would
+        otherwise 404 forever.
+        """
+        store = self.store_id()
+        if store:
+            return f"https://{store}.{self.access}.blob.vercel-storage.com/{key.lstrip('/')}"
         for obj in self._raw_list(key):
             if obj.get("pathname") == key.lstrip("/"):
                 return obj.get("downloadUrl") or obj.get("url")
@@ -266,6 +291,13 @@ class VercelBlobStorage(Storage):
             r = httpx.get(url, headers=self._headers(), timeout=60.0, follow_redirects=True)
         except httpx.HTTPError as e:
             raise StorageError(f"Could not download {key}: {e}") from e
+        if r.status_code >= 300:
+            for obj in self._raw_list(key):
+                if obj.get("pathname") == key.lstrip("/"):
+                    listed = obj.get("downloadUrl") or obj.get("url")
+                    r = httpx.get(listed, headers=self._headers(), timeout=60.0,
+                                  follow_redirects=True)
+                    break
         if r.status_code >= 300:
             raise StorageError(f"Could not download {key} ({r.status_code}): {self._explain(r)}")
         return r.content
@@ -303,7 +335,8 @@ class VercelBlobStorage(Storage):
             "access": self.access,
             "token_from": self.token_source,
             "token_length": len(self.token),
-            "token_store_id": (store[:10] + "…") if store else None,
+            "store_id": store,
+            "store_id_explicit": bool(self._store_id),
             "token_problem": self.token_problem(),
             "access_auto_corrected": self.access_corrected,
         }
@@ -356,6 +389,16 @@ def find_blob_token() -> tuple[str, str | None]:
     return (candidates[0][1], candidates[0][0]) if candidates else (exact, None)
 
 
+def find_blob_store_id() -> str | None:
+    """The store id as Vercel exports it, under whatever prefix was chosen."""
+    for name, raw in sorted(os.environ.items()):
+        if name.endswith("STORE_ID"):
+            value = (raw or "").strip().strip("\"'")
+            if value and value not in _PLACEHOLDERS:
+                return value
+    return None
+
+
 def build_storage(local_root: str) -> Storage:
     backend = (os.environ.get("STORAGE_BACKEND") or "").strip().lower()
     token, source = find_blob_token()
@@ -364,8 +407,9 @@ def build_storage(local_root: str) -> Storage:
     if backend == "vercel_blob":
         store = VercelBlobStorage(
             token,
-            os.environ.get("VERCEL_BLOB_API_VERSION", "10"),
+            os.environ.get("VERCEL_BLOB_API_VERSION", "12"),
             os.environ.get("VERCEL_BLOB_ACCESS", "private"),
+            find_blob_store_id(),
         )
         store.token_source = source
         return store
