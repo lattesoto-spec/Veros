@@ -39,13 +39,12 @@ PERMISSIONS = (
     "manage_facility",    # targets, facility details
     "manage_integrations",
     "manage_users",       # invite, edit, deactivate users
-    "view_security_log",  # who did what
 )
 
 ROLES: dict[str, dict] = {
     "administrator": {
         "label": "Administrator",
-        "description": "Full access, including user management and security logs.",
+        "description": "Full provider-workspace access, including user management.",
         "permissions": set(PERMISSIONS),
     },
     "facility_manager": {
@@ -111,8 +110,11 @@ def current_organization_id() -> int | None:
     user = current_user()
     if user is None:
         return None
-    if user.is_superuser and session.get("acting_org_id"):
-        return session["acting_org_id"]
+    if user.is_superuser:
+        # A platform owner has no provider workspace of their own. Customer
+        # data becomes reachable only after the explicit, audited "Enter
+        # workspace" action sets acting_org_id.
+        return session.get("acting_org_id")
     return user.organization_id
 
 
@@ -121,7 +123,9 @@ def has_permission(permission: str) -> bool:
     if user is None:
         return False
     if user.is_superuser:
-        return True
+        # Platform routes use superuser_required. Provider permissions are
+        # granted only while the owner is deliberately supporting a customer.
+        return bool(session.get("acting_org_id"))
     return permission in ROLES.get(user.role, {}).get("permissions", set())
 
 
@@ -234,7 +238,9 @@ def login():
             ip_address=(request.headers.get("x-forwarded-for", request.remote_addr or "") or "").split(",")[0].strip(),
         ))
         db.session.commit()
-        return render_template("login.html", error="Email or password is incorrect."), 401
+        return render_template(
+            "login.html", error="Email or password is incorrect.", email=email
+        ), 401
 
     session.clear()
     session["user_id"] = user.id
@@ -246,7 +252,10 @@ def login():
     if user.must_change_password:
         flash("Please choose a new password.")
         return redirect(url_for("auth.change_password"))
-    return redirect(request.args.get("next") or url_for("index"))
+    next_url = (request.args.get("next") or "").strip()
+    if next_url.startswith("/") and not next_url.startswith("//"):
+        return redirect(next_url)
+    return redirect(url_for("index"))
 
 
 @bp.route("/logout", methods=["POST", "GET"])
@@ -306,10 +315,22 @@ def init_app(app):
         endpoint = request.endpoint or ""
         if endpoint in PUBLIC_ENDPOINTS or endpoint.startswith("debug_"):
             return None
-        if current_user() is None:
+        user = current_user()
+        if user is None:
             if request.accept_mimetypes.best == "application/json" or endpoint.endswith("_json"):
                 return {"error": "authentication required"}, 401
             return redirect(url_for("auth.login", next=request.full_path.rstrip("?")))
+        if user.is_superuser and not session.get("acting_org_id"):
+            platform_endpoint = endpoint.startswith("platform_") or endpoint in {
+                "auth.change_password", "auth.logout", "healthz", "stylesheet",
+            } or endpoint.startswith("debug_")
+            if not platform_endpoint:
+                # Never execute a provider mutation without an explicitly
+                # selected customer account. GETs return to the console;
+                # writes fail closed.
+                if request.method in ("GET", "HEAD"):
+                    return redirect(url_for("platform_console"))
+                abort(403)
         return None
 
     @app.context_processor
@@ -317,13 +338,16 @@ def init_app(app):
         from carelog import app as app_module
 
         user = current_user()
-        facilities = app_module.org_facilities() if user else []
+        in_customer_workspace = bool(
+            user and (not user.is_superuser or session.get("acting_org_id"))
+        )
+        facilities = app_module.org_facilities() if in_customer_workspace else []
         return {
             "current_user": user,
             "has_permission": has_permission,
             "role_label": role_label,
             "org_facilities": facilities,
-            "active_facility": app_module.current_facility() if user else None,
+            "active_facility": app_module.current_facility() if in_customer_workspace else None,
             "is_platform_owner": is_platform_owner(),
             "acting_org": db.session.get(Organization, session["acting_org_id"])
             if user and user.is_superuser and session.get("acting_org_id") else None,

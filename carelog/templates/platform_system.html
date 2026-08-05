@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Platform system – CareMin{% endblock %}
+{% block content %}
+<section class="page-header"><div>
+  <p class="eyebrow">Platform administration</p><h1>System</h1>
+  <p class="muted">Operator-only service health and configuration. Customer workspaces never expose these details.</p>
+</div></section>
+<section class="platform-metrics">
+  <div class="mini-metric"><span>Database schema</span><strong>{{ 'Attention' if schema_drift else 'Ready' }}</strong></div>
+  <div class="mini-metric"><span>File processing</span><strong>{{ worker_mode|title }}</strong></div>
+  <div class="mini-metric"><span>Format mapping service</span><strong>{{ 'Ready' if mapping_service_ready else 'Not configured' }}</strong></div>
+  <div class="mini-metric"><span>Calculation version</span><strong>{{ calc_version }}</strong></div>
+</section>
+<section class="block two-column-admin">
+  <div class="section-card"><div class="section-heading"><div><h2>Infrastructure</h2></div></div>
+    <dl class="detail-list">
+      <div><dt>Database</dt><dd><code>{{ database }}</code></dd></div>
+      <div><dt>Storage</dt><dd>{{ storage_status.backend|replace('_', ' ')|title }}{% if storage_status.error %}<br><span class="muted">{{ storage_status.error }}</span>{% endif %}</dd></div>
+      <div><dt>Background worker</dt><dd>{{ worker_mode }}</dd></div>
+    </dl>
+  </div>
+  <div class="section-card"><div class="section-heading"><div><h2>Import service</h2></div></div>
+    <dl class="detail-list">
+      <div><dt>Status</dt><dd>{{ 'Connected' if mapping_service_ready else 'Not configured' }}</dd></div>
+      <div><dt>Analysis model</dt><dd><code>{{ mapping_model }}</code></dd></div>
+    </dl>
+    <p class="muted">This is platform infrastructure. Provider users see only file validation results.</p>
+  </div>
+</section>
+{% if schema_drift %}<section class="block"><div class="errors"><p><strong>Schema attention required</strong></p><ul>{% for item in schema_drift %}<li>{{ item }}</li>{% endfor %}</ul></div></section>{% endif %}
+{% endblock %}

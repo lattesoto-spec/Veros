@@ -3,29 +3,78 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
   <title>Sign in – CareMin</title>
   <link rel="stylesheet" href="/style.css">
 </head>
 <body class="auth-body">
-  <main class="auth-card">
-    <p class="eyebrow">CareMin</p>
-    <h1>Sign in</h1>
-    <p class="muted">Care minutes compliance for Australian aged care.</p>
+  <main class="auth-shell">
+    <section class="auth-intro" aria-label="About CareMin">
+      <div>
+        <div class="auth-brand"><span class="auth-brand-mark">C</span><span>CareMin</span></div>
+        <p class="auth-kicker">Australian aged care</p>
+        <h2>Care-minute evidence you can stand behind.</h2>
+        <p>
+          Bring worked hours, occupied bed days and reporting evidence into one
+          controlled workspace.
+        </p>
+      </div>
+      <ul class="auth-assurances" aria-label="Workspace safeguards">
+        <li>Organisation-isolated access</li>
+        <li>Evidence-linked calculations</li>
+        <li>Readiness checks before reporting</li>
+      </ul>
+    </section>
 
-    {% if error %}<div class="errors"><ul><li>{{ error }}</li></ul></div>{% endif %}
-    {% with messages = get_flashed_messages() %}
-      {% if messages %}<div class="flash">{% for m in messages %}<p>{{ m }}</p>{% endfor %}</div>{% endif %}
-    {% endwith %}
+    <section class="auth-panel">
+      <div class="auth-panel-inner">
+        <p class="eyebrow">Secure workspace</p>
+        <h1>Welcome back</h1>
+        <p class="auth-lead">Sign in to continue to your CareMin account.</p>
 
-    <form method="post" class="form">
-      <label>Email
-        <input type="email" name="email" autocomplete="username" required autofocus>
-      </label>
-      <label>Password
-        <input type="password" name="password" autocomplete="current-password" required>
-      </label>
-      <button type="submit">Sign in</button>
-    </form>
+        {% if error %}
+        <div class="errors auth-message" role="alert"><p>{{ error }}</p></div>
+        {% endif %}
+        {% with messages = get_flashed_messages() %}
+          {% if messages %}<div class="flash auth-message" role="status">{% for m in messages %}<p>{{ m }}</p>{% endfor %}</div>{% endif %}
+        {% endwith %}
+
+        <form method="post" class="form auth-form"
+              onsubmit="this.querySelector('button[type=submit]').disabled=true;this.querySelector('button[type=submit]').textContent='Signing in…';">
+          <label>Work email
+            <input type="email" name="email" value="{{ email or '' }}"
+                   autocomplete="username" inputmode="email" autocapitalize="none"
+                   spellcheck="false" required autofocus>
+          </label>
+          <label>Password
+            <span class="password-field">
+              <input id="login-password" type="password" name="password"
+                     autocomplete="current-password" required>
+              <button type="button" class="password-toggle"
+                      aria-controls="login-password" aria-pressed="false">Show</button>
+            </span>
+          </label>
+          <button type="submit" class="auth-submit">Sign in securely</button>
+        </form>
+
+        <p class="auth-help">
+          Trouble signing in? Contact your organisation administrator or CareMin support.
+        </p>
+      </div>
+    </section>
   </main>
+  <script>
+    (function () {
+      var button = document.querySelector(".password-toggle");
+      var input = document.getElementById("login-password");
+      button.addEventListener("click", function () {
+        var showing = input.type === "text";
+        input.type = showing ? "password" : "text";
+        button.textContent = showing ? "Show" : "Hide";
+        button.setAttribute("aria-pressed", String(!showing));
+        input.focus();
+      });
+    })();
+  </script>
 </body>
 </html>

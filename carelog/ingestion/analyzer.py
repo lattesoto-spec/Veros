@@ -17,7 +17,7 @@ from .reader import Sheet
 
 # Haiku keeps per-format learning cheap; the validate-and-retry loop below
 # catches its occasional misses. Both the key and the model can be set on the
-# Settings page (stored in the DB) or via environment variables.
+# platform environment.
 DEFAULT_MODEL = "claude-haiku-4-5"
 SAMPLE_ROWS = 8
 
@@ -198,9 +198,7 @@ def generate_mapping_spec(sheets: list[Sheet], filename: str = "") -> tuple[dict
     api_key = resolve_api_key()
     if not api_key:
         raise AnalyzerError(
-            "No Anthropic API key configured — add one on the Settings page (or set "
-            "ANTHROPIC_API_KEY) so new file formats can be learned. Already-learned "
-            "formats still import without it."
+            "The format-mapping service is not configured (ANTHROPIC_API_KEY is missing)."
         )
     # This runs in a background job, so it can afford to wait: generous read
     # timeout, and the request is streamed so a slow generation keeps bytes
@@ -246,8 +244,7 @@ def generate_mapping_spec(sheets: list[Sheet], filename: str = "") -> tuple[dict
                 response = stream.get_final_message()
         except anthropic.AuthenticationError as e:
             raise AnalyzerError(
-                "Anthropic rejected the API key — check it on the Settings page "
-                "(keys start with sk-ant- and are shown once at creation)."
+                "Anthropic rejected the platform API credential."
             ) from e
         except anthropic.PermissionDeniedError as e:
             raise AnalyzerError(
@@ -260,8 +257,7 @@ def generate_mapping_spec(sheets: list[Sheet], filename: str = "") -> tuple[dict
             ) from e
         except anthropic.NotFoundError as e:
             raise AnalyzerError(
-                f"Model '{model}' was not found for this account — reset the "
-                "analysis model to the default on the Settings page."
+                f"Model '{model}' was not found for the platform account."
             ) from e
         except anthropic.APIConnectionError as e:
             raise AnalyzerError(

@@ -47,7 +47,7 @@ from carelog.auth import (
     require,
 )
 from carelog.ingestion import jobs as import_jobs
-from carelog.ingestion.analyzer import AnalyzerError, DEFAULT_MODEL, ai_ready, resolve_model
+from carelog.ingestion.analyzer import AnalyzerError, ai_ready, resolve_model
 from carelog.ingestion.mapping import MappingError
 from carelog.ingestion.reader import FileReadError
 from carelog.integrations.registry import BY_KEY, PLATFORMS
@@ -161,6 +161,12 @@ def create_app() -> Flask:
         nothing about the one command that fixes it.
         """
         from sqlalchemy.exc import ProgrammingError, OperationalError
+        from werkzeug.exceptions import HTTPException
+
+        # Preserve deliberate 400/403/404 responses. Catching Exception at
+        # this level must not turn authorization failures into server errors.
+        if isinstance(error, HTTPException):
+            return error
 
         if isinstance(error, (ProgrammingError, OperationalError)) and \
                 "does not exist" in str(getattr(error, "orig", error)):
@@ -270,12 +276,16 @@ def create_app() -> Flask:
 
     @app.route("/")
     def index():
+        user = current_user()
+        if user and user.is_superuser and not session.get("acting_org_id"):
+            return redirect(url_for("platform_console"))
         facility = current_facility()
         if facility and Shift.query.filter_by(facility_id=facility.id).first():
             return redirect(url_for("dashboard"))
         return redirect(url_for("universal_import"))
 
     @app.route("/settings", methods=["GET", "POST"])
+    @require("manage_facility")
     def settings():
         facility = current_facility()
 
@@ -306,9 +316,6 @@ def create_app() -> Flask:
             "settings.html",
             facility=facility,
             organization=db.session.get(Organization, current_organization_id()),
-            ai_ready=ai_ready(),
-            current_model=resolve_model(),
-            default_model=DEFAULT_MODEL,
         )
 
     @app.route("/import", methods=["GET", "POST"])
@@ -321,8 +328,6 @@ def create_app() -> Flask:
                 facility=facility,
                 facilities=org_facilities(),
                 errors=[],
-                known_formats=_org_formats(),
-                ai_ready=ai_ready(),
             )
 
         errors = []
@@ -352,8 +357,6 @@ def create_app() -> Flask:
                 facility=facility,
                 facilities=org_facilities(),
                 errors=errors,
-                known_formats=_org_formats(),
-                ai_ready=ai_ready(),
             ), 400
 
         if not facility:
@@ -537,7 +540,6 @@ def create_app() -> Flask:
             ImportReceipt.query.filter_by(facility_id=facility.id)
             .order_by(ImportReceipt.imported_at.desc()).all()
         )
-        mappings = {m.id: m for m in _org_formats()}
         files_by_receipt = {}
         for r in receipts:
             names = [o.name for o in _receipt_files(r)]
@@ -548,7 +550,6 @@ def create_app() -> Flask:
             "audit.html",
             facility=facility,
             receipts=receipts,
-            mappings=mappings,
             files_by_receipt=files_by_receipt,
             readiness=round(with_files / len(receipts) * 100) if receipts else None,
             calc_version=CALC_VERSION,
@@ -1148,43 +1149,146 @@ def create_app() -> Flask:
 
     # ------------------------------------------------- platform owner console
 
+    def _platform_org_summary(org):
+        facilities = Facility.query.filter_by(organization_id=org.id).all()
+        facility_ids = [f.id for f in facilities]
+        latest = (
+            ImportReceipt.query.filter_by(organization_id=org.id)
+            .order_by(ImportReceipt.imported_at.desc()).first()
+        )
+        return {
+            "org": org,
+            "users": User.query.filter_by(
+                organization_id=org.id, is_active=True, is_superuser=False
+            ).count(),
+            "facilities": len(facility_ids),
+            "shifts": (
+                Shift.query.filter(Shift.facility_id.in_(facility_ids)).count()
+                if facility_ids else 0
+            ),
+            "residents": (
+                Resident.query.filter(
+                    Resident.facility_id.in_(facility_ids),
+                    Resident.discharged_date.is_(None),
+                ).count() if facility_ids else 0
+            ),
+            "last_import": latest.imported_at if latest else None,
+            "admins": User.query.filter_by(
+                organization_id=org.id, role="administrator", is_active=True,
+                is_superuser=False,
+            ).all(),
+        }
+
     @app.route("/platform")
     @auth.superuser_required
     def platform_console():
         """Cross-organization view. This is the only place in the application
         that deliberately reads across the tenant boundary."""
-        rows = []
-        for org in Organization.query.order_by(Organization.name).all():
-            facility_ids = [
-                f.id for f in Facility.query.filter_by(organization_id=org.id)
-            ]
-            latest = (
-                ImportReceipt.query.filter_by(organization_id=org.id)
-                .order_by(ImportReceipt.imported_at.desc()).first()
-            )
-            rows.append({
-                "org": org,
-                "users": User.query.filter_by(organization_id=org.id, is_active=True).count(),
-                "facilities": len(facility_ids),
-                "shifts": (
-                    Shift.query.filter(Shift.facility_id.in_(facility_ids)).count()
-                    if facility_ids else 0
-                ),
-                "residents": (
-                    Resident.query.filter(
-                        Resident.facility_id.in_(facility_ids),
-                        Resident.discharged_date.is_(None),
-                    ).count() if facility_ids else 0
-                ),
-                "last_import": latest.imported_at if latest else None,
-                "admins": User.query.filter_by(
-                    organization_id=org.id, role="administrator", is_active=True).all(),
-            })
+        rows = [
+            _platform_org_summary(org)
+            for org in Organization.query.order_by(Organization.name).all()
+        ]
         return render_template(
             "platform.html",
             rows=rows,
-            roles=ROLES,
-            total_users=User.query.filter_by(is_active=True).count(),
+            total_users=User.query.filter_by(
+                is_active=True, is_superuser=False
+            ).count(),
+            total_facilities=Facility.query.count(),
+            recent_entries=AuditLog.query.order_by(AuditLog.created_at.desc()).limit(8).all(),
+        )
+
+    @app.route("/platform/organizations/<int:organization_id>")
+    @auth.superuser_required
+    def platform_organization(organization_id):
+        org = db.session.get(Organization, organization_id)
+        if org is None:
+            abort(404)
+        facilities = Facility.query.filter_by(
+            organization_id=org.id
+        ).order_by(Facility.name).all()
+        facility_rows = []
+        for facility in facilities:
+            latest = Shift.query.filter_by(facility_id=facility.id).order_by(
+                Shift.date.desc()
+            ).first()
+            facility_rows.append({
+                "facility": facility,
+                "residents": Resident.query.filter_by(
+                    facility_id=facility.id, discharged_date=None
+                ).count(),
+                "shifts": Shift.query.filter_by(facility_id=facility.id).count(),
+                "latest": latest.date if latest else None,
+            })
+        return render_template(
+            "platform_organization.html",
+            summary=_platform_org_summary(org),
+            facility_rows=facility_rows,
+            users=User.query.filter_by(
+                organization_id=org.id, is_superuser=False
+            ).order_by(User.is_active.desc(), User.email).all(),
+            imports=(
+                ImportReceipt.query.filter_by(organization_id=org.id)
+                .order_by(ImportReceipt.imported_at.desc()).limit(10).all()
+            ),
+            integrations=IntegrationConfig.query.filter_by(
+                organization_id=org.id
+            ).order_by(IntegrationConfig.platform).all(),
+            recent_entries=(
+                AuditLog.query.filter_by(organization_id=org.id)
+                .order_by(AuditLog.created_at.desc()).limit(12).all()
+            ),
+        )
+
+    @app.route("/platform/organizations/<int:organization_id>/update", methods=["POST"])
+    @auth.superuser_required
+    def platform_update_organization(organization_id):
+        org = db.session.get(Organization, organization_id)
+        if org is None:
+            abort(404)
+        name = (request.form.get("name") or "").strip()
+        timezone = (request.form.get("timezone") or "").strip()
+        if not name:
+            flash("Organisation name is required.")
+        elif Organization.query.filter(
+            db.func.lower(Organization.name) == name.lower(),
+            Organization.id != org.id,
+        ).first():
+            flash(f"An organisation called {name} already exists.")
+        else:
+            org.name = name
+            if timezone:
+                org.timezone = timezone
+            auth.record("platform_org_updated", "organization", org.id, name)
+            db.session.commit()
+            flash(f"{org.name} updated.")
+        return redirect(url_for("platform_organization", organization_id=org.id))
+
+    @app.route("/platform/activity")
+    @auth.superuser_required
+    def platform_activity():
+        entries = AuditLog.query.order_by(AuditLog.created_at.desc()).limit(1000).all()
+        organizations = {o.id: o for o in Organization.query.all()}
+        return render_template(
+            "platform_activity.html", entries=entries, organizations=organizations
+        )
+
+    @app.route("/platform/system")
+    @auth.superuser_required
+    def platform_system():
+        try:
+            storage_status = _storage().describe()
+        except StorageError as error:
+            storage_status = {"backend": "unavailable", "error": str(error)}
+        return render_template(
+            "platform_system.html",
+            database=db.engine.url.render_as_string(hide_password=True),
+            schema_drift=_schema_drift(),
+            storage_status=storage_status,
+            worker_mode=import_jobs.worker_mode(),
+            mapping_service_ready=ai_ready(),
+            mapping_model=resolve_model(),
+            calc_version=CALC_VERSION,
         )
 
     @app.route("/platform/organizations/create", methods=["POST"])
@@ -1224,17 +1328,20 @@ def create_app() -> Flask:
     @app.route("/platform/act", methods=["POST"])
     @auth.superuser_required
     def platform_act():
-        org = auth.act_as_organization(request.form.get("organization_id", type=int))
+        organization_id = request.form.get("organization_id", type=int)
+        if organization_id is None:
+            abort(400)
+        org = auth.act_as_organization(organization_id)
         db.session.commit()
-        flash(f"You are now working inside {org.name}.")
-        return redirect(url_for("dashboard"))
+        flash(f"Support workspace opened for {org.name}.")
+        return redirect(url_for("index"))
 
     @app.route("/platform/act/stop", methods=["POST"])
     @auth.superuser_required
     def platform_stop_acting():
         auth.act_as_organization(None)
         db.session.commit()
-        flash("Returned to your own organisation.")
+        flash("Returned to platform administration.")
         return redirect(url_for("platform_console"))
 
     # ------------------------------------------------------------- admin UI
@@ -1244,7 +1351,7 @@ def create_app() -> Flask:
     def admin_users():
         org_id = current_organization_id()
         users = (
-            User.query.filter_by(organization_id=org_id)
+            User.query.filter_by(organization_id=org_id, is_superuser=False)
             .order_by(User.is_active.desc(), User.email)
             .all()
         )
@@ -1288,7 +1395,7 @@ def create_app() -> Flask:
     @require("manage_users")
     def admin_update_user(user_id):
         user = User.query.filter_by(
-            id=user_id, organization_id=current_organization_id()
+            id=user_id, organization_id=current_organization_id(), is_superuser=False
         ).first()
         if user is None:
             abort(404)
@@ -1331,18 +1438,6 @@ def create_app() -> Flask:
                 flash(f"Password reset for {user.email}; they must change it at next sign-in.")
         db.session.commit()
         return redirect(url_for("admin_users"))
-
-    @app.route("/admin/security-log")
-    @require("view_security_log")
-    def admin_security_log():
-        entries = (
-            AuditLog.query
-            .filter_by(organization_id=current_organization_id())
-            .order_by(AuditLog.created_at.desc())
-            .limit(500)
-            .all()
-        )
-        return render_template("admin_security_log.html", entries=entries)
 
     return app
 
@@ -1505,6 +1600,10 @@ def _database_uri() -> tuple[str, str]:
 
 
 def _engine_options(uri: str) -> dict:
+    if uri.startswith("sqlite"):
+        # Test and one-off migration apps use SQLite; its driver does not
+        # accept PostgreSQL's connect_timeout option.
+        return {}
     opts = {
         # Connections do not survive between serverless invocations, and a
         # pooled connection can be closed by the provider at any time.

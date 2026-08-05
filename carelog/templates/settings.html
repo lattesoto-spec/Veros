@@ -5,7 +5,7 @@
   <div>
     <p class="eyebrow">Setup</p>
     <h1>Settings</h1>
-    <p class="muted">Facility details, targets, and the AI connection that powers Universal Import.</p>
+    <p class="muted">Facility details, reporting targets and organisation data controls.</p>
   </div>
 </section>
 
@@ -37,31 +37,17 @@
   <div class="section-card side-card">
     <div class="section-heading">
       <div>
-        <h2>AI connection</h2>
-        <p class="muted">Needed only to <em>learn new</em> file formats — known formats import without it</p>
+        <h2>Organisation data</h2>
+        <p class="muted">Controls for {{ organization.name if organization else 'this organisation' }}</p>
       </div>
     </div>
-    {% if ai_ready %}
-      <p><span class="pill pill-on_track">connected</span>
-        Using the <code>ANTHROPIC_API_KEY</code> environment variable.</p>
-    {% else %}
-      <p><span class="pill pill-at_risk">not configured</span>
-        Set <code>ANTHROPIC_API_KEY</code> in the deployment environment to enable format learning.</p>
-    {% endif %}
-    <p class="muted">Analysis model: <code>{{ current_model }}</code>
-      (override with <code>CAREMIN_ANALYZER_MODEL</code>; default <code>{{ default_model }}</code>).</p>
-    <details class="muted helper-details">
-      <summary>Why isn't this editable here?</summary>
-      <p>The API key is a platform credential, not customer data. Keeping it in the
-         deployment environment means it is never stored in the database, never visible
-         in this interface, and cannot be read or replaced by an account holder.</p>
-      <p>On Vercel: <strong>Project → Settings → Environment Variables</strong>.</p>
-    </details>
-
-    {% if has_permission('manage_facility') %}
+    <p class="muted">
+      Imports, residents, staffing records and retained evidence are isolated
+      to your organisation. This reset affects every facility in the account.
+    </p>
     <div class="danger-zone">
       <p class="danger-title">Administrative reset</p>
-      <p class="muted">Deletes all imported data for {{ organization.name if organization else 'your organization' }}. Learned file formats are kept.</p>
+      <p class="muted">Permanently deletes all imported care data and retained evidence for this organisation.</p>
       <form method="post" action="{{ url_for('clear') }}" class="form confirm-form">
         <label>Type <code>delete</code> to confirm
           <input type="text" name="confirm" placeholder="delete" autocomplete="off" required>
@@ -69,7 +55,6 @@
         <button type="submit" class="danger-button">Delete all care data</button>
       </form>
     </div>
-    {% endif %}
   </div>
 </section>
 {% endblock %}

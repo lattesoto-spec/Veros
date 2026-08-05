@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}{{ summary.org.name }} – CareMin{% endblock %}
+{% block content %}
+<section class="page-header">
+  <div>
+    <p class="eyebrow"><a href="{{ url_for('platform_console') }}">Customer accounts</a> / Account</p>
+    <h1>{{ summary.org.name }}</h1>
+    <p class="muted">Created {{ summary.org.created_at.strftime('%d %b %Y') }} · {{ summary.users }} active users · {{ summary.facilities }} facilities</p>
+  </div>
+  <form method="post" action="{{ url_for('platform_act') }}" class="inline-form">
+    <input type="hidden" name="organization_id" value="{{ summary.org.id }}">
+    <button type="submit">Enter support workspace</button>
+  </form>
+</section>
+
+<section class="block two-column-admin">
+  <div class="section-card">
+    <div class="section-heading"><div><h2>Account details</h2><p class="muted">Platform-owned account metadata</p></div></div>
+    <form method="post" action="{{ url_for('platform_update_organization', organization_id=summary.org.id) }}" class="form">
+      <label>Organisation name <input type="text" name="name" value="{{ summary.org.name }}" required></label>
+      <label>Timezone <input type="text" name="timezone" value="{{ summary.org.timezone }}" required></label>
+      <button type="submit">Save account</button>
+    </form>
+  </div>
+  <div class="section-card">
+    <div class="section-heading"><div><h2>Account status</h2></div></div>
+    <dl class="detail-list">
+      <div><dt>Customer users</dt><dd>{{ summary.users }}</dd></div>
+      <div><dt>Facilities</dt><dd>{{ summary.facilities }}</dd></div>
+      <div><dt>Current residents</dt><dd>{{ summary.residents }}</dd></div>
+      <div><dt>Stored shifts</dt><dd>{{ summary.shifts }}</dd></div>
+      <div><dt>Last import</dt><dd>{{ summary.last_import.strftime('%d %b %Y %H:%M') if summary.last_import else 'No imports' }}</dd></div>
+    </dl>
+  </div>
+</section>
+
+<section class="block">
+  <div class="section-card">
+    <div class="section-heading"><div><h2>Users</h2><p class="muted">Customer accounts only; platform-owner identities are never exposed here.</p></div></div>
+    <div class="table-wrap"><table class="data-table">
+      <thead><tr><th>Email</th><th>Name</th><th>Role</th><th>Status</th><th>Last sign-in</th></tr></thead>
+      <tbody>{% for user in users %}<tr>
+        <td>{{ user.email }}</td><td>{{ user.name or '—' }}</td><td>{{ role_label(user.role) }}</td>
+        <td>{{ 'Active' if user.is_active else 'Deactivated' }}</td>
+        <td>{{ user.last_login_at.strftime('%d %b %Y %H:%M') if user.last_login_at else 'Never' }}</td>
+      </tr>{% else %}<tr><td colspan="5" class="muted">No customer users.</td></tr>{% endfor %}</tbody>
+    </table></div>
+  </div>
+</section>
+
+<section class="block">
+  <div class="section-card">
+    <div class="section-heading"><div><h2>Facilities</h2></div></div>
+    <div class="table-wrap"><table class="data-table">
+      <thead><tr><th>Facility</th><th>Residents</th><th>Shifts</th><th>Latest data</th><th>Targets</th></tr></thead>
+      <tbody>{% for row in facility_rows %}<tr>
+        <td>{{ row.facility.name }}</td><td>{{ row.residents }}</td><td>{{ row.shifts }}</td>
+        <td>{{ row.latest.strftime('%d %b %Y') if row.latest else 'No data' }}</td>
+        <td>{{ row.facility.ancc_target }} total / {{ row.facility.rn_target }} nursing</td>
+      </tr>{% else %}<tr><td colspan="5" class="muted">No facilities.</td></tr>{% endfor %}</tbody>
+    </table></div>
+  </div>
+</section>
+
+<section class="block two-column-admin">
+  <div class="section-card">
+    <div class="section-heading"><div><h2>Recent imports</h2></div></div>
+    <div class="activity-list">{% for receipt in imports %}<div class="activity-row">
+      <div><strong>Import #{{ receipt.id }}</strong><br><span class="muted">{{ receipt.shifts_imported }} shifts · {{ receipt.evidence_type }}</span></div>
+      <time>{{ receipt.imported_at.strftime('%d %b %H:%M') }}</time>
+    </div>{% else %}<p class="muted">No imports.</p>{% endfor %}</div>
+  </div>
+  <div class="section-card">
+    <div class="section-heading"><div><h2>Connections</h2></div></div>
+    <div class="activity-list">{% for connection in integrations %}<div class="activity-row">
+      <div><strong>{{ connection.platform }}</strong><br><span class="muted">{{ connection.last_result or 'Not synced yet' }}</span></div>
+      <span class="pill {{ 'pill-on_track' if connection.enabled else '' }}">{{ 'Enabled' if connection.enabled else 'Disabled' }}</span>
+    </div>{% else %}<p class="muted">No connections configured.</p>{% endfor %}</div>
+  </div>
+</section>
+{% endblock %}

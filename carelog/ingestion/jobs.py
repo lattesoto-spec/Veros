@@ -24,6 +24,8 @@ import threading
 import uuid
 from datetime import datetime
 
+from flask import current_app
+
 from carelog.domain.compliance import CALC_VERSION
 from carelog.models import Facility, ImportJob, ImportReceipt, db
 
@@ -135,12 +137,28 @@ def run_job(job_id: str):
         _touch(job, status="running")
         _process(job)
         _touch(job, status="done")
-    except (FileReadError, MappingError, AnalyzerError) as e:
+    except AnalyzerError as e:
+        # Provider users need an actionable result, not platform vendor names,
+        # credentials or model diagnostics. The detailed cause remains in the
+        # server log for the platform owner.
+        current_app.logger.warning("Import mapping service failed for %s: %s", job_id, e)
+        db.session.rollback()
+        _fail(
+            job_id,
+            "CareMin could not safely interpret this file structure. Nothing was "
+            "imported. Contact platform support and include this import reference.",
+        )
+    except (FileReadError, MappingError) as e:
         db.session.rollback()
         _fail(job_id, str(e))
-    except Exception as e:  # safety net: surface anything on the status page
+    except Exception:  # safety net: surface anything on the status page
+        current_app.logger.exception("Unexpected import failure for %s", job_id)
         db.session.rollback()
-        _fail(job_id, f"Unexpected error during import: {type(e).__name__}: {e}")
+        _fail(
+            job_id,
+            "CareMin could not complete this import. Nothing was imported. "
+            "Contact platform support and include this import reference.",
+        )
         raise
     finally:
         _RUN_LOCK.release()

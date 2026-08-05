@@ -25,7 +25,7 @@
       <tbody>
       {% for u in users %}
         <tr{% if not u.is_active %} class="muted"{% endif %}>
-          <td>{{ u.email }}{% if u.is_superuser %} <span class="pill">platform admin</span>{% endif %}</td>
+          <td>{{ u.email }}</td>
           <td>{{ u.name or '—' }}</td>
           <td>
             <form method="post" action="{{ url_for('admin_update_user', user_id=u.id) }}" class="inline-form">
