@@ -340,10 +340,6 @@ def create_app() -> Flask:
         errors = []
         name = (request.form.get("facility_name") or "").strip()
         files = [f for f in request.files.getlist("data_files") if f and f.filename]
-        evidence_type = (request.form.get("evidence_type") or "unverified").strip()
-        if evidence_type not in ("worked", "rostered", "unverified"):
-            errors.append("Choose a valid staffing evidence type.")
-
         # With several homes in one organization, the upload must say which one
         # it belongs to rather than silently landing in whichever is active.
         target_id = request.form.get("facility_id", type=int)
@@ -384,7 +380,6 @@ def create_app() -> Flask:
             app, facility.id, payloads, _storage(),
             organization_id=current_organization_id(),
             user_id=user.id if user else None,
-            evidence_type=evidence_type,
         )
         auth.record("import_started", "import_job", job_id,
                     ", ".join(fname for fname, _ in payloads))
@@ -659,10 +654,20 @@ def create_app() -> Flask:
 
     @app.route("/samples/<path:filename>")
     def sample_file(filename):
-        if filename not in ("residents.csv", "shifts.csv"):
+        simple = {"residents.csv", "shifts.csv"}
+        realistic = {
+            "resident_census_july_2026.xlsx",
+            "worked_staffing_july_2026.xlsx",
+            "care_delivery_july_2026.xlsx",
+        }
+        if filename in simple:
+            directory = os.path.join(ROOT, "sample_data")
+        elif filename in realistic:
+            directory = os.path.join(ROOT, "sample_data", "realistic_imports")
+        else:
             return ("Not found", 404)
         return send_from_directory(
-            os.path.join(ROOT, "sample_data"),
+            directory,
             filename,
             as_attachment=True,
         )

@@ -172,3 +172,19 @@ def test_customer_ui_hides_platform_internals_and_cross_tenant_controls(web_app)
     users_page = client.get("/admin/users")
     assert users_page.status_code == 200
     assert b"owner@example.com" not in users_page.data
+
+
+def test_import_classifies_evidence_without_asking_the_user(web_app):
+    app, ids = web_app
+    client = app.test_client()
+    sign_in_as(client, ids["admin"])
+
+    page = client.get("/import")
+    assert page.status_code == 200
+    assert b'name="evidence_type"' not in page.data
+    assert b"CareMin classifies shift evidence automatically" in page.data
+    assert b"worked_staffing_july_2026.xlsx" in page.data
+
+    sample = client.get("/samples/worked_staffing_july_2026.xlsx")
+    assert sample.status_code == 200
+    assert sample.content_type.startswith("application/")

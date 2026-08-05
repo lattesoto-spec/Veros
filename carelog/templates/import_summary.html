@@ -28,6 +28,10 @@
       <strong>{{ r.kind.replace('_', ' ') }}</strong> from sheet “{{ r.sheet }}”:
       {{ r.imported }} of {{ r.rows_seen - r.rows_filtered }} rows imported
       {% if r.rows_filtered %} · {{ r.rows_filtered }} filtered (leave/non-shift rows){% endif %}
+      {% if r.evidence_type %}
+        · classified as <strong>{{ r.evidence_type.replace('_', ' ') }}</strong>
+        {% if r.evidence_basis %}<span class="muted">({{ r.evidence_basis }})</span>{% endif %}
+      {% endif %}
     </p>
     {% endfor %}
     {% if o.warnings %}

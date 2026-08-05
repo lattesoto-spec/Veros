@@ -12,7 +12,7 @@ from carelog.domain.care_minutes import _minutes_between, active_residents_on, q
 from carelog.domain import eligibility
 from carelog.models import CareEpisode, ResidentDay, Shift, Staff, db
 
-CALC_VERSION = "2026.08.2"
+CALC_VERSION = "2026.08.3"
 
 # Canonical reporting buckets. The mapping engine normalizes to PCW; the
 # government statement calls the bucket PCA — they are the same bucket.

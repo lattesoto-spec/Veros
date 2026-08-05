@@ -58,8 +58,7 @@ def _touch(job: ImportJob, **fields):
 
 
 def start_job(app, facility_id: int, payloads: list[tuple[str, bytes]], storage,
-              organization_id: int | None = None, user_id: int | None = None,
-              evidence_type: str = "unverified") -> str:
+              organization_id: int | None = None, user_id: int | None = None) -> str:
     """Persist the uploads as audit evidence, record the job, dispatch it."""
     job_id = uuid.uuid4().hex[:12]
     prefix = f"imports/job-{job_id}"
@@ -73,7 +72,7 @@ def start_job(app, facility_id: int, payloads: list[tuple[str, bytes]], storage,
         facility_id=facility_id,
         started_by_user_id=user_id,
         status="queued",
-        evidence_type=evidence_type if evidence_type in ("worked", "rostered", "unverified") else "unverified",
+        evidence_type="auto",
         storage_prefix=prefix,
         files_json=json.dumps(
             [{"filename": fname, "stage": "waiting"} for fname, _ in payloads]
@@ -182,7 +181,7 @@ def _process(job: ImportJob):
         imported_by_user_id=job.started_by_user_id,
         imported_by=(actor.email if actor else "web upload"),
         calc_version=CALC_VERSION,
-        evidence_type=job.evidence_type,
+        evidence_type="auto",
     )
     db.session.add(receipt)
     db.session.flush()
@@ -197,12 +196,12 @@ def _process(job: ImportJob):
         data = storage.get(f"{job.storage_prefix}/{os.path.basename(state['filename'])}")
         outcome = ingest_file(
             facility, state["filename"], data, receipt=receipt, progress=progress,
-            evidence_type=job.evidence_type,
         )
         outcomes.append(outcome)
         state["stage"] = "done"
         state["detail"] = (
-            f"{outcome.shifts_imported} shifts, {outcome.residents_imported} residents, "
+            f"{outcome.shifts_imported} shifts, {outcome.staff_imported} staff profiles, "
+            f"{outcome.residents_imported} residents, "
             f"{outcome.resident_days_imported} resident days, "
             f"{outcome.care_episodes_imported} care episodes"
             + (f", {len(outcome.row_errors)} rows skipped" if outcome.row_errors else "")
@@ -215,6 +214,15 @@ def _process(job: ImportJob):
     receipt.resident_days_imported = sum(o.resident_days_imported for o in outcomes)
     receipt.care_episodes_imported = sum(o.care_episodes_imported for o in outcomes)
     receipt.shifts_skipped = sum(len(o.row_errors) for o in outcomes)
+    shift_types = {
+        r.evidence_type for o in outcomes for r in o.results
+        if r.kind == "shifts" and r.evidence_type
+    }
+    receipt.evidence_type = (
+        next(iter(shift_types)) if len(shift_types) == 1
+        else ("mixed" if shift_types else "not applicable")
+    )
+    job.evidence_type = receipt.evidence_type
     receipt.first_shift_date = min((o.first_shift_date for o in outcomes if o.first_shift_date), default=None)
     receipt.last_shift_date = max((o.last_shift_date for o in outcomes if o.last_shift_date), default=None)
     receipt.source_path = job.storage_prefix
@@ -254,6 +262,8 @@ def _summarize(outcomes) -> list[dict]:
                     "imported": len(r.records),
                     "rows_seen": r.rows_seen,
                     "rows_filtered": r.rows_filtered,
+                    "evidence_type": r.evidence_type,
+                    "evidence_basis": r.evidence_basis,
                 }
                 for r in o.results
             ],

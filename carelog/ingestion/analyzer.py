@@ -63,6 +63,12 @@ Normalized target schemas:
   is_direct_care, is_agency (worker supplied by an agency), labour_cost
   (the direct-care labour cost attributable to that row, if present).
   Each record needs EITHER start_time+end_time OR minutes.
+- kind "staff": one row per worker from an employee directory or credential
+  register: staff_id (required), staff_name, role, employment_type,
+  classification (award/enterprise-agreement classification),
+  registration_number and registration_expiry. Map Ahpra registration evidence
+  whenever the source provides it. A staff directory is separate from shifts;
+  never invent worked time from an employee master list.
 - kind "residents": resident_id (required), name (required), ancc_class,
   admitted_date, discharged_date.
 - kind "resident_days": one row per resident per date: date (required),
@@ -105,6 +111,7 @@ Per target:
 
 Rules:
 - Only emit targets actually present in the file. A roster file usually has only "shifts";
+  an employee directory or credential sheet uses "staff";
   a resident master list uses "residents"; a resident-by-day summary uses
   "resident_days"; a log of individual services uses "care_episodes". One
   workbook can have several targets on different sheets. Ignore derived
@@ -159,14 +166,57 @@ def _extract_json(text: str) -> dict:
 
 def _clean_spec(spec: dict) -> dict:
     """Strip nulls and convert value_map pair-lists into the dicts the engine uses."""
+    if not isinstance(spec, dict):
+        raise ValueError("mapping spec must be an object")
+    raw_targets = spec.get("targets", [])
+    if not isinstance(raw_targets, list):
+        raise ValueError("mapping spec targets must be a list")
+
+    def fields_as_object(raw):
+        if raw is None:
+            return {}
+        if isinstance(raw, dict):
+            return raw
+        if not isinstance(raw, list):
+            raise ValueError("target fields must be an object")
+
+        # Some model responses express fields as a named list despite the
+        # requested object shape. Convert only unambiguous variants; anything
+        # else is sent back through the validation/retry loop.
+        converted = {}
+        for item in raw:
+            if not isinstance(item, dict):
+                raise ValueError("each field-list item must be an object")
+            name = next((item.get(k) for k in (
+                "name", "field", "target_field", "normalized_field"
+            ) if item.get(k)), None)
+            if name:
+                field_spec = {k: v for k, v in item.items() if k not in {
+                    "name", "field", "target_field", "normalized_field"
+                }}
+            elif len(item) == 1:
+                name, field_spec = next(iter(item.items()))
+            else:
+                raise ValueError("field-list item has no unambiguous field name")
+            if not isinstance(field_spec, dict):
+                raise ValueError(f"field {name!r} must contain an object")
+            if name in converted:
+                raise ValueError(f"duplicate field {name!r}")
+            converted[str(name)] = field_spec
+        return converted
+
     targets = []
-    for t in spec.get("targets", []):
+    for t in raw_targets:
+        if not isinstance(t, dict) or not t.get("kind"):
+            raise ValueError("each target must be an object with a kind")
         ct = {"kind": t["kind"]}
         if t.get("sheet"):
             ct["sheet"] = t["sheet"]
         if isinstance(t.get("header_row"), int):
             ct["header_row"] = t["header_row"]
         rf = t.get("row_filter")
+        if rf and not isinstance(rf, dict):
+            raise ValueError("row_filter must be an object")
         if rf and rf.get("column"):
             crf = {"column": rf["column"]}
             if rf.get("include_values"):
@@ -176,16 +226,30 @@ def _clean_spec(spec: dict) -> dict:
             if len(crf) > 1:
                 ct["row_filter"] = crf
         fields = {}
-        for name, fs in (t.get("fields") or {}).items():
+        for name, fs in fields_as_object(t.get("fields")).items():
             if fs is None:
                 continue
+            if not isinstance(fs, dict):
+                raise ValueError(f"field {name!r} must contain an object")
             cf = {k: v for k, v in fs.items() if v is not None}
             if not cf:
                 continue
             if "value_map" in cf:
-                cf["value_map"] = {
-                    str(p["from"]).strip().lower(): p["to"] for p in cf["value_map"]
-                }
+                value_map = cf["value_map"]
+                if isinstance(value_map, dict):
+                    cf["value_map"] = {
+                        str(k).strip().lower(): v for k, v in value_map.items()
+                    }
+                elif isinstance(value_map, list):
+                    cf["value_map"] = {
+                        str(p["from"]).strip().lower(): p["to"]
+                        for p in value_map
+                        if isinstance(p, dict) and "from" in p and "to" in p
+                    }
+                    if len(cf["value_map"]) != len(value_map):
+                        raise ValueError(f"field {name!r} has an invalid value_map")
+                else:
+                    raise ValueError(f"field {name!r} value_map must be an object or list")
             fields[name] = cf
         ct["fields"] = fields
         targets.append(ct)
@@ -281,8 +345,8 @@ def generate_mapping_spec(sheets: list[Sheet], filename: str = "") -> tuple[dict
         except json.JSONDecodeError as e:
             raise AnalyzerError(f"Model returned invalid JSON: {e}") from e
 
-        spec = _clean_spec(raw_spec)
         try:
+            spec = _clean_spec(raw_spec)
             results = run_spec(spec, apply_header_overrides(spec, sheets))
             problems = validate_results(results)
         except Exception as e:

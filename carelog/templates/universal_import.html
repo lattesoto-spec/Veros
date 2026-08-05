@@ -4,7 +4,7 @@
 <section class="page-header">
   <div>
     <p class="eyebrow">Universal import</p>
-    <h1>Upload any roster or resident export</h1>
+    <h1>Upload staffing and resident exports</h1>
     <p class="muted">
       CSV, Excel, JSON or a SQL dump from any system, including Humanforce, AlayaCare, ShiftCare,
       payroll exports, API extracts, database backups or hand-made spreadsheets. CareMin
@@ -25,7 +25,8 @@
       <div>
         <h2>Import files</h2>
         <p class="muted">
-          Select one or more files containing shifts, residents or both.
+          Select one or more files containing worked time, rosters, staff credentials,
+          residents, occupied bed days or delivered-care records.
           Nested JSON and multi-table SQL dumps are unpacked automatically.
         </p>
       </div>
@@ -47,14 +48,11 @@
       {% else %}
       <input type="hidden" name="facility_id" value="{{ facility.id }}">
       {% endif %}
-      <label>Staffing evidence represented by shift rows
-        <select name="evidence_type" required>
-          <option value="unverified" selected>Unverified - withhold from compliance until confirmed</option>
-          <option value="worked">Actual worked / time-and-attendance</option>
-          <option value="rostered">Rostered / planned staffing</option>
-        </select>
-        <span class="muted">Resident-day and care-episode sheets are identified separately from their structure.</span>
-      </label>
+      <p class="muted">
+        CareMin classifies shift evidence automatically. Clear payroll, approved-timesheet
+        and actual clocking fields are treated as worked time. Planned schedules are kept as
+        rostered time. Ambiguous rows are withheld as unverified and identified for review.
+      </p>
       <label>Data files (CSV, Excel, JSON, SQL, ZIP)
         <div id="dropzone" style="border:2px dashed #bbb;border-radius:8px;padding:1.5rem;text-align:center;cursor:pointer;margin:.4rem 0;">
           <span id="dropzone-label">Drag &amp; drop files here, or click to browse</span>
@@ -97,13 +95,14 @@
     </div>
     <details class="muted helper-details" open>
       <summary>What happens to your file</summary>
-      <p>1. Select the facility and identify whether staffing rows represent worked, rostered or unverified time.</p>
-      <p>2. CareMin validates the file and separates shifts, residents, occupied bed days and delivered-care records.</p>
+      <p>1. Select the facility and upload the source exports as they came from each system.</p>
+      <p>2. CareMin validates the files and separates staff credentials, actual worked shifts, planned rosters, residents, occupied bed days and delivered-care records.</p>
       <p>3. Review skipped rows and warnings before relying on the figures. Every accepted row retains its import lineage.</p>
       <p>
-        No data handy? Try the samples:
-        <a href="{{ url_for('sample_file', filename='residents.csv') }}">residents.csv</a> ·
-        <a href="{{ url_for('sample_file', filename='shifts.csv') }}">shifts.csv</a>
+        No data handy? Try the realistic samples:
+        <a href="{{ url_for('sample_file', filename='resident_census_july_2026.xlsx') }}">resident census</a> ·
+        <a href="{{ url_for('sample_file', filename='worked_staffing_july_2026.xlsx') }}">worked staffing</a> ·
+        <a href="{{ url_for('sample_file', filename='care_delivery_july_2026.xlsx') }}">optional care delivery</a>
       </p>
     </details>
   </div>

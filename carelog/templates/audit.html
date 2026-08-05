@@ -26,7 +26,7 @@
             <td>{{ r.id }}</td>
             <td>{{ r.imported_at.strftime('%d %b %Y %H:%M') }}</td>
             <td>{{ r.imported_by or 'Not recorded' }}</td>
-            <td>{{ r.evidence_type or 'unverified' }}</td>
+            <td>{{ (r.evidence_type or 'unverified').replace('_', ' ') }}</td>
             <td>{{ r.shifts_imported }}</td>
             <td>{{ r.residents_imported }} / {{ r.resident_days_imported }} / {{ r.care_episodes_imported }}</td>
             <td>{{ r.shifts_skipped }}</td>

@@ -14,7 +14,7 @@
   </div>
 </section>
 
-{% if evidence and (evidence.rostered_minutes or evidence.unverified_minutes or evidence.care_episode_count or not evidence.resident_day_ledger_complete) %}
+{% if evidence and (evidence.rostered_minutes or evidence.unverified_minutes or evidence.worked_withheld_minutes or evidence.care_episode_count or not evidence.resident_day_ledger_complete) %}
 <section class="block">
   <div class="section-card">
     <div class="section-heading"><div><h2>Evidence status</h2><p class="muted">Only eligible actual-worked rows are in the compliance result</p></div></div>
@@ -24,6 +24,14 @@
       unverified <strong>{{ evidence.unverified_minutes }}</strong> min ·
       delivered-care evidence <strong>{{ evidence.delivered_minutes }}</strong> min.
     </p>
+    {% if evidence.worked_withheld_minutes %}
+    <p>
+      <span class="pill pill-at_risk">action required</span>
+      <strong>{{ evidence.worked_withheld_minutes }}</strong> actual-worked minutes are
+      withheld because staff eligibility or registration evidence is incomplete.
+      <a href="{{ url_for('eligibility_queue') }}">Review eligibility</a>.
+    </p>
+    {% endif %}
     {% if not evidence.resident_day_ledger_complete %}<p><span class="pill pill-at_risk">denominator warning</span> Resident-day ledger coverage is {{ evidence.resident_day_dates }}/{{ evidence.resident_day_expected_dates }} days; uncovered days use admission/discharge fallback.</p>{% endif %}
   </div>
 </section>

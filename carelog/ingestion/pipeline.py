@@ -22,11 +22,15 @@ from carelog.models import (
 )
 
 from .analyzer import generate_mapping_spec
+from .evidence import classify_shift_evidence
 from .fingerprint import fingerprint
 from .mapping import TargetResult, apply_header_overrides, run_spec
 from .presets import matching_spec
 from .quality import check_shifts
 from .reader import read_upload
+
+
+MAPPING_SPEC_VERSION = 2
 
 
 @dataclass
@@ -37,6 +41,7 @@ class ImportOutcome:
     spec: dict
     results: list[TargetResult]
     shifts_imported: int = 0
+    staff_imported: int = 0
     residents_imported: int = 0
     resident_days_imported: int = 0
     care_episodes_imported: int = 0
@@ -62,7 +67,14 @@ def get_or_create_mapping(sheets, filename: str, progress=None,
         fingerprint=fp, organization_id=organization_id
     ).first()
     if stored:
-        return stored, True, None
+        try:
+            stored_spec = json.loads(stored.spec_json)
+        except (TypeError, json.JSONDecodeError):
+            stored_spec = {}
+        if stored_spec.get("schema_version") == MAPPING_SPEC_VERSION:
+            return stored, True, None
+        if progress:
+            progress("refreshing stored format")
 
     spec = matching_spec(sheets)
     if spec:
@@ -74,20 +86,27 @@ def get_or_create_mapping(sheets, filename: str, progress=None,
         if progress:
             progress("learning format (AI)")
         spec, usage = generate_mapping_spec(sheets, filename)
-    mapping = FormatMapping(
-        organization_id=organization_id,
-        fingerprint=fp,
-        spec_json=json.dumps(spec),
-        source_filename=filename,
-        kinds=",".join(t["kind"] for t in spec["targets"]),
-    )
-    db.session.add(mapping)
+    spec["schema_version"] = MAPPING_SPEC_VERSION
+    if stored:
+        mapping = stored
+        mapping.spec_json = json.dumps(spec)
+        mapping.source_filename = filename
+        mapping.kinds = ",".join(t["kind"] for t in spec["targets"])
+    else:
+        mapping = FormatMapping(
+            organization_id=organization_id,
+            fingerprint=fp,
+            spec_json=json.dumps(spec),
+            source_filename=filename,
+            kinds=",".join(t["kind"] for t in spec["targets"]),
+        )
+        db.session.add(mapping)
     db.session.flush()
     return mapping, False, usage
 
 
 def ingest_file(facility, filename: str, data: bytes, receipt=None, progress=None,
-                evidence_type: str = "unverified") -> ImportOutcome:
+                evidence_type: str | None = None) -> ImportOutcome:
     """`receipt` (optional ImportReceipt) stamps audit lineage onto every shift.
     `progress` (optional callable taking a stage string) receives live status
     updates for the background-job status page."""
@@ -99,7 +118,8 @@ def ingest_file(facility, filename: str, data: bytes, receipt=None, progress=Non
     spec = json.loads(mapping.spec_json)
     if progress:
         progress("extracting rows")
-    results = run_spec(spec, apply_header_overrides(spec, sheets))
+    mapped_sheets = apply_header_overrides(spec, sheets)
+    results = run_spec(spec, mapped_sheets)
 
     outcome = ImportOutcome(
         filename=filename, fingerprint=mapping.fingerprint, mapping_reused=reused,
@@ -109,9 +129,23 @@ def ingest_file(facility, filename: str, data: bytes, receipt=None, progress=Non
     outcome.receipt = receipt
     for r in results:
         outcome.row_errors.extend(r.row_errors)
+    # Credentials must be applied before shifts so newly-created nurses can be
+    # counted immediately when their employee-directory evidence is current.
+    for r in results:
+        if r.kind == "staff":
+            _import_staff(facility, r.records, outcome)
+    for r in results:
         if r.kind == "shifts":
+            sheet = next(s for s in mapped_sheets if s.name == r.sheet)
+            auto_type, basis = classify_shift_evidence(filename, sheet)
+            if evidence_type in ("worked", "rostered", "unverified"):
+                auto_type, basis = evidence_type, "server-side evidence override"
+            r.evidence_type = auto_type
+            r.evidence_basis = basis
             outcome.warnings.extend(check_shifts(r.records))
-            _import_shifts(facility, r.records, outcome, evidence_type=evidence_type)
+            _import_shifts(facility, r.records, outcome, evidence_type=auto_type)
+        elif r.kind == "staff":
+            continue
         elif r.kind == "residents":
             _import_residents(facility, r.records, outcome)
         elif r.kind == "resident_days":
@@ -119,6 +153,64 @@ def ingest_file(facility, filename: str, data: bytes, receipt=None, progress=Non
         elif r.kind == "care_episodes":
             _import_care_episodes(facility, r.records, outcome)
     return outcome
+
+
+def _normalise_employment_type(value: str | None) -> str | None:
+    raw = (value or "").strip().lower()
+    if not raw:
+        return None
+    if "agency" in raw:
+        return "agency"
+    if "contract" in raw:
+        return "contractor"
+    if any(term in raw for term in ("permanent", "employee", "casual", "part-time", "full-time")):
+        return "employee"
+    return raw
+
+
+def _import_staff(facility, records: list[dict], outcome: ImportOutcome):
+    cache = {s.staff_id: s for s in Staff.query.filter_by(facility_id=facility.id).all()}
+    for rec in records:
+        sid = str(rec["staff_id"]).strip()
+        name = str(rec.get("staff_name") or "").strip() or sid
+        raw_role = str(rec.get("source_role") or rec.get("role") or "").strip()
+        role = str(rec.get("role") or "OTHER").strip().upper() or "OTHER"
+        bucket, status, reason = classify(raw_role or role)
+        if status == "approved" and bucket in ("RN", "EN", "PCA"):
+            role = "PCW" if bucket == "PCA" else bucket
+
+        member = cache.get(sid)
+        if member is None:
+            member = Staff(
+                facility_id=facility.id, staff_id=sid, name=name, role=role,
+                source_role=raw_role, eligibility_status=status,
+                eligibility_reason=reason,
+            )
+            db.session.add(member)
+            db.session.flush()
+            cache[sid] = member
+        else:
+            if rec.get("staff_name"):
+                member.name = name
+            if member.approved_at is None and raw_role:
+                member.role = role
+                member.source_role = raw_role
+                member.eligibility_status = status
+                member.eligibility_reason = reason
+
+        registration = str(rec.get("registration_number") or "").strip()
+        if registration:
+            member.registration_number = registration
+        expiry = rec.get("registration_expiry")
+        if isinstance(expiry, date):
+            member.registration_expiry = expiry
+        employment = _normalise_employment_type(rec.get("employment_type"))
+        if employment:
+            member.employment_type = employment
+        classification = str(rec.get("classification") or "").strip()
+        if classification:
+            member.classification = classification
+        outcome.staff_imported += 1
 
 
 def _import_shifts(facility, records: list[dict], outcome: ImportOutcome,

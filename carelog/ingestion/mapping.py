@@ -9,6 +9,8 @@ version, and re-run with zero AI cost.
 Normalized schemas produced:
   shifts:    staff_id, staff_name, role, date, start_time, end_time,
              minutes, is_direct_care
+  staff:     staff_id, staff_name, role, employment_type, classification,
+             registration_number, registration_expiry
   residents: resident_id, name, ancc_class, admitted_date, discharged_date
   resident_days: date, resident_id, resident_name, occupied, service_type,
                  leave_type, ancc_class, exclusion_reason
@@ -26,6 +28,10 @@ SHIFT_FIELDS = [
     "staff_id", "staff_name", "role", "source_role", "date",
     "start_time", "end_time", "minutes", "break_minutes",
     "is_direct_care", "is_agency", "labour_cost",
+]
+STAFF_FIELDS = [
+    "staff_id", "staff_name", "role", "source_role", "employment_type",
+    "classification", "registration_number", "registration_expiry",
 ]
 RESIDENT_FIELDS = [
     "resident_id", "name", "ancc_class", "admitted_date", "discharged_date",
@@ -66,6 +72,8 @@ class TargetResult:
     row_errors: list[str] = field(default_factory=list)
     rows_seen: int = 0
     rows_filtered: int = 0
+    evidence_type: str | None = None
+    evidence_basis: str | None = None
 
 
 # ---------------------------------------------------------------- parsing
@@ -224,12 +232,13 @@ def _pick_sheet(target: dict, sheets: list[Sheet]) -> Sheet:
 
 def run_target(target: dict, sheets: list[Sheet]) -> TargetResult:
     kind = target.get("kind")
-    if kind not in ("shifts", "residents", "resident_days", "care_episodes"):
+    if kind not in ("shifts", "staff", "residents", "resident_days", "care_episodes"):
         raise MappingError(f"unknown target kind: {kind!r}")
     sheet = _pick_sheet(target, sheets)
     fields_spec = target.get("fields", {})
     allowed = {
         "shifts": SHIFT_FIELDS,
+        "staff": STAFF_FIELDS,
         "residents": RESIDENT_FIELDS,
         "resident_days": RESIDENT_DAY_FIELDS,
         "care_episodes": CARE_EPISODE_FIELDS,
@@ -276,6 +285,9 @@ def _check_record(kind: str, r: dict) -> str | None:
         has_minutes = isinstance(r.get("minutes"), (int, float)) and r["minutes"] > 0
         if not has_times and not has_minutes:
             return "no start/end times and no duration"
+    elif kind == "staff":
+        if not r.get("staff_id"):
+            return "staff_id is blank"
     elif kind == "residents":
         if not r.get("resident_id"):
             return "resident_id is blank"
