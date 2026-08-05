@@ -40,8 +40,34 @@
       decision — see <a href="{{ url_for('eligibility_queue') }}">Eligibility</a>.
     </p>
     {% endif %}
+    {% set tc = tests.target_reconciliation %}
+    <p class="muted">
+      Target cross-check: reference period {{ tc.reference_start }} to {{ tc.reference_end }}
+      (calculation day {{ tc.calculation_day }}) -
+      {% if tc.matched %}<span class="pill pill-on_track">configured target matches AN-ACC ledger</span>
+      {% elif tc.complete %}<span class="pill pill-behind">configured {{ tc.configured_care_target }}/{{ tc.configured_rn_target }} vs derived {{ tc.derived_care_target }}/{{ tc.derived_rn_target }}</span>
+      {% else %}<span class="pill pill-at_risk">reference ledger {{ tc.ledger_dates }}/{{ tc.expected_dates }} dates; {{ tc.missing_classification_days }} unrecognised classification day(s)</span>{% endif %}
+    </p>
   </div>
 </section>
+
+{% if evidence %}
+<section class="block">
+  <div class="section-card">
+    <div class="section-heading"><div><h2>Evidence reconciliation</h2><p class="muted">Streams remain separate; only eligible actual-worked minutes feed the tests above</p></div></div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Actual worked</th><th>Rostered</th><th>Unverified</th><th>Delivered-care episodes</th><th>Resident-day ledger</th></tr></thead>
+      <tbody><tr>
+        <td>{{ evidence.worked_minutes }} min{% if evidence.worked_withheld_minutes %}<br><span class="muted">{{ evidence.worked_withheld_minutes }} withheld</span>{% endif %}</td>
+        <td>{{ evidence.rostered_minutes }} min{% if evidence.rostered_withheld_minutes %}<br><span class="muted">{{ evidence.rostered_withheld_minutes }} withheld</span>{% endif %}</td>
+        <td>{{ evidence.unverified_minutes }} min{% if evidence.unverified_withheld_minutes %}<br><span class="muted">{{ evidence.unverified_withheld_minutes }} withheld</span>{% endif %}</td>
+        <td>{{ evidence.delivered_minutes }} min across {{ evidence.care_episode_count }} episodes<br><span class="muted">{{ evidence.delivered_variance }} vs worked (not added to compliance)</span></td>
+        <td>{% if evidence.resident_day_ledger_complete %}{{ evidence.resident_day_rows }} rows across {{ evidence.resident_day_dates }} days{% elif evidence.uses_resident_day_ledger %}<span class="pill pill-at_risk">partial: {{ evidence.resident_day_dates }}/{{ evidence.resident_day_expected_dates }} days</span>{% else %}<span class="pill pill-at_risk">admission/discharge fallback</span>{% endif %}</td>
+      </tr></tbody>
+    </table></div>
+  </div>
+</section>
+{% endif %}
 {% endif %}
 
 <section class="page-header">
@@ -80,7 +106,7 @@
   <div class="card status-{{ 'on_track' if forecast.rn_on_track else 'behind' }}">
     <div class="card-label">Projected RN quarter-end</div>
     <div class="card-value">{{ forecast.projected_rn_avg }}</div>
-    <div class="card-sub">Target {{ facility.rn_target }} RN mins/resident/day</div>
+    <div class="card-sub">RN-only ≥ {{ (facility.rn_target * 0.9)|round(1) }} and RN+EN ≥ {{ facility.rn_target }}</div>
   </div>
   <div class="card status-{{ 'on_track' if coverage.full_coverage else 'at_risk' }}">
     <div class="card-label">RN 24/7 coverage (latest day)</div>

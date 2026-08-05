@@ -28,7 +28,7 @@
     <div class="section-heading">
       <div>
         <h2>Residents</h2>
-        <p class="muted">{{ residents|length }} current records loaded into the facility dataset</p>
+        <p class="muted">{{ residents|length }} resident records · {{ resident_day_count }} daily occupancy ledger rows · {{ care_episode_count }} delivered-care episodes</p>
       </div>
     </div>
     <div class="table-wrap">
@@ -55,18 +55,21 @@
     <div class="section-heading">
       <div>
         <h2>Staff</h2>
-        <p class="muted">{{ staff|length }} staff records available for shift reporting</p>
+        <p class="muted">{{ staff|length }} staff records available for shift reporting · eligibility status controls counting</p>
       </div>
     </div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>ID</th><th>Name</th><th>Role</th></tr></thead>
+        <thead><tr><th>ID</th><th>Name</th><th>Role</th><th>Source role</th><th>Eligibility</th><th>Employment</th></tr></thead>
         <tbody>
           {% for s in staff %}
           <tr>
             <td>{{ s.staff_id }}</td>
             <td>{{ s.name }}</td>
             <td>{{ s.role }}</td>
+            <td>{{ s.source_role or '—' }}</td>
+            <td>{{ s.eligibility_status }}</td>
+            <td>{{ s.employment_type or '—' }}</td>
           </tr>
           {% endfor %}
         </tbody>

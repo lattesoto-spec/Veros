@@ -14,6 +14,21 @@
   </div>
 </section>
 
+{% if evidence and (evidence.rostered_minutes or evidence.unverified_minutes or evidence.care_episode_count or not evidence.resident_day_ledger_complete) %}
+<section class="block">
+  <div class="section-card">
+    <div class="section-heading"><div><h2>Evidence status</h2><p class="muted">Only eligible actual-worked rows are in the compliance result</p></div></div>
+    <p>
+      Actual worked <strong>{{ evidence.worked_minutes }}</strong> min ·
+      rostered <strong>{{ evidence.rostered_minutes }}</strong> min ·
+      unverified <strong>{{ evidence.unverified_minutes }}</strong> min ·
+      delivered-care evidence <strong>{{ evidence.delivered_minutes }}</strong> min.
+    </p>
+    {% if not evidence.resident_day_ledger_complete %}<p><span class="pill pill-at_risk">denominator warning</span> Resident-day ledger coverage is {{ evidence.resident_day_dates }}/{{ evidence.resident_day_expected_dates }} days; uncovered days use admission/discharge fallback.</p>{% endif %}
+  </div>
+</section>
+{% endif %}
+
 <section class="cards">
   <div class="card status-{{ 'on_track' if compliance_pct and compliance_pct >= 100 else ('at_risk' if compliance_pct and compliance_pct >= 95 else 'behind') }}">
     <div class="card-label">Compliance (quarter to date)</div>
@@ -80,7 +95,7 @@
       </div>
     </div>
     <p>
-      Averaging <strong>{{ q_avg.care_per_resident }}</strong> mins/resident across
+      Weighted result <strong>{{ q_avg.care_per_resident }}</strong> mins/occupied-bed-day across
       {{ q_avg.days }} days since {{ q_start.strftime('%d %b') }}.
       {% if q_gap >= 0 %}
         <span class="badge ok">{{ q_gap }} above target</span>

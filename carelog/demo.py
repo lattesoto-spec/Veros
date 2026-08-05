@@ -20,6 +20,7 @@ from carelog.models import (
     ImportReceipt,
     Organization,
     Resident,
+    ResidentDay,
     Shift,
     Staff,
     db,
@@ -36,13 +37,13 @@ LAST_NAMES = [
     "Martin", "Anderson", "Thompson", "Walker", "Harris", "Lewis", "Robinson",
     "Clark", "Lee", "King", "Wright", "Hill", "Scott", "Green", "Baker", "Adams",
 ]
-ANCC_CLASSES = ["02-01", "03-02", "05-03", "07-02", "08-02", "10-03", "13-04"]
+ANCC_CLASSES = [f"Class {i}" for i in range(1, 14)] + [f"Respite Class {i}" for i in range(1, 4)]
 
 # (role, count, shift windows) — the mix that produces a credible roster.
 ROSTER = [
-    ("RN",  4, [(time(7, 0), time(15, 0)), (time(15, 0), time(23, 0)), (time(23, 0), time(7, 0))]),
-    ("EN",  3, [(time(7, 0), time(15, 0)), (time(15, 0), time(23, 0))]),
-    ("PCW", 12, [(time(7, 0), time(15, 0)), (time(15, 0), time(23, 0)), (time(23, 0), time(7, 0))]),
+    ("RN",  5, [(time(7, 0), time(15, 0)), (time(15, 0), time(23, 0)), (time(23, 0), time(7, 0))]),
+    ("EN",  4, [(time(7, 0), time(15, 0)), (time(15, 0), time(23, 0))]),
+    ("PCW", 11, [(time(7, 0), time(15, 0)), (time(15, 0), time(23, 0)), (time(23, 0), time(7, 0))]),
     ("ADMIN", 2, [(time(9, 0), time(17, 0))]),
 ]
 
@@ -70,17 +71,23 @@ def build_demo_organization(*, name="Demo", admin_email="demo@caremin.app",
     start = today - timedelta(days=days - 1)
 
     used = set()
+    resident_ids = []
+    resident_classes = {}
     for i in range(residents):
         while True:
             person = (rng.choice(FIRST_NAMES), rng.choice(LAST_NAMES))
             if person not in used:
                 used.add(person)
                 break
+        resident_id = f"R{i + 1:04d}"
+        resident_ids.append(resident_id)
+        ancc_class = rng.choice(ANCC_CLASSES)
+        resident_classes[resident_id] = ancc_class
         db.session.add(Resident(
             facility_id=facility.id,
-            resident_id=f"R{i + 1:04d}",
+            resident_id=resident_id,
             name=f"{person[0]} {person[1]}",
-            ancc_class=rng.choice(ANCC_CLASSES),
+            ancc_class=ancc_class,
             admitted_date=start - timedelta(days=rng.randint(30, 900)),
             discharged_date=None,
         ))
@@ -94,9 +101,15 @@ def build_demo_organization(*, name="Demo", admin_email="demo@caremin.app",
                 staff_id=f"{role}{i + 1:03d}",
                 name=person,
                 role=role,
+                source_role=role,
+                eligibility_status="approved" if role in ("RN", "EN", "PCW") else "excluded",
+                eligibility_reason="verified demo classification",
+                approved_at=datetime.utcnow(),
+                registration_number=(f"DEM{role}{i + 1:04d}" if role in ("RN", "EN") else None),
+                registration_expiry=(today + timedelta(days=365) if role in ("RN", "EN") else None),
             )
             db.session.add(member)
-            staff_rows.append((member, role, windows))
+            staff_rows.append((member, role, windows, i))
     db.session.flush()
 
     receipt = ImportReceipt(
@@ -104,6 +117,7 @@ def build_demo_organization(*, name="Demo", admin_email="demo@caremin.app",
         facility_id=facility.id,
         imported_by="demo seed",
         calc_version=CALC_VERSION,
+        evidence_type="worked",
         first_shift_date=start,
         last_shift_date=today,
     )
@@ -113,34 +127,70 @@ def build_demo_organization(*, name="Demo", admin_email="demo@caremin.app",
     shifts = 0
     for offset in range(days):
         day = start + timedelta(days=offset)
+        for rid in resident_ids:
+            db.session.add(ResidentDay(
+                facility_id=facility.id, resident_id=rid, date=day,
+                occupied=True, service_type="an_acc", ancc_class=resident_classes[rid],
+                import_receipt_id=receipt.id,
+            ))
         weekend = day.weekday() >= 5
-        for member, role, windows in staff_rows:
-            for window in windows:
-                # Thin the roster so the facility lands just under target —
-                # a demo that is comfortably compliant shows nothing useful.
-                if role == "ADMIN" and weekend:
-                    continue
-                chance = 0.62 if weekend else 0.72
-                if role == "RN":
-                    chance -= 0.06
-                if rng.random() > chance:
-                    continue
-                db.session.add(Shift(
-                    staff_id=member.id,
-                    facility_id=facility.id,
-                    date=day,
-                    start_time=window[0],
-                    end_time=window[1],
-                    is_direct_care=(role != "ADMIN"),
-                    break_minutes=30 if role != "ADMIN" else 0,
-                    is_agency=(rng.random() < 0.08),
-                    import_receipt_id=receipt.id,
-                    source_row=shifts + 2,
-                ))
-                shifts += 1
+        for member, role, windows, staff_index in staff_rows:
+            # Each person works at most one shift per day. The first three RNs
+            # are the coverage anchors; the rest of the roster is deliberately
+            # a little thin so the demo exposes useful amber actions.
+            if role == "ADMIN" and weekend:
+                continue
+            anchor_rn = role == "RN" and staff_index < 3
+            chance = {"RN": 0.75, "EN": 0.85, "PCW": 0.92, "ADMIN": 0.90}[role]
+            if weekend and role != "RN":
+                chance -= 0.05
+            if not anchor_rn and rng.random() > chance:
+                continue
+            window = windows[staff_index % len(windows)] if anchor_rn else windows[(offset + staff_index) % len(windows)]
+            db.session.add(Shift(
+                staff_id=member.id,
+                facility_id=facility.id,
+                date=day,
+                start_time=window[0],
+                end_time=window[1],
+                is_direct_care=(role != "ADMIN"),
+                break_minutes=30 if role != "ADMIN" else 0,
+                is_agency=(rng.random() < 0.08),
+                evidence_type="worked",
+                labour_cost=round((75 if role == "RN" else 48 if role == "EN" else 36) * 7.5, 2)
+                if role != "ADMIN" else None,
+                import_receipt_id=receipt.id,
+                source_row=shifts + 2,
+            ))
+            shifts += 1
+
+    # Seed the statutory reference period too, so the configured targets can be
+    # independently reconciled in the demo.
+    from carelog.domain.targets import reconcile_configured_targets, reference_period
+
+    quarter_start = date(today.year, ((today.month - 1) // 3) * 3 + 1, 1)
+    ref_start, ref_end, _ = reference_period(quarter_start)
+    ref_days = (ref_end - ref_start).days + 1
+    extra_ref_days = 0
+    for offset in range(ref_days):
+        day = ref_start + timedelta(days=offset)
+        if start <= day <= today:
+            continue
+        extra_ref_days += 1
+        for rid in resident_ids:
+            db.session.add(ResidentDay(
+                facility_id=facility.id, resident_id=rid, date=day,
+                occupied=True, service_type="an_acc", ancc_class=resident_classes[rid],
+                import_receipt_id=receipt.id,
+            ))
+    db.session.flush()
+    target_check = reconcile_configured_targets(facility, quarter_start)
+    facility.ancc_target = target_check["derived_care_target"] or facility.ancc_target
+    facility.rn_target = target_check["derived_rn_target"] or facility.rn_target
 
     receipt.shifts_imported = shifts
     receipt.residents_imported = residents
+    receipt.resident_days_imported = residents * (days + extra_ref_days)
     receipt.imported_at = datetime.utcnow()
     db.session.commit()
 

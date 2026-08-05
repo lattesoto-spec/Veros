@@ -70,6 +70,56 @@ class Resident(db.Model):
     discharged_date = db.Column(db.Date)
 
 
+class ResidentDay(db.Model):
+    """Auditable occupied-bed-day ledger.
+
+    When a facility has ledger rows for a date they are the denominator source
+    of truth for that date.  Admission/discharge dates remain a clearly marked
+    fallback for older imports.
+    """
+    __tablename__ = "resident_days"
+    __table_args__ = (db.UniqueConstraint(
+        "facility_id", "resident_id", "date", name="uq_resident_day_facility_resident_date"
+    ),)
+    id = db.Column(db.Integer, primary_key=True)
+    facility_id = db.Column(db.Integer, db.ForeignKey("facilities.id"), nullable=False)
+    resident_id = db.Column(db.Text, nullable=False)
+    resident_name = db.Column(db.Text)
+    date = db.Column(db.Date, nullable=False)
+    occupied = db.Column(db.Boolean, nullable=False, default=True)
+    service_type = db.Column(db.Text)       # permanent | respite | transition | other
+    leave_type = db.Column(db.Text)         # hospital | social | none
+    leave_day_number = db.Column(db.Integer)  # consecutive hospital-leave day
+    ancc_class = db.Column(db.Text)
+    exclusion_reason = db.Column(db.Text)
+    import_receipt_id = db.Column(db.Integer, db.ForeignKey("import_receipts.id"))
+    source_row = db.Column(db.Integer)
+
+
+class CareEpisode(db.Model):
+    """Resident-level delivered-care evidence used for reconciliation only.
+
+    Episodes do not feed the statutory staffing-hours numerator: overlapping
+    episodes and concurrent care would otherwise double count worked time.
+    """
+    __tablename__ = "care_episodes"
+    id = db.Column(db.Integer, primary_key=True)
+    facility_id = db.Column(db.Integer, db.ForeignKey("facilities.id"), nullable=False)
+    resident_id = db.Column(db.Text, nullable=False)
+    resident_name = db.Column(db.Text)
+    date = db.Column(db.Date, nullable=False)
+    care_type = db.Column(db.Text)
+    care_category = db.Column(db.Text)
+    staff_id = db.Column(db.Text)
+    staff_name = db.Column(db.Text)
+    source_role = db.Column(db.Text)
+    start_time = db.Column(db.Time)
+    end_time = db.Column(db.Time)
+    minutes = db.Column(db.Integer, nullable=False, default=0)
+    import_receipt_id = db.Column(db.Integer, db.ForeignKey("import_receipts.id"))
+    source_row = db.Column(db.Integer)
+
+
 class Staff(db.Model):
     __tablename__ = "staff"
     id = db.Column(db.Integer, primary_key=True)
@@ -108,6 +158,11 @@ class Shift(db.Model):
     is_direct_care = db.Column(db.Boolean, nullable=False, default=True)
     break_minutes = db.Column(db.Integer, nullable=False, default=0)
     is_agency = db.Column(db.Boolean, nullable=False, default=False)
+    # The evidence basis is explicit. Only "worked" rows feed historical
+    # compliance; "rostered" rows are planning evidence and "unverified" rows
+    # remain visible but are withheld until their source is confirmed.
+    evidence_type = db.Column(db.Text, nullable=False, default="unverified")
+    labour_cost = db.Column(db.Float)
     # Audit lineage: which import produced this row, and where it came from.
     import_receipt_id = db.Column(db.Integer, db.ForeignKey("import_receipts.id"))
     source_row = db.Column(db.Integer)
@@ -144,6 +199,9 @@ class ImportReceipt(db.Model):
     residents_skipped = db.Column(db.Integer, nullable=False, default=0)
     shifts_imported = db.Column(db.Integer, nullable=False, default=0)
     shifts_skipped = db.Column(db.Integer, nullable=False, default=0)
+    resident_days_imported = db.Column(db.Integer, nullable=False, default=0)
+    care_episodes_imported = db.Column(db.Integer, nullable=False, default=0)
+    evidence_type = db.Column(db.Text, nullable=False, default="unverified")
     first_shift_date = db.Column(db.Date)
     last_shift_date = db.Column(db.Date)
     # Audit trail
@@ -173,6 +231,7 @@ class ImportJob(db.Model):
     receipt_id = db.Column(db.Integer, db.ForeignKey("import_receipts.id"))
     files_json = db.Column(db.Text, nullable=False, default="[]")  # [{filename, stage, detail}]
     storage_prefix = db.Column(db.Text, nullable=False, default="")
+    evidence_type = db.Column(db.Text, nullable=False, default="unverified")
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
 

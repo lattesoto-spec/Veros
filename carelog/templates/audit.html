@@ -18,7 +18,7 @@
     <div class="table-wrap">
       <table>
         <thead>
-          <tr><th>#</th><th>When (UTC)</th><th>By</th><th>Shifts</th><th>Residents</th><th>Skipped</th><th>Date range</th><th>Parser</th><th>Calc</th><th>Source files</th><th></th></tr>
+          <tr><th>#</th><th>When (UTC)</th><th>By</th><th>Evidence</th><th>Shifts</th><th>Residents / days / episodes</th><th>Skipped</th><th>Date range</th><th>Parser</th><th>Calc</th><th>Source files</th><th></th></tr>
         </thead>
         <tbody>
         {% for r in receipts %}
@@ -26,8 +26,9 @@
             <td>{{ r.id }}</td>
             <td>{{ r.imported_at.strftime('%d %b %Y %H:%M') }}</td>
             <td>{{ r.imported_by or '—' }}</td>
+            <td>{{ r.evidence_type or 'unverified' }}</td>
             <td>{{ r.shifts_imported }}</td>
-            <td>{{ r.residents_imported }}</td>
+            <td>{{ r.residents_imported }} / {{ r.resident_days_imported }} / {{ r.care_episodes_imported }}</td>
             <td>{{ r.shifts_skipped }}</td>
             <td>
               {% if r.first_shift_date and r.last_shift_date %}

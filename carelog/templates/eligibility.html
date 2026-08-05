@@ -27,6 +27,7 @@
 
 {% for status, title, note in [
     ('pending',  'Awaiting decision',  'Not counted. Approve only if the person genuinely performs direct care in an eligible classification.'),
+    ('blocked',  'Approved but missing evidence', 'Not counted until current Ahpra registration evidence is recorded.'),
     ('approved', 'Counted',            'These minutes contribute to all three quarterly tests.'),
     ('excluded', 'Not counted',        'Roles that cannot contribute — allied health, lifestyle, care management, hotel services.')] %}
 {% if buckets.get(status) %}
@@ -53,8 +54,9 @@
             <td class="muted">{{ s.eligibility_reason or '—' }}</td>
             <td>
               {% set problem = registration_problem(s) %}
-              {% if s.registration_number %}{{ s.registration_number }}
-              {% elif problem %}<span class="pill pill-at_risk">{{ problem }}</span>
+              {% if problem %}<span class="pill pill-at_risk">{{ problem }}</span>
+                {% if s.registration_number %}<br><span class="muted">{{ s.registration_number }}</span>{% endif %}
+              {% elif s.registration_number %}{{ s.registration_number }}
               {% else %}—{% endif %}
             </td>
             {% if has_permission('manage_facility') %}
@@ -69,8 +71,24 @@
                       <option value="pending"  {% if s.eligibility_status=='pending'  %}selected{% endif %}>Leave undecided</option>
                     </select>
                   </label>
+                  <label>Count as
+                    <select name="mapped_role">
+                      {% for code, label in [('RN','Registered nurse'),('EN','Enrolled nurse'),('PCW','PCW / PCA / AIN'),('OTHER','Not an eligible role')] %}
+                      <option value="{{ code }}" {% if s.role==code or (code=='PCW' and s.role in ('PCA','AIN')) %}selected{% endif %}>{{ label }}</option>
+                      {% endfor %}
+                    </select>
+                  </label>
                   <label>Ahpra registration (RN/EN)
                     <input type="text" name="registration_number" value="{{ s.registration_number or '' }}">
+                  </label>
+                  <label>Registration expiry
+                    <input type="date" name="registration_expiry" value="{{ s.registration_expiry.isoformat() if s.registration_expiry else '' }}">
+                  </label>
+                  <label>Eligible from
+                    <input type="date" name="eligible_from" value="{{ s.eligible_from.isoformat() if s.eligible_from else '' }}">
+                  </label>
+                  <label>Eligible to
+                    <input type="date" name="eligible_to" value="{{ s.eligible_to.isoformat() if s.eligible_to else '' }}">
                   </label>
                   <label>Employment
                     <select name="employment_type">
@@ -80,7 +98,7 @@
                     </select>
                   </label>
                   <label>Basis for the decision
-                    <input type="text" name="reason" placeholder="e.g. AIN, Cert III, roster verified">
+                    <input type="text" name="reason" value="{{ s.eligibility_reason or '' }}" placeholder="e.g. AIN, Cert III and payroll classification verified">
                   </label>
                   <button type="submit">Save decision</button>
                 </form>

@@ -17,6 +17,7 @@ Two rules follow, and both are deliberately conservative:
 """
 
 import re
+from datetime import date
 
 # Reporting buckets. The mapping engine normalises to PCW; the government
 # statement calls the same bucket PCA.
@@ -94,6 +95,8 @@ def counts_toward_care(staff, on_day=None) -> bool:
         return False
     if bucket_for(staff.role) not in ELIGIBLE_BUCKETS:
         return False
+    if registration_problem(staff, on_day):
+        return False
     if on_day is not None:
         start = getattr(staff, "eligible_from", None)
         end = getattr(staff, "eligible_to", None)
@@ -104,7 +107,7 @@ def counts_toward_care(staff, on_day=None) -> bool:
     return True
 
 
-def registration_problem(staff) -> str | None:
+def registration_problem(staff, on_day=None) -> str | None:
     """Nurses must hold a current registration for their minutes to be safe to
     report. Returns a description when that cannot be evidenced."""
     bucket = bucket_for(staff.role)
@@ -112,4 +115,10 @@ def registration_problem(staff) -> str | None:
         return None
     if not (staff.registration_number or "").strip():
         return f"{bucket} has no Ahpra registration number recorded"
+    expiry = getattr(staff, "registration_expiry", None)
+    if not expiry:
+        return f"{bucket} has no Ahpra registration expiry recorded"
+    check_day = on_day or date.today()
+    if expiry < check_day:
+        return f"{bucket} Ahpra registration expired on {expiry.isoformat()}"
     return None

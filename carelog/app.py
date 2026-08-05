@@ -19,11 +19,18 @@ from flask import (
 
 from carelog.domain import eligibility as el
 from carelog.domain import exports as export_builders
-from carelog.domain.care_minutes import average, daily_stats, quarter_bounds, range_stats
+from carelog.domain.care_minutes import (
+    active_residents_on,
+    average,
+    daily_stats,
+    quarter_bounds,
+    range_stats,
+)
 from carelog.domain.compliance import (
     CALC_VERSION,
     compliance_pct,
     detect_gaps,
+    evidence_summary,
     forecast_quarter,
     monthly_breakdown,
     range_breakdown,
@@ -47,6 +54,7 @@ from carelog.integrations.registry import BY_KEY, PLATFORMS
 from carelog.integrations.sync import SyncError, sync_platform
 from carelog.models import (
     AuditLog,
+    CareEpisode,
     Facility,
     ImportJob,
     FormatMapping,
@@ -54,6 +62,7 @@ from carelog.models import (
     IntegrationConfig,
     Organization,
     Resident,
+    ResidentDay,
     Shift,
     Staff,
     User,
@@ -319,6 +328,9 @@ def create_app() -> Flask:
         errors = []
         name = (request.form.get("facility_name") or "").strip()
         files = [f for f in request.files.getlist("data_files") if f and f.filename]
+        evidence_type = (request.form.get("evidence_type") or "unverified").strip()
+        if evidence_type not in ("worked", "rostered", "unverified"):
+            errors.append("Choose a valid staffing evidence type.")
 
         # With several homes in one organization, the upload must say which one
         # it belongs to rather than silently landing in whichever is active.
@@ -362,6 +374,7 @@ def create_app() -> Flask:
             app, facility.id, payloads, _storage(),
             organization_id=current_organization_id(),
             user_id=user.id if user else None,
+            evidence_type=evidence_type,
         )
         auth.record("import_started", "import_job", job_id,
                     ", ".join(fname for fname, _ in payloads))
@@ -408,7 +421,11 @@ def create_app() -> Flask:
         )
 
     def _latest_data_date(facility):
-        latest = Shift.query.filter_by(facility_id=facility.id).order_by(Shift.date.desc()).first()
+        latest = Shift.query.filter_by(
+            facility_id=facility.id, evidence_type="worked"
+        ).order_by(Shift.date.desc()).first()
+        if latest is None:
+            latest = Shift.query.filter_by(facility_id=facility.id).order_by(Shift.date.desc()).first()
         return latest.date if latest else date.today()
 
     @app.route("/compliance")
@@ -431,6 +448,7 @@ def create_app() -> Flask:
             months=monthly_breakdown(facility.id, fc["q_start"], today) if fc else [],
             week=range_breakdown(facility.id, today - timedelta(days=6), today),
             calc_version=CALC_VERSION,
+            evidence=evidence_summary(facility.id, q_start, today),
         )
 
     @app.route("/scenarios", methods=["GET", "POST"])
@@ -648,7 +666,11 @@ def create_app() -> Flask:
         if not facility:
             return redirect(url_for("universal_import"))
 
-        latest_shift = Shift.query.filter_by(facility_id=facility.id).order_by(Shift.date.desc()).first()
+        latest_shift = Shift.query.filter_by(
+            facility_id=facility.id, evidence_type="worked"
+        ).order_by(Shift.date.desc()).first()
+        if latest_shift is None:
+            latest_shift = Shift.query.filter_by(facility_id=facility.id).order_by(Shift.date.desc()).first()
         today = latest_shift.date if latest_shift else date.today()
 
         today_stats = daily_stats(facility.id, today, facility.ancc_target, facility.rn_target)
@@ -669,11 +691,7 @@ def create_app() -> Flask:
             "target": facility.ancc_target,
         }
 
-        resident_count = (
-            db.session.query(Resident)
-            .filter(Resident.facility_id == facility.id, Resident.discharged_date == None)  # noqa: E711
-            .count()
-        )
+        resident_count = active_residents_on(facility.id, today)
 
         # Phase 6 additions
         pct = compliance_pct(facility, today)
@@ -706,6 +724,7 @@ def create_app() -> Flask:
             resident_count=resident_count,
             last_receipt=_latest_receipt(facility),
             quarters=available_quarters(facility.id),
+            evidence=evidence_summary(facility.id, q_start, today),
         )
 
     @app.route("/facility", methods=["GET"])
@@ -716,7 +735,11 @@ def create_app() -> Flask:
             return redirect(url_for("universal_import"))
         residents = Resident.query.filter_by(facility_id=facility.id).order_by(Resident.name).all()
         staff = Staff.query.filter_by(facility_id=facility.id).order_by(Staff.role, Staff.name).all()
-        return render_template("facility.html", facility=facility, residents=residents, staff=staff)
+        return render_template(
+            "facility.html", facility=facility, residents=residents, staff=staff,
+            resident_day_count=ResidentDay.query.filter_by(facility_id=facility.id).count(),
+            care_episode_count=CareEpisode.query.filter_by(facility_id=facility.id).count(),
+        )
 
     @app.route("/facility/targets", methods=["POST"])
     @require("manage_facility")
@@ -911,14 +934,19 @@ def create_app() -> Flask:
         files = _purge_evidence([receipt])
         shifts = Shift.query.filter_by(import_receipt_id=receipt.id).delete(
             synchronize_session=False)
+        resident_days = ResidentDay.query.filter_by(import_receipt_id=receipt.id).delete(
+            synchronize_session=False)
+        episodes = CareEpisode.query.filter_by(import_receipt_id=receipt.id).delete(
+            synchronize_session=False)
         ImportJob.query.filter_by(receipt_id=receipt.id).update(
             {"receipt_id": None}, synchronize_session=False)
         db.session.delete(receipt)
         auth.record("import_deleted", "import_receipt", receipt_id,
-                    f"{shifts} shifts, {files} evidence file(s)")
+                    f"{shifts} shifts, {resident_days} resident days, {episodes} care episodes, "
+                    f"{files} evidence file(s)")
         db.session.commit()
-        flash(f"Import #{receipt_id} deleted: {shifts} shift row(s) and "
-              f"{files} evidence file(s) removed.")
+        flash(f"Import #{receipt_id} deleted: {shifts} shift row(s), {resident_days} "
+              f"resident-day row(s), {episodes} care episode(s) and {files} evidence file(s) removed.")
         return redirect(url_for("audit"))
 
     # ------------------------------------------------------------ facilities
@@ -1043,9 +1071,14 @@ def create_app() -> Flask:
             Staff.query.filter_by(facility_id=facility.id)
             .order_by(Staff.eligibility_status, Staff.name).all()
         )
-        buckets = {"pending": [], "excluded": [], "approved": []}
+        buckets = {"pending": [], "excluded": [], "approved": [], "blocked": []}
+        latest_day = _latest_data_date(facility)
         for st in rows:
-            buckets.setdefault(st.eligibility_status, []).append(st)
+            bucket = (
+                "blocked" if st.eligibility_status == el.APPROVED
+                and el.registration_problem(st, latest_day) else st.eligibility_status
+            )
+            buckets.setdefault(bucket, []).append(st)
         withheld = sum(
             b["excluded_minutes"] for b in
             range_breakdown(facility.id, _latest_data_date(facility) - timedelta(days=29),
@@ -1054,7 +1087,7 @@ def create_app() -> Flask:
         return render_template(
             "eligibility.html",
             facility=facility, buckets=buckets, withheld=withheld,
-            registration_problem=el.registration_problem,
+            registration_problem=lambda staff: el.registration_problem(staff, latest_day),
         )
 
     @app.route("/eligibility/<int:staff_id>", methods=["POST"])
@@ -1069,18 +1102,46 @@ def create_app() -> Flask:
         if decision not in (el.APPROVED, el.EXCLUDED, el.PENDING):
             abort(400)
 
+        mapped_role = (request.form.get("mapped_role") or member.role or "OTHER").strip().upper()
+        if mapped_role not in ("RN", "EN", "PCW", "PCA", "AIN", "OTHER"):
+            abort(400)
+        if mapped_role in ("PCA", "AIN"):
+            mapped_role = "PCW"
+
+        def optional_date(field):
+            value = (request.form.get(field) or "").strip()
+            if not value:
+                return None
+            try:
+                return datetime.strptime(value, "%Y-%m-%d").date()
+            except ValueError:
+                abort(400)
+
         member.eligibility_status = decision
-        member.eligibility_reason = (request.form.get("reason") or "").strip() or (
-            f"set to {decision} by an administrator")
+        member.role = mapped_role
+        reason = (request.form.get("reason") or "").strip()
+        if decision in (el.APPROVED, el.EXCLUDED) and not reason:
+            flash("Record a basis for an approval or exclusion.")
+            return redirect(url_for("eligibility_queue"))
+        member.eligibility_reason = reason or f"left {decision} by an administrator"
         member.registration_number = (request.form.get("registration_number") or "").strip() \
             or member.registration_number
+        member.registration_expiry = optional_date("registration_expiry")
+        member.eligible_from = optional_date("eligible_from")
+        member.eligible_to = optional_date("eligible_to")
         member.employment_type = (request.form.get("employment_type") or "").strip() \
             or member.employment_type
+
+        problem = el.registration_problem(member, member.eligible_from or date.today())
+        if decision == el.APPROVED and problem:
+            flash(f"Cannot approve: {problem}.")
+            return redirect(url_for("eligibility_queue"))
         actor = current_user()
         member.approved_by_user_id = actor.id if actor else None
         member.approved_at = datetime.utcnow()
         auth.record("eligibility_decided", "staff", member.id,
-                    f"{member.name} ({member.role}) -> {decision}")
+                    f"{member.name} ({member.source_role or member.role}) -> {member.role}/{decision}: "
+                    f"{member.eligibility_reason}")
         db.session.commit()
         flash(f"{member.name} marked {decision}. Care minutes recalculated on next view.")
         return redirect(url_for("eligibility_queue"))
@@ -1360,6 +1421,10 @@ def _delete_facility_data(facility_ids):
     SQLite historically did not.
     """
     Shift.query.filter(Shift.facility_id.in_(facility_ids)).delete(
+        synchronize_session=False)
+    ResidentDay.query.filter(ResidentDay.facility_id.in_(facility_ids)).delete(
+        synchronize_session=False)
+    CareEpisode.query.filter(CareEpisode.facility_id.in_(facility_ids)).delete(
         synchronize_session=False)
     ImportJob.query.filter(ImportJob.facility_id.in_(facility_ids)).delete(
         synchronize_session=False)

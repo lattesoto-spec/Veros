@@ -2,7 +2,7 @@ from datetime import date, datetime, time, timedelta
 
 from sqlalchemy import or_
 
-from carelog.models import Resident, Shift, Staff, db
+from carelog.models import Resident, ResidentDay, db
 
 
 def _minutes_between(start: time, end: time) -> int:
@@ -14,6 +14,9 @@ def _minutes_between(start: time, end: time) -> int:
 
 
 def active_residents_on(facility_id: int, day: date) -> int:
+    ledger = ResidentDay.query.filter_by(facility_id=facility_id, date=day)
+    if ledger.first() is not None:
+        return sum(1 for row in ledger.all() if resident_day_is_occupied(row))
     return db.session.query(Resident).filter(
         Resident.facility_id == facility_id,
         Resident.admitted_date <= day,
@@ -21,28 +24,32 @@ def active_residents_on(facility_id: int, day: date) -> int:
     ).count()
 
 
+def resident_day_is_occupied(row: ResidentDay) -> bool:
+    """Apply the QFR occupied-bed-day exclusions to one ledger row."""
+    if not row.occupied:
+        return False
+    service = (row.service_type or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if service in {
+        "private", "private_resident", "transition_care", "transition_care_program",
+        "tcp", "other_program", "non_an_acc",
+    }:
+        return False
+    leave = (row.leave_type or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if leave in {"hospital", "hospital_leave", "hospital_transition"} and \
+            row.leave_day_number is not None and row.leave_day_number >= 29:
+        return False
+    return True
+
+
 def daily_stats(facility_id: int, day: date, ancc_target: float, rn_target: float) -> dict:
-    residents = active_residents_on(facility_id, day)
+    from carelog.domain.compliance import day_breakdown
 
-    shifts = (
-        db.session.query(Shift, Staff)
-        .join(Staff, Shift.staff_id == Staff.id)
-        .filter(
-            Shift.facility_id == facility_id,
-            Shift.date == day,
-            Shift.is_direct_care == True,  # noqa: E712
-        )
-        .all()
-    )
-
-    def worked(s):
-        return max(_minutes_between(s.start_time, s.end_time) - (s.break_minutes or 0), 0)
-
-    total_minutes = sum(worked(s) for s, _ in shifts)
-    rn_minutes = sum(worked(s) for s, st in shifts if st.role == "RN")
-
-    per_res = total_minutes / residents if residents else 0
-    rn_per_res = rn_minutes / residents if residents else 0
+    breakdown = day_breakdown(facility_id, day)
+    residents = breakdown["residents"]
+    total_minutes = breakdown["total_minutes"]
+    rn_minutes = breakdown["rn_minutes"]
+    per_res = breakdown["care_per_resident"]
+    rn_per_res = breakdown["rn_per_resident"]
 
     return {
         "date": day,
@@ -77,11 +84,12 @@ def range_stats(facility_id: int, start: date, end: date, ancc_target: float, rn
 
 
 def average(rows: list[dict]) -> dict:
-    rows_with_data = [r for r in rows if r["active_residents"] > 0 and r["total_minutes"] > 0]
+    rows_with_data = [r for r in rows if r["active_residents"] > 0]
     if not rows_with_data:
         return {"care_per_resident": 0, "rn_per_resident": 0, "days": 0}
-    care = sum(r["care_per_resident"] for r in rows_with_data) / len(rows_with_data)
-    rn = sum(r["rn_per_resident"] for r in rows_with_data) / len(rows_with_data)
+    bed_days = sum(r["active_residents"] for r in rows_with_data)
+    care = sum(r["total_minutes"] for r in rows_with_data) / bed_days
+    rn = sum(r["rn_minutes"] for r in rows_with_data) / bed_days
     return {
         "care_per_resident": round(care, 1),
         "rn_per_resident": round(rn, 1),

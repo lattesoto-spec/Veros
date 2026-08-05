@@ -11,11 +11,20 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 
 from carelog.domain.eligibility import classify
-from carelog.models import FormatMapping, Resident, Shift, Staff, db
+from carelog.models import (
+    CareEpisode,
+    FormatMapping,
+    Resident,
+    ResidentDay,
+    Shift,
+    Staff,
+    db,
+)
 
 from .analyzer import generate_mapping_spec
 from .fingerprint import fingerprint
 from .mapping import TargetResult, apply_header_overrides, run_spec
+from .presets import matching_spec
 from .quality import check_shifts
 from .reader import read_upload
 
@@ -29,6 +38,8 @@ class ImportOutcome:
     results: list[TargetResult]
     shifts_imported: int = 0
     residents_imported: int = 0
+    resident_days_imported: int = 0
+    care_episodes_imported: int = 0
     row_errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     first_shift_date: date | None = None
@@ -53,9 +64,16 @@ def get_or_create_mapping(sheets, filename: str, progress=None,
     if stored:
         return stored, True, None
 
-    if progress:
-        progress("learning format (AI)")
-    spec, usage = generate_mapping_spec(sheets, filename)
+    spec = matching_spec(sheets)
+    if spec:
+        usage = {"calls": 0, "input_tokens": 0, "output_tokens": 0,
+                 "method": "built-in exact mapping"}
+        if progress:
+            progress("matched built-in format")
+    else:
+        if progress:
+            progress("learning format (AI)")
+        spec, usage = generate_mapping_spec(sheets, filename)
     mapping = FormatMapping(
         organization_id=organization_id,
         fingerprint=fp,
@@ -68,7 +86,8 @@ def get_or_create_mapping(sheets, filename: str, progress=None,
     return mapping, False, usage
 
 
-def ingest_file(facility, filename: str, data: bytes, receipt=None, progress=None) -> ImportOutcome:
+def ingest_file(facility, filename: str, data: bytes, receipt=None, progress=None,
+                evidence_type: str = "unverified") -> ImportOutcome:
     """`receipt` (optional ImportReceipt) stamps audit lineage onto every shift.
     `progress` (optional callable taking a stage string) receives live status
     updates for the background-job status page."""
@@ -92,17 +111,31 @@ def ingest_file(facility, filename: str, data: bytes, receipt=None, progress=Non
         outcome.row_errors.extend(r.row_errors)
         if r.kind == "shifts":
             outcome.warnings.extend(check_shifts(r.records))
-            _import_shifts(facility, r.records, outcome)
-        else:
+            _import_shifts(facility, r.records, outcome, evidence_type=evidence_type)
+        elif r.kind == "residents":
             _import_residents(facility, r.records, outcome)
+        elif r.kind == "resident_days":
+            _import_resident_days(facility, r.records, outcome)
+        elif r.kind == "care_episodes":
+            _import_care_episodes(facility, r.records, outcome)
     return outcome
 
 
-def _import_shifts(facility, records: list[dict], outcome: ImportOutcome):
-    # Same contract as the classic upload: a shifts import replaces the
-    # facility's shifts. Only clear once even if several files carry shifts.
-    if outcome.shifts_imported == 0:
-        Shift.query.filter_by(facility_id=facility.id).delete()
+def _import_shifts(facility, records: list[dict], outcome: ImportOutcome,
+                   evidence_type: str = "unverified"):
+    if evidence_type not in ("worked", "rostered", "unverified"):
+        evidence_type = "unverified"
+
+    # Replace only the same evidence stream. A roster import must never erase
+    # actual-worked rows (or vice versa), and several files in one receipt may
+    # contribute to the same stream without deleting one another.
+    receipt = outcome.receipt
+    replaced = getattr(receipt, "_replaced_shift_evidence", set()) if receipt else set()
+    if evidence_type not in replaced:
+        Shift.query.filter_by(facility_id=facility.id, evidence_type=evidence_type).delete()
+        replaced.add(evidence_type)
+        if receipt is not None:
+            receipt._replaced_shift_evidence = replaced
 
     staff_cache = {s.staff_id: s for s in Staff.query.filter_by(facility_id=facility.id).all()}
     for rec in records:
@@ -110,16 +143,19 @@ def _import_shifts(facility, records: list[dict], outcome: ImportOutcome):
         role = (rec.get("role") or "OTHER").strip().upper() or "OTHER"
         name = (rec.get("staff_name") or "").strip() or sid
 
-        raw_role = (rec.get("role") or "").strip()
+        raw_role = (rec.get("source_role") or rec.get("role") or "").strip()
         bucket, status, reason = classify(raw_role or role)
+        if status == "approved" and bucket in ("RN", "EN", "PCA"):
+            role = "PCW" if bucket == "PCA" else bucket
 
         staff = staff_cache.get(sid)
         if staff:
             if rec.get("staff_name"):
                 staff.name = name
-            # An operator's approval decision is not overwritten by a re-import;
-            # only unreviewed records follow the source file.
-            if staff.eligibility_status != "approved":
+            # Any human decision is permanent until a human changes it. An
+            # excluded worker must not become approved merely because a file
+            # was imported again.
+            if staff.approved_at is None:
                 staff.role = role
                 staff.source_role = raw_role or staff.source_role
                 staff.eligibility_status = status
@@ -154,6 +190,9 @@ def _import_shifts(facility, records: list[dict], outcome: ImportOutcome):
             is_direct_care=bool(rec.get("is_direct_care", True)),
             break_minutes=break_minutes,
             is_agency=bool(rec.get("is_agency", False)),
+            evidence_type=evidence_type,
+            labour_cost=(float(rec["labour_cost"]) if isinstance(
+                rec.get("labour_cost"), (int, float)) else None),
             import_receipt_id=getattr(outcome.receipt, "id", None),
             source_row=rec.get("_source_row"),
         ))
@@ -176,7 +215,73 @@ def _import_residents(facility, records: list[dict], outcome: ImportOutcome):
         )
         if existing:
             for k, v in values.items():
-                setattr(existing, k, v)
+                if v not in (None, ""):
+                    setattr(existing, k, v)
         else:
             db.session.add(Resident(facility_id=facility.id, resident_id=rid, **values))
         outcome.residents_imported += 1
+
+
+def _import_resident_days(facility, records: list[dict], outcome: ImportOutcome):
+    for rec in records:
+        rid = str(rec["resident_id"]).strip()
+        day = rec["date"]
+        row = ResidentDay.query.filter_by(
+            facility_id=facility.id, resident_id=rid, date=day
+        ).first()
+        values = dict(
+            resident_name=str(rec.get("resident_name") or "").strip() or None,
+            occupied=bool(rec.get("occupied", True)),
+            service_type=str(rec.get("service_type") or "").strip() or None,
+            leave_type=str(rec.get("leave_type") or "").strip() or None,
+            leave_day_number=(int(rec["leave_day_number"]) if isinstance(
+                rec.get("leave_day_number"), (int, float)) else None),
+            ancc_class=str(rec.get("ancc_class") or "").strip() or None,
+            exclusion_reason=str(rec.get("exclusion_reason") or "").strip() or None,
+            import_receipt_id=getattr(outcome.receipt, "id", None),
+            source_row=rec.get("_source_row"),
+        )
+        if row:
+            for key, value in values.items():
+                setattr(row, key, value)
+        else:
+            db.session.add(ResidentDay(
+                facility_id=facility.id, resident_id=rid, date=day, **values
+            ))
+        outcome.resident_days_imported += 1
+
+
+def _import_care_episodes(facility, records: list[dict], outcome: ImportOutcome):
+    receipt = outcome.receipt
+    if not getattr(receipt, "_replaced_care_episodes", False):
+        CareEpisode.query.filter_by(facility_id=facility.id).delete()
+        if receipt is not None:
+            receipt._replaced_care_episodes = True
+
+    for rec in records:
+        minutes = rec.get("minutes")
+        if not isinstance(minutes, (int, float)):
+            start, end = rec.get("start_time"), rec.get("end_time")
+            if isinstance(start, time) and isinstance(end, time):
+                a = datetime.combine(rec["date"], start)
+                b = datetime.combine(rec["date"], end)
+                if b < a:
+                    b += timedelta(days=1)
+                minutes = (b - a).total_seconds() / 60
+        db.session.add(CareEpisode(
+            facility_id=facility.id,
+            resident_id=str(rec["resident_id"]).strip(),
+            resident_name=str(rec.get("resident_name") or "").strip() or None,
+            date=rec["date"],
+            care_type=str(rec.get("care_type") or "").strip() or None,
+            care_category=str(rec.get("care_category") or "").strip() or None,
+            staff_id=str(rec.get("staff_id") or "").strip() or None,
+            staff_name=str(rec.get("staff_name") or "").strip() or None,
+            source_role=str(rec.get("source_role") or rec.get("role") or "").strip() or None,
+            start_time=rec.get("start_time"),
+            end_time=rec.get("end_time"),
+            minutes=max(int(minutes or 0), 0),
+            import_receipt_id=getattr(outcome.receipt, "id", None),
+            source_row=rec.get("_source_row"),
+        ))
+        outcome.care_episodes_imported += 1

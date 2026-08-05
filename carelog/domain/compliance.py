@@ -10,9 +10,9 @@ from datetime import date, datetime, time, timedelta
 
 from carelog.domain.care_minutes import _minutes_between, active_residents_on, quarter_bounds
 from carelog.domain import eligibility
-from carelog.models import Shift, Staff, db
+from carelog.models import CareEpisode, ResidentDay, Shift, Staff, db
 
-CALC_VERSION = "2026.08.1"
+CALC_VERSION = "2026.08.2"
 
 # Canonical reporting buckets. The mapping engine normalizes to PCW; the
 # government statement calls the bucket PCA — they are the same bucket.
@@ -30,7 +30,7 @@ def worked_minutes(shift: Shift) -> int:
 # ------------------------------------------------------------- daily stats
 
 
-def day_breakdown(facility_id: int, day: date) -> dict:
+def day_breakdown(facility_id: int, day: date, evidence_type: str = "worked") -> dict:
     """Per-role direct-care minutes for one day."""
     shifts = (
         db.session.query(Shift, Staff)
@@ -39,6 +39,7 @@ def day_breakdown(facility_id: int, day: date) -> dict:
             Shift.facility_id == facility_id,
             Shift.date == day,
             Shift.is_direct_care == True,  # noqa: E712
+            Shift.evidence_type == evidence_type,
         )
         .all()
     )
@@ -71,16 +72,18 @@ def day_breakdown(facility_id: int, day: date) -> dict:
         "ineligible_minutes": ineligible,
         "other_minutes": ineligible,   # retained for existing report templates
         "agency_minutes": agency,
+        "evidence_type": evidence_type,
         "care_per_resident": round(total / residents, 1) if residents else 0.0,
         "rn_per_resident": round(roles["RN"] / residents, 1) if residents else 0.0,
     }
 
 
-def range_breakdown(facility_id: int, start: date, end: date) -> list[dict]:
+def range_breakdown(facility_id: int, start: date, end: date,
+                    evidence_type: str = "worked") -> list[dict]:
     out = []
     d = start
     while d <= end:
-        out.append(day_breakdown(facility_id, d))
+        out.append(day_breakdown(facility_id, d, evidence_type=evidence_type))
         d += timedelta(days=1)
     return out
 
@@ -115,24 +118,27 @@ def monthly_breakdown(facility_id: int, start: date, end: date) -> list[dict]:
 # ------------------------------------------------------------- RN coverage
 
 
-def rn_coverage(facility_id: int, day: date, ignore_gap_minutes: int = 30) -> dict:
+def rn_coverage(facility_id: int, day: date, ignore_gap_minutes: int = 30,
+                evidence_type: str = "worked") -> dict:
     """Fraction of the 24h day with at least one RN on duty.
 
     Only gaps *shorter than* `ignore_gap_minutes` are disregarded: a gap of
     exactly 30 minutes is reportable, so the comparison must be strict.
     """
     shifts = (
-        db.session.query(Shift)
+        db.session.query(Shift, Staff)
         .join(Staff, Shift.staff_id == Staff.id)
         .filter(
             Shift.facility_id == facility_id,
             Shift.date == day,
-            Staff.role == "RN",
+            Shift.evidence_type == evidence_type,
         )
         .all()
     )
     intervals = []
-    for s in shifts:
+    for s, st in shifts:
+        if eligibility.bucket_for(st.role) != "RN" or not eligibility.counts_toward_care(st, day):
+            continue
         start = datetime.combine(day, s.start_time)
         end = datetime.combine(day, s.end_time)
         if end <= start:
@@ -140,17 +146,19 @@ def rn_coverage(facility_id: int, day: date, ignore_gap_minutes: int = 30) -> di
         intervals.append((start, min(end, datetime.combine(day + timedelta(days=1), time(0)))))
     # overnight shifts from the previous day spill into today
     prev = (
-        db.session.query(Shift)
+        db.session.query(Shift, Staff)
         .join(Staff, Shift.staff_id == Staff.id)
         .filter(
             Shift.facility_id == facility_id,
             Shift.date == day - timedelta(days=1),
-            Staff.role == "RN",
+            Shift.evidence_type == evidence_type,
         )
         .all()
     )
     day_start = datetime.combine(day, time(0))
-    for s in prev:
+    for s, st in prev:
+        if eligibility.bucket_for(st.role) != "RN" or not eligibility.counts_toward_care(st, day):
+            continue
         if s.end_time <= s.start_time:  # crossed midnight
             intervals.append((day_start, datetime.combine(day, s.end_time)))
 
@@ -200,11 +208,19 @@ def detect_gaps(facility, today: date) -> list[dict]:
                             f"(projected {fc['projected_avg']:.0f} vs target "
                             f"{facility.ancc_target:.0f})."),
             })
-        if fc["qtd_rn_avg"] < facility.rn_target:
+        if fc["qtd_rn_avg"] < facility.rn_target * RN_ONLY_FRACTION:
             alerts.append({
                 "severity": "high",
                 "message": (f"RN minutes below target: averaging {fc['qtd_rn_avg']:.0f} "
-                            f"of {facility.rn_target:.0f} RN mins/resident/day this quarter."),
+                            f"of {facility.rn_target * RN_ONLY_FRACTION:.1f} required "
+                            f"RN-only mins/bed-day this quarter."),
+            })
+        if fc["qtd_rn_en_avg"] < facility.rn_target:
+            alerts.append({
+                "severity": "high",
+                "message": (f"RN + EN minutes below target: averaging "
+                            f"{fc['qtd_rn_en_avg']:.0f} of {facility.rn_target:.0f} "
+                            f"mins/bed-day this quarter."),
             })
 
     # Tomorrow's rostered RN shortfall (only if the roster extends that far)
@@ -213,9 +229,12 @@ def detect_gaps(facility, today: date) -> list[dict]:
         Shift.facility_id == fid, Shift.date >= tomorrow
     ).first() is not None
     if has_future:
-        b = day_breakdown(fid, tomorrow)
+        has_roster = db.session.query(Shift.id).filter_by(
+            facility_id=fid, date=tomorrow, evidence_type="rostered"
+        ).first() is not None
+        b = day_breakdown(fid, tomorrow, evidence_type="rostered" if has_roster else "worked")
         residents = b["residents"] or active_residents_on(fid, today)
-        rn_needed = facility.rn_target * residents
+        rn_needed = facility.rn_target * RN_ONLY_FRACTION * residents
         if b["rn_minutes"] < rn_needed:
             alerts.append({
                 "severity": "high",
@@ -261,6 +280,7 @@ def _trailing_baseline(facility_id: int, today: date, days: int = 14) -> dict | 
     return {
         "total_minutes": sum(r["total_minutes"] for r in rows) / n,
         "rn_minutes": sum(r["rn_minutes"] for r in rows) / n,
+        "en_minutes": sum(r["en_minutes"] for r in rows) / n,
         "agency_minutes": sum(r["agency_minutes"] for r in rows) / n,
         "residents": sum(r["residents"] for r in rows) / n,
     }
@@ -275,18 +295,24 @@ def forecast_quarter(facility, today: date, adjustments: dict | None = None) -> 
     q_start, _ = quarter_bounds(today)
     q_end = _calendar_quarter_end(today)
     qtd = [r for r in range_breakdown(facility.id, q_start, today)
-           if r["residents"] > 0 and r["total_minutes"] > 0]
+           if r["residents"] > 0]
     baseline = _trailing_baseline(facility.id, today)
     if not qtd or not baseline:
         return None
 
     n = len(qtd)
-    qtd_avg = sum(r["care_per_resident"] for r in qtd) / n
-    qtd_rn_avg = sum(r["rn_per_resident"] for r in qtd) / n
+    qtd_bed_days = sum(r["residents"] for r in qtd)
+    qtd_total = sum(r["total_minutes"] for r in qtd)
+    qtd_rn = sum(r["rn_minutes"] for r in qtd)
+    qtd_en = sum(r["en_minutes"] for r in qtd)
+    qtd_avg = qtd_total / qtd_bed_days
+    qtd_rn_avg = qtd_rn / qtd_bed_days
+    qtd_rn_en_avg = (qtd_rn + qtd_en) / qtd_bed_days
 
     adj = adjustments or {}
     fut_total = baseline["total_minutes"]
     fut_rn = baseline["rn_minutes"]
+    fut_en = baseline["en_minutes"]
     fut_res = baseline["residents"]
     if adj.get("rn_shifts_removed"):
         removed = adj["rn_shifts_removed"] * 8 * 60
@@ -304,14 +330,16 @@ def forecast_quarter(facility, today: date, adjustments: dict | None = None) -> 
     fut_rn_per_res = fut_rn / fut_res
 
     m = max((q_end - today).days, 0)
-    projected = (qtd_avg * n + fut_per_res * m) / (n + m) if (n + m) else qtd_avg
-    projected_rn = (qtd_rn_avg * n + fut_rn_per_res * m) / (n + m) if (n + m) else qtd_rn_avg
+    projected_bed_days = qtd_bed_days + fut_res * m
+    projected = (qtd_total + fut_total * m) / projected_bed_days
+    projected_rn = (qtd_rn + fut_rn * m) / projected_bed_days
+    projected_rn_en = (qtd_rn + qtd_en + (fut_rn + fut_en) * m) / projected_bed_days
 
     days_until_breach = None
     target = facility.ancc_target
     if qtd_avg >= target and fut_per_res < target:
         for k in range(1, m + 1):
-            if (qtd_avg * n + fut_per_res * k) / (n + k) < target:
+            if (qtd_total + fut_total * k) / (qtd_bed_days + fut_res * k) < target:
                 days_until_breach = k
                 break
 
@@ -320,13 +348,18 @@ def forecast_quarter(facility, today: date, adjustments: dict | None = None) -> 
         "q_start": q_start, "q_end": q_end,
         "qtd_days": n, "days_remaining": m,
         "qtd_avg": round(qtd_avg, 1), "qtd_rn_avg": round(qtd_rn_avg, 1),
+        "qtd_rn_en_avg": round(qtd_rn_en_avg, 1),
         "future_per_resident": round(fut_per_res, 1),
         "future_rn_per_resident": round(fut_rn_per_res, 1),
         "projected_avg": round(projected, 1),
         "projected_rn_avg": round(projected_rn, 1),
+        "projected_rn_en_avg": round(projected_rn_en, 1),
         "days_until_breach": days_until_breach,
         "on_track": projected >= target,
-        "rn_on_track": projected_rn >= facility.rn_target,
+        "rn_on_track": (
+            projected_rn >= facility.rn_target * RN_ONLY_FRACTION
+            and projected_rn_en >= facility.rn_target
+        ),
         "baseline_residents": round(fut_res, 1),
     }
 
@@ -420,10 +453,73 @@ def quarterly_tests(facility, start: date, end: date) -> dict:
                f"RN + EN minutes per bed day, against {RN_PLUS_EN_FRACTION:.0%} of the RN target"),
     ]
     decided = [x for x in tests if x["passed"] is not None]
+    from carelog.domain.targets import reconcile_configured_targets
+
     return {
         "totals": t,
         "tests": tests,
         "passed": all(x["passed"] for x in decided) if decided else None,
         "failed": [x for x in decided if not x["passed"]],
         "calc_version": CALC_VERSION,
+        "target_reconciliation": reconcile_configured_targets(facility, start),
+    }
+
+
+def evidence_summary(facility_id: int, start: date, end: date) -> dict:
+    """Reconcile evidence streams without mixing them into the statutory total."""
+    shift_rows = (
+        db.session.query(Shift, Staff)
+        .join(Staff, Shift.staff_id == Staff.id)
+        .filter(Shift.facility_id == facility_id, Shift.date >= start, Shift.date <= end)
+        .all()
+    )
+    by_type = {"worked": 0, "rostered": 0, "unverified": 0}
+    withheld_by_type = {"worked": 0, "rostered": 0, "unverified": 0}
+    for shift, staff in shift_rows:
+        kind = shift.evidence_type or "unverified"
+        by_type.setdefault(kind, 0)
+        if shift.is_direct_care and eligibility.counts_toward_care(staff, shift.date):
+            by_type[kind] += worked_minutes(shift)
+        elif shift.is_direct_care:
+            withheld_by_type.setdefault(kind, 0)
+            withheld_by_type[kind] += worked_minutes(shift)
+
+    episodes = CareEpisode.query.filter(
+        CareEpisode.facility_id == facility_id,
+        CareEpisode.date >= start,
+        CareEpisode.date <= end,
+    ).all()
+    delivered = sum(e.minutes or 0 for e in episodes)
+    ledger_query = ResidentDay.query.filter(
+        ResidentDay.facility_id == facility_id,
+        ResidentDay.date >= start,
+        ResidentDay.date <= end,
+    )
+    ledger_rows = ledger_query.count()
+    ledger_unverified = ledger_query.filter(
+        (ResidentDay.service_type == None) | (ResidentDay.service_type == "")  # noqa: E711
+    ).count()
+    ledger_dates = db.session.query(ResidentDay.date).filter(
+        ResidentDay.facility_id == facility_id,
+        ResidentDay.date >= start,
+        ResidentDay.date <= end,
+    ).distinct().count()
+    expected_dates = (end - start).days + 1
+    worked = by_type.get("worked", 0)
+    return {
+        "worked_minutes": worked,
+        "rostered_minutes": by_type.get("rostered", 0),
+        "unverified_minutes": by_type.get("unverified", 0),
+        "worked_withheld_minutes": withheld_by_type.get("worked", 0),
+        "rostered_withheld_minutes": withheld_by_type.get("rostered", 0),
+        "unverified_withheld_minutes": withheld_by_type.get("unverified", 0),
+        "delivered_minutes": delivered,
+        "delivered_variance": delivered - worked,
+        "care_episode_count": len(episodes),
+        "resident_day_rows": ledger_rows,
+        "resident_day_unverified_rows": ledger_unverified,
+        "resident_day_dates": ledger_dates,
+        "resident_day_expected_dates": expected_dates,
+        "uses_resident_day_ledger": ledger_rows > 0,
+        "resident_day_ledger_complete": ledger_dates == expected_dates,
     }

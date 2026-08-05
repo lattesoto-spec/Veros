@@ -10,6 +10,10 @@ Normalized schemas produced:
   shifts:    staff_id, staff_name, role, date, start_time, end_time,
              minutes, is_direct_care
   residents: resident_id, name, ancc_class, admitted_date, discharged_date
+  resident_days: date, resident_id, resident_name, occupied, service_type,
+                 leave_type, ancc_class, exclusion_reason
+  care_episodes: date, resident_id, resident_name, care_type, care_category,
+                 staff_id, staff_name, role, start_time, end_time, minutes
 """
 
 import re
@@ -19,12 +23,21 @@ from datetime import date, datetime, time
 from .reader import Sheet
 
 SHIFT_FIELDS = [
-    "staff_id", "staff_name", "role", "date",
+    "staff_id", "staff_name", "role", "source_role", "date",
     "start_time", "end_time", "minutes", "break_minutes",
-    "is_direct_care", "is_agency",
+    "is_direct_care", "is_agency", "labour_cost",
 ]
 RESIDENT_FIELDS = [
     "resident_id", "name", "ancc_class", "admitted_date", "discharged_date",
+]
+RESIDENT_DAY_FIELDS = [
+    "date", "resident_id", "resident_name", "occupied", "service_type",
+    "leave_type", "leave_day_number", "ancc_class", "exclusion_reason",
+]
+CARE_EPISODE_FIELDS = [
+    "date", "resident_id", "resident_name", "care_type", "care_category",
+    "staff_id", "staff_name", "role", "source_role", "start_time",
+    "end_time", "minutes",
 ]
 
 DATE_FORMATS = [
@@ -130,7 +143,7 @@ def _resolve_column(row: dict, headers: list[str], column: str) -> str:
     raise MappingError(f"column not found: {column!r}")
 
 
-def _extract_field(fs: dict, row: dict, headers: list[str]):
+def _raw_field(fs: dict, row: dict, headers: list[str]) -> str:
     source = fs.get("source", "column")
     if source == "constant":
         raw = fs.get("value", "")
@@ -143,7 +156,11 @@ def _extract_field(fs: dict, row: dict, headers: list[str]):
     else:
         raw = _resolve_column(row, headers, fs.get("column", ""))
 
-    raw = (raw or "").strip()
+    return (raw or "").strip()
+
+
+def _extract_field(fs: dict, row: dict, headers: list[str]):
+    raw = _raw_field(fs, row, headers)
 
     vm = fs.get("value_map")
     if vm:
@@ -207,11 +224,16 @@ def _pick_sheet(target: dict, sheets: list[Sheet]) -> Sheet:
 
 def run_target(target: dict, sheets: list[Sheet]) -> TargetResult:
     kind = target.get("kind")
-    if kind not in ("shifts", "residents"):
+    if kind not in ("shifts", "residents", "resident_days", "care_episodes"):
         raise MappingError(f"unknown target kind: {kind!r}")
     sheet = _pick_sheet(target, sheets)
     fields_spec = target.get("fields", {})
-    allowed = SHIFT_FIELDS if kind == "shifts" else RESIDENT_FIELDS
+    allowed = {
+        "shifts": SHIFT_FIELDS,
+        "residents": RESIDENT_FIELDS,
+        "resident_days": RESIDENT_DAY_FIELDS,
+        "care_episodes": CARE_EPISODE_FIELDS,
+    }[kind]
 
     result = TargetResult(kind=kind, sheet=sheet.name, records=[])
     for idx, row in enumerate(sheet.rows, start=sheet.header_row_index + 2):
@@ -225,6 +247,10 @@ def run_target(target: dict, sheets: list[Sheet]) -> TargetResult:
                 continue
             try:
                 record[name] = _extract_field(fs, row, sheet.headers)
+                # Normalisation must never destroy the evidence used by the
+                # eligibility classifier. Preserve the exact source title.
+                if name == "role":
+                    record["source_role"] = _raw_field(fs, row, sheet.headers)
             except (ValueError, MappingError) as e:
                 err = f"Row {idx}: {name}: {e}"
                 break
@@ -250,11 +276,25 @@ def _check_record(kind: str, r: dict) -> str | None:
         has_minutes = isinstance(r.get("minutes"), (int, float)) and r["minutes"] > 0
         if not has_times and not has_minutes:
             return "no start/end times and no duration"
-    else:
+    elif kind == "residents":
         if not r.get("resident_id"):
             return "resident_id is blank"
         if not r.get("name"):
             return "name is blank"
+    elif kind == "resident_days":
+        if not r.get("resident_id"):
+            return "resident_id is blank"
+        if not isinstance(r.get("date"), date):
+            return "date missing"
+    elif kind == "care_episodes":
+        if not r.get("resident_id"):
+            return "resident_id is blank"
+        if not isinstance(r.get("date"), date):
+            return "date missing"
+        has_times = isinstance(r.get("start_time"), time) and isinstance(r.get("end_time"), time)
+        has_minutes = isinstance(r.get("minutes"), (int, float)) and r["minutes"] > 0
+        if not has_times and not has_minutes:
+            return "no start/end times and no duration"
     return None
 
 

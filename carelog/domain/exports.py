@@ -15,9 +15,11 @@ from carelog.domain.compliance import (
     compliance_pct,
     detect_gaps,
     forecast_quarter,
+    evidence_summary,
     monthly_breakdown,
     range_breakdown,
     rn_coverage,
+    quarterly_tests,
 )
 
 DAILY_COLUMNS = [
@@ -27,7 +29,8 @@ DAILY_COLUMNS = [
     ("rn_minutes", "RN minutes"),
     ("en_minutes", "EN minutes"),
     ("pca_minutes", "PCA/PCW minutes"),
-    ("other_minutes", "Other minutes"),
+    ("excluded_minutes", "Withheld eligibility minutes"),
+    ("ineligible_minutes", "Ineligible minutes"),
     ("agency_minutes", "Agency minutes"),
     ("care_per_resident", "Care mins / resident"),
     ("rn_per_resident", "RN mins / resident"),
@@ -76,6 +79,29 @@ def summary_xlsx(facility, start: date, end: date) -> bytes:
     wi.append(["AN-ACC target (mins/resident/day)", facility.ancc_target])
     wi.append(["RN target (mins/resident/day)", facility.rn_target])
     wi.append(["Calculation version", CALC_VERSION])
+    wi.append(["Historical compliance source", "Eligible actual-worked rows only"])
+
+    wt = wb.create_sheet("Compliance tests")
+    wt.append(["Test", "Achieved", "Required", "Result", "Shortfall per OBD", "Shortfall total minutes"])
+    for c in wt[1]:
+        c.font = bold
+    tests = quarterly_tests(facility, start, end)
+    for row in tests["tests"]:
+        wt.append([row["label"], row["achieved"], row["target"],
+                   "PASS" if row["passed"] else "FAIL" if row["passed"] is not None else "NO TARGET",
+                   row["shortfall"], row["shortfall_minutes"]])
+
+    we = wb.create_sheet("Evidence reconciliation")
+    we.append(["Evidence stream", "Minutes / rows", "Treatment"])
+    for c in we[1]:
+        c.font = bold
+    evidence = evidence_summary(facility.id, start, end)
+    we.append(["Actual worked", evidence["worked_minutes"], "Included if role eligible"])
+    we.append(["Rostered", evidence["rostered_minutes"], "Planning only - excluded from historical compliance"])
+    we.append(["Unverified", evidence["unverified_minutes"], "Withheld"])
+    we.append(["Delivered care", evidence["delivered_minutes"], "Reconciliation only - never added to staffing hours"])
+    we.append(["Resident-day ledger rows", evidence["resident_day_rows"],
+               "Denominator source" if evidence["uses_resident_day_ledger"] else "Admission/discharge fallback in use"])
 
     out = io.BytesIO()
     wb.save(out)
@@ -93,9 +119,11 @@ def board_pdf(facility, today: date) -> bytes:
     pct = compliance_pct(facility, today)
     cov = rn_coverage(facility.id, today)
     alerts = detect_gaps(facility, today)
+    tests = quarterly_tests(facility, fc["q_start"], today) if fc else None
+    evidence = evidence_summary(facility.id, fc["q_start"], today) if fc else None
 
     elements = [
-        Paragraph(f"{facility.name} — Board Care Minutes Report", h1),
+        Paragraph(f"{facility.name} - Board Care Minutes Report", h1),
         Paragraph(today.strftime("Prepared %d %B %Y"), small),
         Spacer(1, 6 * mm),
     ]
@@ -105,8 +133,10 @@ def board_pdf(facility, today: date) -> bytes:
             ["Quarter-to-date average", f"{fc['qtd_avg']:.1f} mins/resident/day",
              f"Target {facility.ancc_target:.0f}"],
             ["Compliance", f"{pct:.1f}% of target" if pct is not None else "—", ""],
-            ["RN quarter-to-date average", f"{fc['qtd_rn_avg']:.1f} mins/resident/day",
-             f"Target {facility.rn_target:.0f}"],
+            ["RN-only quarter-to-date", f"{fc['qtd_rn_avg']:.1f} mins/bed-day",
+             f"Required {facility.rn_target * 0.9:.1f}"],
+            ["RN + EN quarter-to-date", f"{fc['qtd_rn_en_avg']:.1f} mins/bed-day",
+             f"Required {facility.rn_target:.1f}"],
             ["Projected quarter-end average", f"{fc['projected_avg']:.1f}",
              "On track" if fc["on_track"] else "AT RISK"],
             ["RN 24/7 coverage (today)", f"{cov['coverage_pct']:.1f}%", ""],
@@ -133,18 +163,37 @@ def board_pdf(facility, today: date) -> bytes:
                 ("BACKGROUND", (0, 0), (-1, 0), colors.whitesmoke),
             ]))
             elements += [Paragraph("Quarter by month", styles["Heading3"]), t2, Spacer(1, 6 * mm)]
+        if tests:
+            test_rows = [["Quarterly test", "Achieved", "Required", "Result"]]
+            for row in tests["tests"]:
+                test_rows.append([row["label"], row["achieved"], row["target"],
+                                  "PASS" if row["passed"] else "FAIL"])
+            tt = Table(test_rows, colWidths=[75 * mm, 35 * mm, 35 * mm, 30 * mm])
+            tt.setStyle(TableStyle([
+                ("FONTSIZE", (0, 0), (-1, -1), 9),
+                ("GRID", (0, 0), (-1, -1), 0.4, colors.lightgrey),
+                ("BACKGROUND", (0, 0), (-1, 0), colors.whitesmoke),
+            ]))
+            elements += [Paragraph("Three quarterly tests", styles["Heading3"]), tt, Spacer(1, 6 * mm)]
+        if evidence and (evidence["unverified_minutes"] or not evidence["uses_resident_day_ledger"]):
+            elements.append(Paragraph(
+                f"Evidence: {evidence['worked_minutes']} worked minutes; "
+                f"{evidence['unverified_minutes']} unverified minutes; "
+                f"resident-day ledger {'loaded' if evidence['uses_resident_day_ledger'] else 'not loaded'}.",
+                body,
+            ))
     else:
         elements.append(Paragraph("Insufficient data for quarter analysis.", body))
 
     elements.append(Paragraph("Risks and alerts", styles["Heading3"]))
     for a in alerts:
-        prefix = {"high": "● HIGH — ", "medium": "● MEDIUM — ", "info": "○ "}[a["severity"]]
+        prefix = {"high": "HIGH - ", "medium": "MEDIUM - ", "info": "- "}[a["severity"]]
         elements.append(Paragraph(prefix + a["message"], body))
     elements += [
         Spacer(1, 8 * mm),
         Paragraph(
-            f"Generated by CareMin · calculation version {CALC_VERSION} · figures derive from "
-            "imported rosters; verify against payroll before external submission.", small),
+            f"Generated by CareMin - calculation version {CALC_VERSION} - figures derive from "
+            "eligible actual-worked evidence; resolve evidence warnings before external submission.", small),
     ]
 
     out = io.BytesIO()

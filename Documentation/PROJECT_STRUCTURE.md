@@ -13,10 +13,12 @@ carelog/
   storage.py                Object storage for retained audit evidence
   templates/                Jinja templates
   domain/                   Calculation and output building — no Flask, no request state
-    care_minutes.py           daily/range statistics
-    compliance.py             targets, forecasts, gap detection, CALC_VERSION
+    care_minutes.py           occupied-bed-day ledger and daily/range statistics
+    compliance.py             canonical worked-evidence tests, forecasts and CALC_VERSION
+    eligibility.py            direct-care role and Ahpra evidence gates
+    targets.py                Aged Care Rules reference-period target reconciliation
     exports.py                CSV and Excel builders
-    reports.py                PDF builders
+    reports.py                readiness-gated performance statement PDF
   ingestion/                Universal import
     reader.py                 CSV/Excel/ZIP -> sheets
     structured.py             JSON/JSONL/SQL/SQLite -> sheets
@@ -24,6 +26,7 @@ carelog/
     fingerprint.py            structural fingerprint of an upload
     analyzer.py               asks Claude for a mapping spec
     mapping.py                executes a spec deterministically
+    presets.py                exact, zero-AI mappings for known evidence layouts
     quality.py                data-quality warnings
     pipeline.py               read -> fingerprint -> learn/reuse -> map -> persist
     jobs.py                   background import jobs (thread or self-invoke)
@@ -41,6 +44,7 @@ scripts/
 tests/
   test_mapping_engine.py    Offline: mapping specs across all 7 fixture formats
   test_ingestion.py         End-to-end, needs ANTHROPIC_API_KEY
+  test_regulatory_engine.py Weighted targets, evidence, eligibility, OBD and RN coverage
 Documentation/
 ```
 

@@ -56,6 +56,14 @@
       {% else %}
       <input type="hidden" name="facility_id" value="{{ facility.id }}">
       {% endif %}
+      <label>Staffing evidence represented by shift rows
+        <select name="evidence_type" required>
+          <option value="unverified" selected>Unverified - withhold from compliance until confirmed</option>
+          <option value="worked">Actual worked / time-and-attendance</option>
+          <option value="rostered">Rostered / planned staffing</option>
+        </select>
+        <span class="muted">Resident-day and care-episode sheets are identified separately from their structure.</span>
+      </label>
       <label>Data files (CSV, Excel, JSON, SQL, ZIP)
         <div id="dropzone" style="border:2px dashed #bbb;border-radius:8px;padding:1.5rem;text-align:center;cursor:pointer;margin:.4rem 0;">
           <span id="dropzone-label">Drag &amp; drop files here, or click to browse</span>

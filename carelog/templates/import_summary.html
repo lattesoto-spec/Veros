@@ -6,7 +6,9 @@
     <p class="eyebrow">Universal import</p>
     <h1>Import complete</h1>
     <p class="muted">
-      {{ receipt.shifts_imported }} shifts and {{ receipt.residents_imported }} residents imported
+      {{ receipt.shifts_imported }} shifts, {{ receipt.residents_imported }} residents,
+      {{ receipt.resident_days_imported }} resident days and
+      {{ receipt.care_episodes_imported }} care episodes imported
       for {{ facility.name }}{% if receipt.shifts_skipped %} · {{ receipt.shifts_skipped }} rows skipped{% endif %}.
     </p>
   </div>
@@ -22,14 +24,15 @@
           Format <code>{{ o.fingerprint[:12] }}</code> ·
           {% if o.mapping_reused %}known format — stored parser reused, no AI call
           {% else %}new format — parser generated and saved for future uploads{% endif %}
-          {% if o.ai_usage %} ({{ o.ai_usage.calls }} AI call{{ 's' if o.ai_usage.calls != 1 }},
+          {% if o.ai_usage and o.ai_usage.method %} ({{ o.ai_usage.method }})
+          {% elif o.ai_usage %} ({{ o.ai_usage.calls }} AI call{{ 's' if o.ai_usage.calls != 1 }},
           {{ o.ai_usage.input_tokens + o.ai_usage.output_tokens }} tokens){% endif %}
         </p>
       </div>
     </div>
     {% for r in o.results %}
     <p>
-      <strong>{{ r.kind }}</strong> from sheet “{{ r.sheet }}”:
+      <strong>{{ r.kind.replace('_', ' ') }}</strong> from sheet “{{ r.sheet }}”:
       {{ r.imported }} of {{ r.rows_seen - r.rows_filtered }} rows imported
       {% if r.rows_filtered %} · {{ r.rows_filtered }} filtered (leave/non-shift rows){% endif %}
     </p>
