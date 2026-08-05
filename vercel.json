@@ -8,5 +8,5 @@
       "maxDuration": 300
     }
   },
-  "buildCommand": "python scripts/vercel_build.py"
+  "buildCommand": "python build.py"
 }

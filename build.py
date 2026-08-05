@@ -1,4 +1,8 @@
-"""Build-time database migration.
+"""Build-time database migration. Runs as vercel.json buildCommand.
+
+This lives at the repository root on purpose: `.vercelignore` excludes
+`scripts/` from the upload, so a build script kept there is not present when
+the build runs.
 
 Vercel runs this once per deployment, which is exactly the right moment to
 bring the schema up to date: after the new code exists, before any request can

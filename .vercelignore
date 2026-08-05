@@ -14,3 +14,6 @@ uploads/
 fly.toml
 Dockerfile
 .idea/
+to_solve/
+docker-compose.yml
+.env.example
