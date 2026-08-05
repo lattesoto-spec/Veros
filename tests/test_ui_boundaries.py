@@ -68,9 +68,9 @@ def test_login_is_branded_accessible_and_keeps_context_on_error(web_app):
     assert b">Sign in</button>" in page.data
     assert b"Sign in securely" not in page.data
     assert b'/brand/full.png' in page.data
-    assert b'/brand/simple.png' in page.data
+    assert b'/brand/favicon.png' in page.data
 
-    icon = client.get("/brand/simple.png")
+    icon = client.get("/brand/favicon.png")
     assert icon.status_code == 200
     assert icon.content_type == "image/png"
 

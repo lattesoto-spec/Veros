@@ -123,7 +123,7 @@ def create_app() -> Flask:
         @app.route("/brand/<filename>")
         def brand_asset(filename):
             """Serve the approved CareMin brand assets in every environment."""
-            if filename not in {"full.png", "simple.png"}:
+            if filename not in {"full.png", "simple.png", "favicon.png"}:
                 abort(404)
             return send_from_directory(os.path.join(ROOT, "icons"), filename)
 

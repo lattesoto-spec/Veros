@@ -572,7 +572,7 @@ button:hover {
     linear-gradient(155deg, #17243a 0%, #1e293b 58%, #263753 100%);
 }
 
-.auth-logo-frame { width: 220px; height: 68px; }
+.auth-logo-frame { width: 252px; height: 68px; }
 .auth-logo-frame img { width: 338px; }
 .config-logo-frame { width: 190px; height: 60px; }
 .config-logo-frame img { width: 292px; }
