@@ -10,11 +10,12 @@ import json
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 
+from carelog.domain.eligibility import classify
 from carelog.models import FormatMapping, Resident, Shift, Staff, db
 
 from .analyzer import generate_mapping_spec
 from .fingerprint import fingerprint
-from .mapping import TargetResult, run_spec
+from .mapping import TargetResult, apply_header_overrides, run_spec
 from .quality import check_shifts
 from .reader import read_upload
 
@@ -79,7 +80,7 @@ def ingest_file(facility, filename: str, data: bytes, receipt=None, progress=Non
     spec = json.loads(mapping.spec_json)
     if progress:
         progress("extracting rows")
-    results = run_spec(spec, sheets)
+    results = run_spec(spec, apply_header_overrides(spec, sheets))
 
     outcome = ImportOutcome(
         filename=filename, fingerprint=mapping.fingerprint, mapping_reused=reused,
@@ -109,13 +110,26 @@ def _import_shifts(facility, records: list[dict], outcome: ImportOutcome):
         role = (rec.get("role") or "OTHER").strip().upper() or "OTHER"
         name = (rec.get("staff_name") or "").strip() or sid
 
+        raw_role = (rec.get("role") or "").strip()
+        bucket, status, reason = classify(raw_role or role)
+
         staff = staff_cache.get(sid)
         if staff:
             if rec.get("staff_name"):
                 staff.name = name
-            staff.role = role
+            # An operator's approval decision is not overwritten by a re-import;
+            # only unreviewed records follow the source file.
+            if staff.eligibility_status != "approved":
+                staff.role = role
+                staff.source_role = raw_role or staff.source_role
+                staff.eligibility_status = status
+                staff.eligibility_reason = reason
         else:
-            staff = Staff(facility_id=facility.id, staff_id=sid, name=name, role=role)
+            staff = Staff(
+                facility_id=facility.id, staff_id=sid, name=name, role=role,
+                source_role=raw_role,
+                eligibility_status=status, eligibility_reason=reason,
+            )
             db.session.add(staff)
             db.session.flush()
             staff_cache[sid] = staff

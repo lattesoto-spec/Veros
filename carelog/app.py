@@ -17,6 +17,7 @@ from flask import (
     url_for,
 )
 
+from carelog.domain import eligibility as el
 from carelog.domain import exports as export_builders
 from carelog.domain.care_minutes import average, daily_stats, quarter_bounds, range_stats
 from carelog.domain.compliance import (
@@ -26,6 +27,7 @@ from carelog.domain.compliance import (
     forecast_quarter,
     monthly_breakdown,
     range_breakdown,
+    quarterly_tests,
     rn_coverage,
 )
 from carelog import auth
@@ -145,9 +147,11 @@ def create_app() -> Flask:
 
     @app.cli.command("init-db")
     def init_db_command():
-        """Create any missing tables."""
-        init_db()
+        """Create any missing tables and columns."""
+        added = init_db()
         print(f"Schema ready on {db.engine.url.render_as_string(hide_password=True)}")
+        if added:
+            print("Added columns: " + ", ".join(added))
 
     @app.cli.command("bootstrap-org")
     @click.option("--name", required=True, help="Organization (company) name")
@@ -390,10 +394,12 @@ def create_app() -> Flask:
             return redirect(url_for("universal_import"))
         today = _latest_data_date(facility)
         fc = forecast_quarter(facility, today)
+        q_start, _ = quarter_bounds(today)
         return render_template(
             "compliance.html",
             facility=facility,
             today=today,
+            tests=quarterly_tests(facility, q_start, today),
             forecast=fc,
             alerts=detect_gaps(facility, today),
             coverage=rn_coverage(facility.id, today),
@@ -844,23 +850,51 @@ def create_app() -> Flask:
     @app.route("/clear", methods=["POST"])
     @require("manage_facility")
     def clear():
-        """Delete this organization's care data. Scoped to the caller's own
-        facilities — this route used to empty every table for every tenant."""
+        """Delete this organization's care data, including retained evidence."""
+        if not _confirmed(request):
+            flash('Type "delete" to confirm — nothing was deleted.')
+            return redirect(url_for("settings"))
+
         org_id = current_organization_id()
-        facility_ids = [f.id for f in Facility.query.filter_by(organization_id=org_id)]
+        facilities = Facility.query.filter_by(organization_id=org_id).all()
+        facility_ids = [f.id for f in facilities]
+        receipts = (
+            ImportReceipt.query.filter(ImportReceipt.facility_id.in_(facility_ids)).all()
+            if facility_ids else []
+        )
+        files = _purge_evidence(receipts)
         if facility_ids:
-            for model in (Shift, Staff, Resident, ImportReceipt):
-                model.query.filter(model.facility_id.in_(facility_ids)).delete(
-                    synchronize_session=False)
-            ImportJob.query.filter(ImportJob.facility_id.in_(facility_ids)).delete(
-                synchronize_session=False)
+            _delete_facility_data(facility_ids)
             Facility.query.filter(Facility.id.in_(facility_ids)).delete(
                 synchronize_session=False)
         auth.record("data_cleared", "organization", org_id,
-                    f"{len(facility_ids)} facility/facilities")
+                    f"{len(facility_ids)} facility/facilities, {files} evidence file(s)")
         db.session.commit()
-        flash("All care data for your organization has been deleted.")
+        flash(f"Deleted all care data for your organization "
+              f"({len(facility_ids)} facility/facilities, {files} evidence file(s)).")
         return redirect(url_for("universal_import"))
+
+    @app.route("/audit/receipt/<int:receipt_id>/delete", methods=["POST"])
+    @require("manage_facility")
+    def delete_receipt(receipt_id):
+        """Delete one import: its rows, its receipt and its retained files."""
+        receipt = owned_or_404(db.session.get(ImportReceipt, receipt_id))
+        if not _confirmed(request):
+            flash('Type "delete" to confirm — nothing was deleted.')
+            return redirect(url_for("audit"))
+
+        files = _purge_evidence([receipt])
+        shifts = Shift.query.filter_by(import_receipt_id=receipt.id).delete(
+            synchronize_session=False)
+        ImportJob.query.filter_by(receipt_id=receipt.id).update(
+            {"receipt_id": None}, synchronize_session=False)
+        db.session.delete(receipt)
+        auth.record("import_deleted", "import_receipt", receipt_id,
+                    f"{shifts} shifts, {files} evidence file(s)")
+        db.session.commit()
+        flash(f"Import #{receipt_id} deleted: {shifts} shift row(s) and "
+              f"{files} evidence file(s) removed.")
+        return redirect(url_for("audit"))
 
     # ------------------------------------------------------------ facilities
 
@@ -954,16 +988,77 @@ def create_app() -> Flask:
             id=facility_id, organization_id=current_organization_id()).first()
         if facility is None:
             abort(404)
+        if not _confirmed(request):
+            flash('Type "delete" to confirm — nothing was deleted.')
+            return redirect(url_for("facilities_view"))
+
         name = facility.name
-        for model in (Shift, Staff, Resident, ImportReceipt):
-            model.query.filter_by(facility_id=facility.id).delete(synchronize_session=False)
-        ImportJob.query.filter_by(facility_id=facility.id).delete(synchronize_session=False)
+        files = _purge_evidence(
+            ImportReceipt.query.filter_by(facility_id=facility.id).all())
+        _delete_facility_data([facility.id])
         db.session.delete(facility)
-        auth.record("facility_deleted", "facility", facility_id, name)
+        auth.record("facility_deleted", "facility", facility_id,
+                    f"{name}, {files} evidence file(s)")
         db.session.commit()
         session.pop("facility_id", None)
-        flash(f"{name} and all of its care data have been deleted.")
+        flash(f"{name} deleted, along with its care data and "
+              f"{files} evidence file(s).")
         return redirect(url_for("facilities_view"))
+
+    # ------------------------------------------------- eligibility exceptions
+
+    @app.route("/eligibility")
+    @require("view_audit")
+    def eligibility_queue():
+        """Staff whose minutes are being withheld until someone confirms them."""
+        facility = current_facility()
+        if not facility:
+            return redirect(url_for("universal_import"))
+        rows = (
+            Staff.query.filter_by(facility_id=facility.id)
+            .order_by(Staff.eligibility_status, Staff.name).all()
+        )
+        buckets = {"pending": [], "excluded": [], "approved": []}
+        for st in rows:
+            buckets.setdefault(st.eligibility_status, []).append(st)
+        withheld = sum(
+            b["excluded_minutes"] for b in
+            range_breakdown(facility.id, _latest_data_date(facility) - timedelta(days=29),
+                            _latest_data_date(facility))
+        )
+        return render_template(
+            "eligibility.html",
+            facility=facility, buckets=buckets, withheld=withheld,
+            registration_problem=el.registration_problem,
+        )
+
+    @app.route("/eligibility/<int:staff_id>", methods=["POST"])
+    @require("manage_facility")
+    def eligibility_decide(staff_id):
+        facility = current_facility()
+        member = Staff.query.filter_by(id=staff_id, facility_id=facility.id).first() \
+            if facility else None
+        if member is None:
+            abort(404)
+        decision = (request.form.get("decision") or "").strip()
+        if decision not in (el.APPROVED, el.EXCLUDED, el.PENDING):
+            abort(400)
+
+        member.eligibility_status = decision
+        member.eligibility_reason = (request.form.get("reason") or "").strip() or (
+            f"set to {decision} by an administrator")
+        member.registration_number = (request.form.get("registration_number") or "").strip() \
+            or member.registration_number
+        member.employment_type = (request.form.get("employment_type") or "").strip() \
+            or member.employment_type
+        actor = current_user()
+        member.approved_by_user_id = actor.id if actor else None
+        member.approved_at = datetime.utcnow()
+        auth.record("eligibility_decided", "staff", member.id,
+                    f"{member.name} ({member.role}) -> {decision}")
+        db.session.commit()
+        flash(f"{member.name} marked {decision}. Care minutes recalculated on next view.")
+        return redirect(url_for("eligibility_queue"))
 
     # ------------------------------------------------- platform owner console
 
@@ -1227,6 +1322,50 @@ def _storage_for(receipt):
     return _storage()
 
 
+def _confirmed(req) -> bool:
+    """Destructive actions require the word typed out, not just a click."""
+    return (req.form.get("confirm") or "").strip().lower() == "delete"
+
+
+def _delete_facility_data(facility_ids):
+    """Remove care data for facilities, in an order the foreign keys allow.
+
+    Shifts reference both staff and receipts, and import jobs reference
+    receipts — so receipts cannot go first. Postgres enforces this even though
+    SQLite historically did not.
+    """
+    Shift.query.filter(Shift.facility_id.in_(facility_ids)).delete(
+        synchronize_session=False)
+    ImportJob.query.filter(ImportJob.facility_id.in_(facility_ids)).delete(
+        synchronize_session=False)
+    ImportReceipt.query.filter(ImportReceipt.facility_id.in_(facility_ids)).delete(
+        synchronize_session=False)
+    for model in (Staff, Resident):
+        model.query.filter(model.facility_id.in_(facility_ids)).delete(
+            synchronize_session=False)
+
+
+def _purge_evidence(receipts) -> int:
+    """Delete retained source files for the given receipts.
+
+    Storage failures are logged rather than raised: the database deletion is
+    the part the user asked for, and a leftover blob must not block it.
+    """
+    from flask import current_app
+
+    removed = 0
+    for receipt in receipts:
+        if not receipt.source_path:
+            continue
+        try:
+            store = _storage_for(receipt)
+            removed += store.delete([o.key for o in _receipt_files(receipt)])
+        except StorageError as e:
+            current_app.logger.warning(
+                "Could not delete evidence for receipt %s: %s", receipt.id, e)
+    return removed
+
+
 def _receipt_files(receipt):
     """Evidence files retained for a receipt, whichever storage holds them."""
     if not receipt.source_path:
@@ -1335,8 +1474,49 @@ def _auto_init_db(uri: str) -> bool:
 
 
 def init_db():
-    """Create any missing tables."""
+    """Create any missing tables, then add any columns the models have gained.
+
+    `create_all()` never alters an existing table, so a deployed database keeps
+    whatever shape it had when it was created. This adds the gap additively —
+    it never drops, renames or retypes anything, so it cannot destroy data. A
+    change that needs more than that (dropping a column, changing a type,
+    backfilling with logic) needs Alembic.
+    """
     db.create_all()
+    added = add_missing_columns()
+    return added
+
+
+def add_missing_columns() -> list[str]:
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(db.engine)
+    dialect = db.engine.dialect
+    present = set(inspector.get_table_names())
+    added = []
+
+    for table in db.metadata.sorted_tables:
+        if table.name not in present:
+            continue
+        have = {c["name"] for c in inspector.get_columns(table.name)}
+        for column in table.columns:
+            if column.name in have:
+                continue
+            clause = f'ALTER TABLE "{table.name}" ADD COLUMN "{column.name}" ' \
+                     f'{column.type.compile(dialect)}'
+            default = getattr(column.default, "arg", None)
+            if default is not None and not callable(default):
+                literal = f"'{default}'" if isinstance(default, str) else str(default)
+                clause += f" DEFAULT {literal}"
+                if not column.nullable:
+                    clause += " NOT NULL"
+            # A NOT NULL column with no default cannot be added to a table that
+            # already has rows; leave it nullable rather than fail the deploy.
+            db.session.execute(text(clause))
+            added.append(f"{table.name}.{column.name}")
+    if added:
+        db.session.commit()
+    return added
 
 
 def _color_for(status: str) -> str:

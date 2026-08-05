@@ -1,6 +1,49 @@
 {% extends "base.html" %}
 {% block title %}Compliance – CareMin{% endblock %}
 {% block content %}
+{% if tests %}
+<section class="block">
+  <div class="section-card">
+    <div class="section-heading">
+      <div>
+        <h2>Quarterly compliance tests</h2>
+        <p class="muted">
+          All three must pass. Figures are total eligible worked minutes divided by
+          occupied bed days over {{ tests.totals.days }} day(s)
+          ({{ tests.totals.bed_days }} bed days) · calc {{ tests.calc_version }}
+        </p>
+      </div>
+    </div>
+    <div style="overflow-x:auto">
+      <table class="data-table">
+        <thead><tr><th>Test</th><th>Achieved</th><th>Required</th><th>Result</th><th>Shortfall</th></tr></thead>
+        <tbody>
+        {% for x in tests.tests %}
+          <tr>
+            <td>{{ x.label }}<br><span class="muted">{{ x.basis }}</span></td>
+            <td>{{ x.achieved }}</td>
+            <td>{{ x.target }}</td>
+            <td>
+              {% if x.passed is none %}<span class="pill">no target set</span>
+              {% elif x.passed %}<span class="pill pill-on_track">pass</span>
+              {% else %}<span class="pill pill-behind">fail</span>{% endif %}
+            </td>
+            <td>{% if x.shortfall %}{{ x.shortfall }} min/bed-day ({{ x.shortfall_minutes }} total){% else %}—{% endif %}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% if tests.totals.excluded_minutes %}
+    <p class="muted">
+      {{ tests.totals.excluded_minutes }} minutes are excluded pending an eligibility
+      decision — see <a href="{{ url_for('eligibility_queue') }}">Eligibility</a>.
+    </p>
+    {% endif %}
+  </div>
+</section>
+{% endif %}
+
 <section class="page-header">
   <div>
     <p class="eyebrow">Compliance engine</p>

@@ -12,7 +12,7 @@ import os
 import anthropic
 import httpx
 
-from .mapping import run_spec, validate_results
+from .mapping import apply_header_overrides, run_spec, validate_results
 from .reader import Sheet
 
 # Haiku keeps per-format learning cheap; the validate-and-retry loop below
@@ -80,6 +80,11 @@ Field spec language (per normalized field):
 
 Per target:
 - sheet: sheet name to read (omit for single-sheet files).
+- header_row: 0-based index into grid_preview, set ONLY when detected_header_row
+  is wrong. Exports often begin with a merged title banner and a subtitle, which
+  can be mistaken for the header; the real header is the row whose cells are
+  distinct short labels and which is followed by consistent data. When you set
+  this, name columns as they appear in THAT row.
 - row_filter: optional {"column", "include_values" | "exclude_values"} to drop non-shift rows
   (leave, sick, unfilled, totals). Values are compared lowercased.
 
@@ -107,11 +112,17 @@ def _structure_payload(sheets: list[Sheet]) -> str:
     for s in sheets:
         doc.append({
             "sheet": s.name,
+            "detected_header_row": s.header_row_index,
             "headers": s.headers,
             "column_types": infer_column_types(s),
             "row_count": len(s.rows),
             "sample_rows": s.rows[:SAMPLE_ROWS],
             "notes": s.notes,
+            # The unprocessed top of the sheet. `headers` above is a guess made
+            # from this; if the guess is wrong, say so via header_row.
+            "grid_preview": [
+                {"row": i, "cells": cells} for i, cells in enumerate(s.preview)
+            ],
         })
     return json.dumps(doc, indent=2, ensure_ascii=False, default=str)
 
@@ -135,6 +146,8 @@ def _clean_spec(spec: dict) -> dict:
         ct = {"kind": t["kind"]}
         if t.get("sheet"):
             ct["sheet"] = t["sheet"]
+        if isinstance(t.get("header_row"), int):
+            ct["header_row"] = t["header_row"]
         rf = t.get("row_filter")
         if rf and rf.get("column"):
             crf = {"column": rf["column"]}
@@ -256,7 +269,7 @@ def generate_mapping_spec(sheets: list[Sheet], filename: str = "") -> tuple[dict
 
         spec = _clean_spec(raw_spec)
         try:
-            results = run_spec(spec, sheets)
+            results = run_spec(spec, apply_header_overrides(spec, sheets))
             problems = validate_results(results)
         except Exception as e:
             problems = [f"spec failed to execute: {e}"]

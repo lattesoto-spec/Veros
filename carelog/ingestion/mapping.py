@@ -282,3 +282,26 @@ def validate_results(results: list[TargetResult]) -> list[str]:
                 f"{r.kind}: only {len(r.records)}/{usable} rows parsed ({sample})"
             )
     return problems
+
+
+def apply_header_overrides(spec: dict, sheets: list) -> list:
+    """Re-read any sheet the spec says was headered on the wrong row.
+
+    Header detection runs before the analyzer sees anything, so this is how a
+    wrong guess gets corrected rather than silently mapped.
+    """
+    from carelog.ingestion.reader import rebuild_with_header
+
+    overrides = {}
+    for target in spec.get("targets", []):
+        row = target.get("header_row")
+        if isinstance(row, int):
+            overrides[target.get("sheet")] = row
+    if not overrides:
+        return sheets
+
+    out = []
+    for sheet in sheets:
+        row = overrides.get(sheet.name, overrides.get(None))
+        out.append(rebuild_with_header(sheet, row) if isinstance(row, int) else sheet)
+    return out

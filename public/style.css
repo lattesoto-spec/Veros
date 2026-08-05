@@ -632,3 +632,33 @@ button:hover {
   background: #e2e8f0;
   color: #334155;
 }
+
+/* --------------------------------------------------------- destructive UI */
+
+.danger-button {
+  background: #b91c1c;
+  color: #fff;
+  border: none;
+  padding: 8px 14px;
+  border-radius: 6px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.danger-button:hover { background: #991b1b; transform: none; }
+
+.confirm-form { margin-top: 10px; max-width: 320px; }
+.confirm-form input { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+.row-danger > summary {
+  cursor: pointer;
+  color: #b91c1c;
+  font-size: .82rem;
+  font-weight: 600;
+}
+.row-danger[open] {
+  padding: 10px;
+  border: 1px solid #f3c7c7;
+  border-radius: 8px;
+  background: #fef6f6;
+  min-width: 260px;
+}

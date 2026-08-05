@@ -60,9 +60,11 @@
         <p>Removes {{ f.name }} along with every shift, resident, staff record and
            import receipt belonging to it. This cannot be undone.</p>
         <form method="post" action="{{ url_for('facility_delete', facility_id=f.id) }}"
-              class="inline-form"
-              onsubmit="return confirm('Delete {{ f.name }} and all of its care data? This cannot be undone.');">
-          <button type="submit" class="link-button">Delete {{ f.name }}</button>
+              class="form confirm-form">
+          <label>Type <code>delete</code> to confirm
+            <input type="text" name="confirm" placeholder="delete" autocomplete="off" required>
+          </label>
+          <button type="submit" class="danger-button">Delete {{ f.name }}</button>
         </form>
       </details>
       {% endif %}

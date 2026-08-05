@@ -18,7 +18,7 @@
     <div class="table-wrap">
       <table>
         <thead>
-          <tr><th>#</th><th>When (UTC)</th><th>By</th><th>Shifts</th><th>Residents</th><th>Skipped</th><th>Date range</th><th>Parser</th><th>Calc</th><th>Source files</th></tr>
+          <tr><th>#</th><th>When (UTC)</th><th>By</th><th>Shifts</th><th>Residents</th><th>Skipped</th><th>Date range</th><th>Parser</th><th>Calc</th><th>Source files</th><th></th></tr>
         </thead>
         <tbody>
         {% for r in receipts %}
@@ -49,6 +49,23 @@
                   <a href="{{ url_for('audit_file', receipt_id=r.id, filename=f) }}">{{ f }}</a>{% if not loop.last %} · {% endif %}
                 {% endfor %}
               {% else %}not retained{% endif %}
+            </td>
+            <td>
+              {% if has_permission('manage_facility') %}
+              <details class="row-danger">
+                <summary>Delete</summary>
+                <form method="post" action="{{ url_for('delete_receipt', receipt_id=r.id) }}" class="form">
+                  <p class="muted">
+                    Removes this import's {{ r.shifts_imported }} shift row(s) and its
+                    retained file(s). Residents and staff are left in place.
+                  </p>
+                  <label>Type <code>delete</code>
+                    <input type="text" name="confirm" placeholder="delete" autocomplete="off" required>
+                  </label>
+                  <button type="submit" class="danger-button">Delete import #{{ r.id }}</button>
+                </form>
+              </details>
+              {% endif %}
             </td>
           </tr>
         {% endfor %}

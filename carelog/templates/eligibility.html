@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block title %}Eligibility – CareMin{% endblock %}
+{% block content %}
+<section class="page-header">
+  <div>
+    <p class="eyebrow">Compliance</p>
+    <h1>Care minute eligibility</h1>
+    <p class="muted">
+      Only registered nurses, enrolled nurses and personal care workers may count
+      toward the targets. Anything unresolved is <strong>excluded from the
+      figures</strong> until someone confirms it — an unreviewed row must never
+      quietly inflate a regulated number.
+    </p>
+  </div>
+</section>
+
+{% if buckets['pending'] %}
+<div class="errors">
+  <ul><li>
+    {{ buckets['pending']|length }} staff member{{ 's' if buckets['pending']|length != 1 }}
+    awaiting a decision.
+    {% if withheld %}Roughly {{ withheld }} minutes in the last 30 days are being
+    withheld from your care-minute totals as a result.{% endif %}
+  </li></ul>
+</div>
+{% endif %}
+
+{% for status, title, note in [
+    ('pending',  'Awaiting decision',  'Not counted. Approve only if the person genuinely performs direct care in an eligible classification.'),
+    ('approved', 'Counted',            'These minutes contribute to all three quarterly tests.'),
+    ('excluded', 'Not counted',        'Roles that cannot contribute — allied health, lifestyle, care management, hotel services.')] %}
+{% if buckets.get(status) %}
+<section class="block">
+  <div class="section-card">
+    <div class="section-heading">
+      <div>
+        <h2>{{ title }} ({{ buckets[status]|length }})</h2>
+        <p class="muted">{{ note }}</p>
+      </div>
+    </div>
+    <div style="overflow-x:auto">
+      <table class="data-table">
+        <thead>
+          <tr><th>Name</th><th>Role</th><th>As imported</th><th>Basis</th>
+              <th>Registration</th>{% if has_permission('manage_facility') %}<th>Decision</th>{% endif %}</tr>
+        </thead>
+        <tbody>
+        {% for s in buckets[status] %}
+          <tr>
+            <td>{{ s.name }}</td>
+            <td><code>{{ s.role }}</code></td>
+            <td class="muted">{{ s.source_role or '—' }}</td>
+            <td class="muted">{{ s.eligibility_reason or '—' }}</td>
+            <td>
+              {% set problem = registration_problem(s) %}
+              {% if s.registration_number %}{{ s.registration_number }}
+              {% elif problem %}<span class="pill pill-at_risk">{{ problem }}</span>
+              {% else %}—{% endif %}
+            </td>
+            {% if has_permission('manage_facility') %}
+            <td>
+              <details class="row-danger">
+                <summary>Change</summary>
+                <form method="post" action="{{ url_for('eligibility_decide', staff_id=s.id) }}" class="form">
+                  <label>Decision
+                    <select name="decision">
+                      <option value="approved" {% if s.eligibility_status=='approved' %}selected{% endif %}>Counted — eligible direct care</option>
+                      <option value="excluded" {% if s.eligibility_status=='excluded' %}selected{% endif %}>Not counted</option>
+                      <option value="pending"  {% if s.eligibility_status=='pending'  %}selected{% endif %}>Leave undecided</option>
+                    </select>
+                  </label>
+                  <label>Ahpra registration (RN/EN)
+                    <input type="text" name="registration_number" value="{{ s.registration_number or '' }}">
+                  </label>
+                  <label>Employment
+                    <select name="employment_type">
+                      {% for t in ('', 'employee', 'agency', 'contractor') %}
+                      <option value="{{ t }}" {% if s.employment_type==t %}selected{% endif %}>{{ t or 'not recorded' }}</option>
+                      {% endfor %}
+                    </select>
+                  </label>
+                  <label>Basis for the decision
+                    <input type="text" name="reason" placeholder="e.g. AIN, Cert III, roster verified">
+                  </label>
+                  <button type="submit">Save decision</button>
+                </form>
+              </details>
+            </td>
+            {% endif %}
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+{% endif %}
+{% endfor %}
+{% endblock %}

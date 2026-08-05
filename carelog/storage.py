@@ -13,6 +13,10 @@ Pick the backend with STORAGE_BACKEND=local|vercel_blob, or leave it unset and
 it is inferred: a BLOB_READ_WRITE_TOKEN means Vercel Blob, otherwise local.
 """
 
+# Annotations are lazy: this module defines a method named `list`, which would
+# otherwise shadow the builtin when evaluating `list[str]` in a signature.
+from __future__ import annotations
+
 import os
 from dataclasses import dataclass
 
@@ -37,6 +41,13 @@ class Storage:
 
     def list(self, prefix: str) -> list[StoredObject]:
         raise NotImplementedError
+
+    def delete(self, keys: list[str]) -> int:
+        """Remove objects. Returns how many were deleted."""
+        raise NotImplementedError
+
+    def delete_prefix(self, prefix: str) -> int:
+        return self.delete([o.key for o in self.list(prefix)])
 
     def describe(self) -> dict:
         """Human-readable backend info for the storage self-test."""
@@ -84,6 +95,18 @@ class LocalStorage(Storage):
                     size=os.path.getsize(full),
                 ))
         return out
+
+    def delete(self, keys):
+        removed = 0
+        for key in keys:
+            try:
+                os.remove(self._path(key))
+                removed += 1
+            except FileNotFoundError:
+                pass
+            except OSError as e:
+                raise StorageError(f"Could not delete {key}: {e}") from e
+        return removed
 
     def describe(self):
         return {"backend": "local", "root": self.root,
@@ -320,6 +343,27 @@ class VercelBlobStorage(Storage):
         if r.status_code >= 300:
             raise StorageError(f"Could not list blobs ({r.status_code}): {self._explain(r)}")
         return r.json().get("blobs", [])
+
+    def delete(self, keys):
+        import httpx
+
+        keys = [k for k in keys if k]
+        if not keys:
+            return 0
+        try:
+            r = httpx.post(
+                f"{self.BASE}/delete",
+                json={"urls": [k.lstrip("/") for k in keys]},
+                headers=self._headers({"content-type": "application/json"}),
+                timeout=60.0,
+            )
+        except httpx.HTTPError as e:
+            raise StorageError(f"Could not reach Vercel Blob to delete: {e}") from e
+        if r.status_code >= 300:
+            raise StorageError(
+                f"Vercel Blob refused the delete ({r.status_code}): {self._explain(r)}"
+            )
+        return len(keys)
 
     def list(self, prefix):
         out = []

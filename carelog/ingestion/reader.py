@@ -12,6 +12,11 @@ import io
 from dataclasses import dataclass, field
 
 
+# How many raw rows to keep for the analyzer to inspect. Enough to see a
+# title banner, a subtitle, a blank line and the real header.
+PREVIEW_ROWS = 12
+
+
 @dataclass
 class Sheet:
     name: str
@@ -19,6 +24,25 @@ class Sheet:
     rows: list[dict]  # header -> cell value (str)
     header_row_index: int = 0
     notes: list[str] = field(default_factory=list)
+    # The grid as it was before a header row was chosen. Kept so the choice can
+    # be revisited: header detection is a guess, and a guess the analyzer can
+    # see is a guess it can correct.
+    raw_rows: list[list[str]] = field(default_factory=list)
+
+    @property
+    def preview(self) -> list[list[str]]:
+        return self.raw_rows[:PREVIEW_ROWS]
+
+
+def rebuild_with_header(sheet: Sheet, header_row_index: int) -> Sheet:
+    """Re-interpret a sheet using a different row as the header."""
+    if not sheet.raw_rows or not (0 <= header_row_index < len(sheet.raw_rows)):
+        return sheet
+    rebuilt = _build_sheet(sheet.name, sheet.raw_rows, header_row_index)
+    rebuilt.notes = list(sheet.notes) + [
+        f"Header taken from row {header_row_index + 1} on the analyzer's instruction"
+    ]
+    return rebuilt
 
 
 class FileReadError(Exception):
@@ -222,7 +246,10 @@ def _find_header_row(raw_rows: list[list[str]], scan: int = 10) -> int:
         if len(non_empty) < 2:
             continue
         non_numeric = sum(1 for c in non_empty if not _looks_numeric(c))
-        score = len(non_empty) + 2.0 * (non_numeric / len(non_empty))
+        # Count distinct labels, not filled cells: a merged title banner is
+        # copied into every column it spans, so it looks as wide as the real
+        # header. A header names each column differently.
+        score = len(set(non_empty)) + 2.0 * (non_numeric / len(non_empty))
         if score > best_score:
             best_idx, best_score = i, score
     return best_idx
@@ -261,4 +288,5 @@ def _build_sheet(name: str, raw_rows: list[list[str]], header_idx: int) -> Sheet
             " ".join(c for c in r if (c or "").strip()) for r in raw_rows[:header_idx]
         )
         notes.append(f"Skipped {header_idx} preamble row(s): {preamble[:200]}")
-    return Sheet(name=name, headers=headers, rows=rows, header_row_index=header_idx, notes=notes)
+    return Sheet(name=name, headers=headers, rows=rows, header_row_index=header_idx,
+                 notes=notes, raw_rows=raw_rows)

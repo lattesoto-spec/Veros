@@ -54,6 +54,7 @@
         <a href="{{ url_for('integrations_view') }}" class="{{ 'active' if ep == 'integrations_view' }}">Integrations</a>
         {% endif %}
         {% if has_permission('view_audit') %}
+        <a href="{{ url_for('eligibility_queue') }}" class="{{ 'active' if ep == 'eligibility_queue' }}">Eligibility</a>
         <a href="{{ url_for('audit') }}" class="{{ 'active' if ep == 'audit' }}">Audit trail</a>
         {% endif %}
 

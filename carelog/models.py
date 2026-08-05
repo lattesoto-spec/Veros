@@ -77,6 +77,24 @@ class Staff(db.Model):
     staff_id = db.Column(db.Text, nullable=False)
     name = db.Column(db.Text, nullable=False)
     role = db.Column(db.Text, nullable=False)
+    # As it appeared in the source file, kept so an eligibility decision can be
+    # re-examined against what the provider actually sent.
+    source_role = db.Column(db.Text)
+
+    # Eligibility. Minutes count only while this is "approved": an unresolved
+    # role must never quietly inflate a regulated number.
+    eligibility_status = db.Column(db.Text, nullable=False, default="pending")
+    eligibility_reason = db.Column(db.Text)
+    eligible_from = db.Column(db.Date)
+    eligible_to = db.Column(db.Date)
+    approved_by_user_id = db.Column(db.Integer, db.ForeignKey("users.id"))
+    approved_at = db.Column(db.DateTime)
+
+    # Evidence of entitlement to work in the counted role.
+    employment_type = db.Column(db.Text)        # employee | agency | contractor
+    classification = db.Column(db.Text)         # award / EA classification
+    registration_number = db.Column(db.Text)    # Ahpra, for RN and EN
+    registration_expiry = db.Column(db.Date)
 
 
 class Shift(db.Model):

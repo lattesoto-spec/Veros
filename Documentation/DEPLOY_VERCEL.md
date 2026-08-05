@@ -21,11 +21,12 @@ getting it wrong means recreating them.
 | --- | --- |
 | `DATABASE_URL` | Optional explicit Postgres connection string. `postgres://` and `postgresql://` are both accepted and rewritten to the psycopg driver |
 | `STORAGE_DATABASE_URL` | Automatically added by Vercel's current Neon Storage connection and preferred by Vercel deployments |
-| `BLOB_READ_WRITE_TOKEN` | Vercel Blob credential. Its presence alone switches storage to the blob backend |
+| `BLOB_READ_WRITE_TOKEN` | Vercel Blob credential. Connecting a store injects it as `<PREFIX>_READ_WRITE_TOKEN`, where the prefix is whatever you typed at connection time — the app finds the token under any name, preferring a correctly-shaped one |
 | `SECRET_KEY` | Signs session cookies. Random, and never the dev default in production |
 | `WORKER_SECRET` | Required header on `/import/run/<job>`. Without it, anyone could trigger import workers |
 | `ANTHROPIC_API_KEY` | Format learning. Environment only — it is deliberately not settable from the UI |
 | `STORAGE_BACKEND` | `local` or `vercel_blob`. Inferred from the token when unset |
+| `VERCEL_BLOB_ACCESS` | `private` (default) or `public`. Only an optimisation — a wrong value is detected and corrected automatically |
 | `IMPORT_WORKER` | `thread` or `invoke`. Defaults to `invoke` on Vercel |
 | `DEBUG_TOKEN` | Opens `/debug/*` to a caller sending it as `x-debug-token`, without a session |
 
@@ -90,6 +91,22 @@ appears to work while discarding every write.
 
 `scripts/setup_vercel.sh` sets every variable for production, preview and
 development, which avoids this entirely.
+
+## Blob token naming
+
+Connecting a Blob store to a project does **not** necessarily create a variable
+called `BLOB_READ_WRITE_TOKEN`. Vercel injects `<PREFIX>_STORE_ID` and
+`<PREFIX>_READ_WRITE_TOKEN`, using the prefix you type when connecting. Setting
+the prefix to `BLOB_READ_WRITE_TOKEN` produces
+`BLOB_READ_WRITE_TOKEN_READ_WRITE_TOKEN`, and nothing under the plain name.
+
+`carelog/storage.py` therefore searches: the documented name, then anything
+ending `_READ_WRITE_TOKEN`, then any variable whose value is shaped like a blob
+token — always preferring one that actually parses. `/debug/storage` reports
+`token_from`, so you can see which variable it used.
+
+A token that cannot be parsed produces "Cannot get store id from token or
+header" from Vercel; the app turns that into a message naming the cause.
 
 ## Known limits and rough edges
 

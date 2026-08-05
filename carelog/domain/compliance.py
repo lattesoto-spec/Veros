@@ -9,21 +9,18 @@ from datetime import date, datetime, time, timedelta
 
 
 from carelog.domain.care_minutes import _minutes_between, active_residents_on, quarter_bounds
+from carelog.domain import eligibility
 from carelog.models import Shift, Staff, db
 
-CALC_VERSION = "2026.07.1"
+CALC_VERSION = "2026.08.1"
 
 # Canonical reporting buckets. The mapping engine normalizes to PCW; the
 # government statement calls the bucket PCA — they are the same bucket.
-ROLE_BUCKETS = {
-    "RN": "RN",
-    "EN": "EN", "EEN": "EN",
-    "PCW": "PCA", "PCA": "PCA", "AIN": "PCA",
-}
+ROLE_BUCKETS = eligibility.BUCKETS
 
 
 def bucket_role(role: str) -> str:
-    return ROLE_BUCKETS.get((role or "").strip().upper(), "OTHER")
+    return eligibility.bucket_for(role)
 
 
 def worked_minutes(shift: Shift) -> int:
@@ -45,14 +42,22 @@ def day_breakdown(facility_id: int, day: date) -> dict:
         )
         .all()
     )
-    roles = {"RN": 0, "EN": 0, "PCA": 0, "OTHER": 0}
+    roles = {"RN": 0, "EN": 0, "PCA": 0}
     agency = 0
+    excluded = 0            # eligible-looking rows whose staff is not approved
+    ineligible = 0          # roles that can never count
     for s, st in shifts:
         m = worked_minutes(s)
-        roles[bucket_role(st.role)] += m
-        if s.is_agency:
-            agency += m
+        if eligibility.counts_toward_care(st, day):
+            roles[bucket_role(st.role)] += m
+            if s.is_agency:
+                agency += m
+        elif bucket_role(st.role) in eligibility.ELIGIBLE_BUCKETS:
+            excluded += m   # right role, unapproved — surfaced as an exception
+        else:
+            ineligible += m
     residents = active_residents_on(facility_id, day)
+    # Only eligible, approved minutes reach the total.
     total = sum(roles.values())
     return {
         "date": day,
@@ -61,7 +66,10 @@ def day_breakdown(facility_id: int, day: date) -> dict:
         "rn_minutes": roles["RN"],
         "en_minutes": roles["EN"],
         "pca_minutes": roles["PCA"],
-        "other_minutes": roles["OTHER"],
+        "rn_en_minutes": roles["RN"] + roles["EN"],
+        "excluded_minutes": excluded,
+        "ineligible_minutes": ineligible,
+        "other_minutes": ineligible,   # retained for existing report templates
         "agency_minutes": agency,
         "care_per_resident": round(total / residents, 1) if residents else 0.0,
         "rn_per_resident": round(roles["RN"] / residents, 1) if residents else 0.0,
@@ -108,8 +116,11 @@ def monthly_breakdown(facility_id: int, start: date, end: date) -> list[dict]:
 
 
 def rn_coverage(facility_id: int, day: date, ignore_gap_minutes: int = 30) -> dict:
-    """Fraction of the 24h day with at least one RN on a direct-care shift.
-    Gaps up to `ignore_gap_minutes` are ignored, matching the reporting rule."""
+    """Fraction of the 24h day with at least one RN on duty.
+
+    Only gaps *shorter than* `ignore_gap_minutes` are disregarded: a gap of
+    exactly 30 minutes is reportable, so the comparison must be strict.
+    """
     shifts = (
         db.session.query(Shift)
         .join(Staff, Shift.staff_id == Staff.id)
@@ -146,7 +157,7 @@ def rn_coverage(facility_id: int, day: date, ignore_gap_minutes: int = 30) -> di
     intervals.sort()
     merged = []
     for iv in intervals:
-        if merged and iv[0] <= merged[-1][1] + timedelta(minutes=ignore_gap_minutes):
+        if merged and iv[0] < merged[-1][1] + timedelta(minutes=ignore_gap_minutes):
             merged[-1] = (merged[-1][0], max(merged[-1][1], iv[1]))
         else:
             merged.append(list(iv) if isinstance(iv, tuple) else iv)
@@ -334,3 +345,85 @@ def compliance_pct(facility, today: date) -> float | None:
     if not fc or not facility.ancc_target:
         return None
     return round(fc["qtd_avg"] / facility.ancc_target * 100, 1)
+
+
+# ------------------------------------------------- legislated quarterly tests
+
+# A mainstream residential home must pass all three each quarter.
+RN_ONLY_FRACTION = 0.90      # RN-only minutes vs the RN target
+RN_PLUS_EN_FRACTION = 1.00   # RN + EN minutes vs the RN target
+
+
+def quarter_totals(facility_id: int, start: date, end: date) -> dict:
+    """Eligible minutes and occupied bed days over a period.
+
+    Care minutes are a weighted figure: total eligible worked minutes divided
+    by occupied bed days. Averaging each day's per-resident ratio instead
+    over-weights days with few residents and understates days with many, which
+    is not the measure the Rules describe.
+    """
+    rows = range_breakdown(facility_id, start, end)
+    bed_days = sum(r["residents"] for r in rows)
+    return {
+        "start": start,
+        "end": end,
+        "days": len(rows),
+        "bed_days": bed_days,
+        "total_minutes": sum(r["total_minutes"] for r in rows),
+        "rn_minutes": sum(r["rn_minutes"] for r in rows),
+        "en_minutes": sum(r["en_minutes"] for r in rows),
+        "pca_minutes": sum(r["pca_minutes"] for r in rows),
+        "rn_en_minutes": sum(r["rn_en_minutes"] for r in rows),
+        "excluded_minutes": sum(r["excluded_minutes"] for r in rows),
+        "ineligible_minutes": sum(r["ineligible_minutes"] for r in rows),
+        "agency_minutes": sum(r["agency_minutes"] for r in rows),
+    }
+
+
+def per_bed_day(minutes: float, bed_days: int) -> float:
+    return round(minutes / bed_days, 1) if bed_days else 0.0
+
+
+def quarterly_tests(facility, start: date, end: date) -> dict:
+    """The three tests a mainstream home must pass, each as its own result.
+
+    A single pass/fail on total minutes hides the nursing requirements: a home
+    can meet its total while failing either RN test, and each failure is
+    separately reportable.
+    """
+    t = quarter_totals(facility.id, start, end)
+    bd = t["bed_days"]
+    care_target = facility.ancc_target or 0
+    rn_target = facility.rn_target or 0
+
+    def result(key, label, achieved, target, basis):
+        return {
+            "key": key,
+            "label": label,
+            "achieved": achieved,
+            "target": round(target, 1),
+            "basis": basis,
+            "passed": achieved >= target if target else None,
+            "shortfall": round(max(target - achieved, 0), 1),
+            "shortfall_minutes": round(max(target - achieved, 0) * bd),
+        }
+
+    tests = [
+        result("total_care", "Total care minutes",
+               per_bed_day(t["total_minutes"], bd), care_target,
+               "RN + EN + eligible PCW/AIN minutes per occupied bed day"),
+        result("rn_only", "Registered nurse minutes",
+               per_bed_day(t["rn_minutes"], bd), rn_target * RN_ONLY_FRACTION,
+               f"RN-only minutes per bed day, against {RN_ONLY_FRACTION:.0%} of the RN target"),
+        result("rn_plus_en", "Registered + enrolled nurse minutes",
+               per_bed_day(t["rn_en_minutes"], bd), rn_target * RN_PLUS_EN_FRACTION,
+               f"RN + EN minutes per bed day, against {RN_PLUS_EN_FRACTION:.0%} of the RN target"),
+    ]
+    decided = [x for x in tests if x["passed"] is not None]
+    return {
+        "totals": t,
+        "tests": tests,
+        "passed": all(x["passed"] for x in decided) if decided else None,
+        "failed": [x for x in decided if not x["passed"]],
+        "calc_version": CALC_VERSION,
+    }

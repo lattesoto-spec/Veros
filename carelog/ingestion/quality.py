@@ -71,17 +71,41 @@ def check_shifts(records: list[dict], today: date | None = None) -> list[str]:
         if role not in KNOWN_ROLES:
             unknown_roles.add(role)
 
+    overlap_minutes = 0
     for sid, spans in by_staff_day.items():
         spans.sort()
         for (s1, e1), (s2, e2) in zip(spans, spans[1:]):
             if s2 < e1:
+                overlap_minutes += int((min(e1, e2) - s2).total_seconds() // 60)
                 warn("overlapping_shifts",
                      f"{sid}: overlapping shifts ({s1:%d %b %H:%M}-{e1:%H:%M} and {s2:%H:%M}-{e2:%H:%M})")
+    if overlap_minutes:
+        # One person cannot be in two places, so overlapping rows inflate the
+        # worked total. Episode-level exports (one row per care activity) are
+        # the usual source.
+        warn("overlap_impact",
+             f"Overlapping rows add roughly {overlap_minutes} double-counted minutes. "
+             "If this file lists individual care episodes rather than shifts, the "
+             "care-minute total will be overstated until the episodes are "
+             "reconciled into worked time.")
 
     if unknown_roles:
-        warn("unknown_classification",
-             "Unrecognized role value(s): " + ", ".join(sorted(unknown_roles)[:8])
-             + " — counted toward total care minutes but not RN/EN/PCW splits")
+        from carelog.domain.eligibility import classify
+
+        excluded, pending = [], []
+        for role in sorted(unknown_roles):
+            _, status, _ = classify(role)
+            (excluded if status == "excluded" else pending).append(role or "(blank)")
+        if excluded:
+            warn("ineligible_role",
+                 "Not counted toward care minutes — these roles are not eligible "
+                 "direct care: " + ", ".join(excluded[:8]))
+        if pending:
+            warn("unknown_classification",
+                 "Held out of the figures until someone confirms them: "
+                 + ", ".join(pending[:8])
+                 + ". Decide on the Eligibility page — unresolved roles are "
+                   "excluded rather than assumed to count.")
 
     out = []
     for kind, msgs in warnings.items():
