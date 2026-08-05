@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Users – CareMin{% endblock %}
+{% block title %}Users | CareMin{% endblock %}
 {% block content %}
 <section class="page-header">
   <div>
@@ -26,7 +26,7 @@
       {% for u in users %}
         <tr{% if not u.is_active %} class="muted"{% endif %}>
           <td>{{ u.email }}</td>
-          <td>{{ u.name or '—' }}</td>
+          <td>{{ u.name or 'Not provided' }}</td>
           <td>
             <form method="post" action="{{ url_for('admin_update_user', user_id=u.id) }}" class="inline-form">
               <input type="hidden" name="action" value="set_role">
@@ -67,7 +67,7 @@
       <label>Role
         <select name="role">
           {% for key, meta in roles.items() %}
-          <option value="{{ key }}">{{ meta.label }} — {{ meta.description }}</option>
+          <option value="{{ key }}">{{ meta.label }}: {{ meta.description }}</option>
           {% endfor %}
         </select>
       </label>
@@ -82,7 +82,7 @@
   <div class="section-card">
     <div class="section-heading"><div><h2>What each role can do</h2></div></div>
     {% for key, meta in roles.items() %}
-    <p><strong>{{ meta.label }}</strong> — {{ meta.description }}</p>
+    <p><strong>{{ meta.label }}</strong>: {{ meta.description }}</p>
     {% endfor %}
   </div>
 </section>

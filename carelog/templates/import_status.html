@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Importing… – CareMin{% endblock %}
+{% block title %}Importing | CareMin{% endblock %}
 {% block content %}
 <section class="page-header">
   <div>
@@ -19,13 +19,13 @@
     <div class="section-heading">
       <div>
         <h2>Files</h2>
-        <p class="muted" id="overall-stage">Starting…</p>
+        <p class="muted" id="overall-stage">Starting</p>
       </div>
     </div>
     <ul id="file-list" style="list-style:none;padding:0;margin:0">
       {% for f in job.files %}
       <li style="padding:.5rem 0;border-bottom:1px solid #eee">
-        <strong>{{ f.filename }}</strong> — <span class="muted stage">{{ f.stage }}</span>
+        <strong>{{ f.filename }}</strong>: <span class="muted stage">{{ f.stage }}</span>
       </li>
       {% endfor %}
     </ul>
@@ -42,12 +42,12 @@
     function apply(job) {
       job.files.forEach(function (f, i) {
         if (!items[i]) return;
-        items[i].textContent = f.stage + (f.detail ? " — " + f.detail : "");
+        items[i].textContent = f.stage + (f.detail ? ": " + f.detail : "");
       });
       var running = job.files.filter(function (f) { return f.stage !== "waiting" && f.stage !== "done"; });
       document.getElementById("overall-stage").textContent =
-        job.status === "queued" ? "Waiting to start…" :
-        running.length ? running[0].stage + "…" : "Working…";
+        job.status === "queued" ? "Waiting to start" :
+        running.length ? running[0].stage : "Working";
 
       if (job.status === "done") {
         document.getElementById("status-title").textContent = "Import complete";
@@ -62,7 +62,7 @@
         document.getElementById("status-title").textContent = "Import failed";
         document.getElementById("job-error-text").textContent = job.error || "Unknown error.";
         document.getElementById("job-error").style.display = "";
-        document.getElementById("overall-stage").textContent = "Nothing was imported — the database is unchanged.";
+        document.getElementById("overall-stage").textContent = "Nothing was imported. The database is unchanged.";
         document.getElementById("retry-link").style.display = "";
         return true;
       }

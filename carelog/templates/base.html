@@ -4,6 +4,8 @@
   <meta charset="utf-8">
   <title>{% block title %}CareMin{% endblock %}</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" type="image/png" href="{{ url_for('brand_asset', filename='simple.png') }}">
+  <link rel="apple-touch-icon" href="{{ url_for('brand_asset', filename='simple.png') }}">
   <link rel="stylesheet" href="/style.css">
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
@@ -13,7 +15,9 @@
   <div class="layout">
     <aside class="sidebar">
       <div class="brand-block">
-        <div class="brand">CareMin</div>
+        <a class="brand-logo-frame" href="{{ url_for('index') }}" aria-label="CareMin home">
+          <img src="{{ url_for('brand_asset', filename='full.png') }}" alt="CareMin">
+        </a>
         <div class="brand-subtitle">{{ 'Platform administration' if platform_mode else 'Care minutes workspace' }}</div>
       </div>
 

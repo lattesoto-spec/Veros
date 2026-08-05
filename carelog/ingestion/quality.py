@@ -98,18 +98,18 @@ def check_shifts(records: list[dict], today: date | None = None) -> list[str]:
             (excluded if status == "excluded" else pending).append(role or "(blank)")
         if excluded:
             warn("ineligible_role",
-                 "Not counted toward care minutes — these roles are not eligible "
+                 "Not counted toward care minutes. These roles are not eligible "
                  "direct care: " + ", ".join(excluded[:8]))
         if pending:
             warn("unknown_classification",
                  "Held out of the figures until someone confirms them: "
                  + ", ".join(pending[:8])
-                 + ". Decide on the Eligibility page — unresolved roles are "
+                 + ". Decide on the Eligibility page. Unresolved roles are "
                    "excluded rather than assumed to count.")
 
     out = []
     for kind, msgs in warnings.items():
         out.extend(msgs[:MAX_WARNINGS_PER_KIND])
         if len(msgs) > MAX_WARNINGS_PER_KIND:
-            out.append(f"… and {len(msgs) - MAX_WARNINGS_PER_KIND} more {kind} warning(s)")
+            out.append(f"{len(msgs) - MAX_WARNINGS_PER_KIND} additional {kind} warning(s)")
     return out

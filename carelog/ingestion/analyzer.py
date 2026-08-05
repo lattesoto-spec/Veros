@@ -248,12 +248,12 @@ def generate_mapping_spec(sheets: list[Sheet], filename: str = "") -> tuple[dict
             ) from e
         except anthropic.PermissionDeniedError as e:
             raise AnalyzerError(
-                "The API key was accepted but lacks access — most often this means "
+                "The API key was accepted but lacks access. This usually means "
                 "the Anthropic account has no credit. Check console.anthropic.com → Billing."
             ) from e
         except anthropic.RateLimitError as e:
             raise AnalyzerError(
-                "Anthropic rate limit hit — wait a minute and re-import."
+                "Anthropic rate limit reached. Wait a minute and re-import."
             ) from e
         except anthropic.NotFoundError as e:
             raise AnalyzerError(

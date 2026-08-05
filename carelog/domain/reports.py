@@ -495,7 +495,7 @@ def _care_minutes_per_obd_table(stats: dict, facility) -> Table:
     data = [["Role", "Care minutes per OBD", "Target"]]
     target_map = {"RN": facility.rn_target * 0.9, "EN": "-", "PCA": "-"}
     for role, label in ROLES:
-        target = target_map.get(role, "—")
+        target = target_map.get(role, "Not applicable")
         target_str = f"{target:.1f}" if isinstance(target, (int, float)) else target
         data.append([label, f"{stats['care_minutes_per_obd'][role]:.1f}", target_str])
     data.append([

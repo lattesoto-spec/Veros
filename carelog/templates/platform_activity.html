@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Platform activity – CareMin{% endblock %}
+{% block title %}Platform activity | CareMin{% endblock %}
 {% block content %}
 <section class="page-header"><div>
   <p class="eyebrow">Platform administration</p><h1>Activity</h1>
@@ -11,8 +11,8 @@
     <td>{{ entry.created_at.strftime('%d %b %Y %H:%M:%S') }}</td>
     <td>{{ organizations[entry.organization_id].name if entry.organization_id in organizations else 'Platform' }}</td>
     <td>{{ entry.user_email or 'System' }}</td><td><code>{{ entry.action }}</code></td>
-    <td>{{ entry.entity or '—' }}{% if entry.entity_id %} #{{ entry.entity_id }}{% endif %}</td>
-    <td>{{ entry.detail or '—' }}</td><td class="muted">{{ entry.ip_address or '—' }}</td>
+    <td>{{ entry.entity or 'Not recorded' }}{% if entry.entity_id %} #{{ entry.entity_id }}{% endif %}</td>
+    <td>{{ entry.detail or 'Not recorded' }}</td><td class="muted">{{ entry.ip_address or 'Not recorded' }}</td>
   </tr>{% else %}<tr><td colspan="7" class="muted">No activity recorded.</td></tr>{% endfor %}</tbody>
 </table></div></div></section>
 {% endblock %}

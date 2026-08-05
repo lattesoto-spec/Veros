@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}{{ facility.name }} – Facility{% endblock %}
+{% block title %}{{ facility.name }} | Facility{% endblock %}
 {% block content %}
 <section class="page-header">
   <div>
@@ -15,7 +15,7 @@
       <div>
         <h2>Targets</h2>
         <p class="muted">
-          AN-ACC {{ facility.ancc_target }} · RN {{ facility.rn_target }} mins/resident/day —
+          AN-ACC {{ facility.ancc_target }} · RN {{ facility.rn_target }} mins/resident/day.
           edit in <a href="{{ url_for('settings') }}">Settings</a>
         </p>
       </div>
@@ -67,9 +67,9 @@
             <td>{{ s.staff_id }}</td>
             <td>{{ s.name }}</td>
             <td>{{ s.role }}</td>
-            <td>{{ s.source_role or '—' }}</td>
+            <td>{{ s.source_role or 'Not recorded' }}</td>
             <td>{{ s.eligibility_status }}</td>
-            <td>{{ s.employment_type or '—' }}</td>
+            <td>{{ s.employment_type or 'Not recorded' }}</td>
           </tr>
           {% endfor %}
         </tbody>

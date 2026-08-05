@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 def main() -> int:
     if not (os.environ.get("DATABASE_URL") or os.environ.get("STORAGE_DATABASE_URL")):
-        print("[build] DATABASE_URL is not set for this environment — skipping "
+        print("[build] DATABASE_URL is not set for this environment. Skipping "
               "migration. The deployment will show its configuration page.")
         return 0
     # Let this script own the migration so its output reports what changed;

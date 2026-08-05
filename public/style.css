@@ -93,6 +93,34 @@ a:hover { text-decoration: underline; }
   gap: 2px;
 }
 
+.brand-logo-frame,
+.auth-logo-frame,
+.config-logo-frame {
+  position: relative;
+  display: block;
+  overflow: hidden;
+}
+
+.brand-logo-frame {
+  width: 176px;
+  height: 52px;
+}
+
+.brand-logo-frame img,
+.auth-logo-frame img,
+.config-logo-frame img {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: block;
+  width: 100%;
+  height: auto;
+  transform: translate(-50%, -50%);
+}
+
+.brand-logo-frame img { width: 270px; }
+.brand-logo-frame:hover { text-decoration: none; }
+
 .brand {
   font-weight: 700;
   font-size: 20px;
@@ -544,27 +572,10 @@ button:hover {
     linear-gradient(155deg, #17243a 0%, #1e293b 58%, #263753 100%);
 }
 
-.auth-brand {
-  display: flex;
-  align-items: center;
-  gap: 11px;
-  color: #fff;
-  font-size: 19px;
-  font-weight: 700;
-  letter-spacing: -.02em;
-}
-
-.auth-brand-mark {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 34px;
-  height: 34px;
-  color: #17243a;
-  background: #f8fafc;
-  border-radius: 10px;
-  font-size: 17px;
-}
+.auth-logo-frame { width: 220px; height: 68px; }
+.auth-logo-frame img { width: 338px; }
+.config-logo-frame { width: 190px; height: 60px; }
+.config-logo-frame img { width: 292px; }
 
 .auth-kicker {
   margin: 54px 0 12px;

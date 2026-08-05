@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Import complete – CareMin{% endblock %}
+{% block title %}Import complete | CareMin{% endblock %}
 {% block content %}
 <section class="page-header">
   <div>
@@ -40,7 +40,7 @@
     <details class="muted helper-details">
       <summary>Skipped rows ({{ o.row_errors|length }})</summary>
       {% for e in o.row_errors[:25] %}<p>{{ e }}</p>{% endfor %}
-      {% if o.row_errors|length > 25 %}<p>… and {{ o.row_errors|length - 25 }} more</p>{% endif %}
+      {% if o.row_errors|length > 25 %}<p>{{ o.row_errors|length - 25 }} additional errors</p>{% endif %}
     </details>
     {% endif %}
   </div>

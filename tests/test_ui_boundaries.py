@@ -1,4 +1,5 @@
 import importlib
+from pathlib import Path
 
 import pytest
 
@@ -61,9 +62,17 @@ def test_login_is_branded_accessible_and_keeps_context_on_error(web_app):
 
     page = client.get("/login")
     assert page.status_code == 200
-    assert b"Care-minute evidence you can stand behind" in page.data
+    assert b"Care-minute reporting in one controlled workspace" in page.data
     assert b"Work email" in page.data
     assert b'aria-controls="login-password"' in page.data
+    assert b">Sign in</button>" in page.data
+    assert b"Sign in securely" not in page.data
+    assert b'/brand/full.png' in page.data
+    assert b'/brand/simple.png' in page.data
+
+    icon = client.get("/brand/simple.png")
+    assert icon.status_code == 200
+    assert icon.content_type == "image/png"
 
     failed = client.post(
         "/login", data={"email": "admin@example.com", "password": "wrong"}
@@ -71,6 +80,16 @@ def test_login_is_branded_accessible_and_keeps_context_on_error(web_app):
     assert failed.status_code == 401
     assert b'value="admin@example.com"' in failed.data
     assert b'role="alert"' in failed.data
+
+
+def test_customer_facing_templates_avoid_rejected_copy():
+    templates = Path(__file__).parents[1] / "carelog" / "templates"
+    copy = "\n".join(path.read_text() for path in templates.glob("*.html"))
+    for rejected in (
+        "—", "–", "…", "What if", "Every number has evidence",
+        "Sign in securely", "Care-minute evidence you can stand behind",
+    ):
+        assert rejected not in copy
 
 
 def test_login_rejects_external_redirects(web_app):

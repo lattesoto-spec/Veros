@@ -37,7 +37,7 @@ def read_json(filename: str, data: bytes) -> list[Sheet]:
     sheets = [s for s in sheets if s.headers and s.rows]
     if not sheets:
         raise FileReadError(
-            "No records found in this JSON file — expected an array of objects "
+            "No records found in this JSON file. Expected an array of objects "
             "(or an object containing one), e.g. [{\"staff_id\": ...}, ...]."
         )
     return sheets
@@ -192,7 +192,7 @@ def read_sql(filename: str, data: bytes) -> list[Sheet]:
 
     if not sheets:
         raise FileReadError(
-            "No INSERT statements with data were found in this SQL file — "
+            "No INSERT statements with data were found in this SQL file. "
             "export the table contents (not just the schema) and try again."
         )
     return sheets

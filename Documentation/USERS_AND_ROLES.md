@@ -25,7 +25,7 @@ stylesheet and the internal worker endpoint are exempt.
 
 | Role | Can do |
 | --- | --- |
-| **Administrator** | Everything, including managing users and reading the security log |
+| **Administrator** | Full provider workspace, including managing users |
 | **Facility Manager** | Imports, targets, integrations, evidence — everything except user management |
 | **Clinical Manager** | Dashboard, compliance, scenarios, exports, audit trail (read-only on data) |
 | **Compliance Officer** | Imports, exports, audit trail and evidence downloads — no integrations |
@@ -41,8 +41,9 @@ not something a customer administrator can grant.
 
 ## The platform owner console
 
-A superuser gets **Platform → Organisations**, the only place in the
-application that reads across the tenant boundary. From there you can:
+A superuser signs into a separate platform-administration experience. They do
+not have a provider dashboard, compliance screen or facility of their own.
+From **Platform → Accounts** they can:
 
 - see every client organisation with its administrators, user count,
   facilities, residents, shifts and last import;
@@ -51,6 +52,9 @@ application that reads across the tenant boundary. From there you can:
 - **enter** an organisation for support. The whole application then renders
   that client's data, with a banner on every page saying whose data you are
   looking at, until you leave.
+- open an account overview covering its users, facilities, imports,
+  connections and recent activity without entering the provider workspace;
+- review the cross-account activity log and platform system status.
 
 Entering and leaving are written to the audit log as `platform_acting_as` and
 `platform_stopped_acting`, and organisation creation as `platform_org_created`.
@@ -119,8 +123,9 @@ shifts, staff, residents and receipts with it.
   identical for an unknown email, a wrong password and a deactivated account,
   so the form cannot be used to discover valid addresses.
 - Sign-ins, role changes, deactivations, password resets, imports, facility
-  edits and data deletion are written to an append-only `audit_logs` table,
-  visible to administrators at **Administration → Security log**.
+  edits and data deletion are written to an append-only `audit_logs` table.
+  The cross-account activity view is restricted to platform owners; provider
+  users receive the import evidence audit trail relevant to their work.
 - The Anthropic API key is read from the environment only. It used to be
   storable from the Settings page, which put a platform credential in tenant
   data where any administrator could read or replace it.

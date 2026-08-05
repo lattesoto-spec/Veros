@@ -131,7 +131,7 @@ def run_job(job_id: str):
 
     if not _RUN_LOCK.acquire(timeout=600):
         _touch(job, status="failed",
-               error="Another import is still running — try again in a few minutes.")
+               error="Another import is still running. Try again in a few minutes.")
         return
     try:
         _touch(job, status="running")

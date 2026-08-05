@@ -120,13 +120,20 @@ def create_app() -> Flask:
             # function; this fallback is what serves it everywhere else.
             return send_from_directory(os.path.join(ROOT, "public"), "style.css")
 
+        @app.route("/brand/<filename>")
+        def brand_asset(filename):
+            """Serve the approved CareMin brand assets in every environment."""
+            if filename not in {"full.png", "simple.png"}:
+                abort(404)
+            return send_from_directory(os.path.join(ROOT, "icons"), filename)
+
     if problems:
         # Stop here: no engine, no session, no models — just the diagnosis.
         _register_health(problems)
 
         @app.before_request
         def _configuration_gate():
-            if request.endpoint in ("healthz", "stylesheet"):
+            if request.endpoint in ("healthz", "stylesheet", "brand_asset"):
                 return None
             return render_template("misconfigured.html", problems=problems), 503
 
@@ -149,7 +156,7 @@ def create_app() -> Flask:
     if problems:
         @app.before_request
         def _database_gate():
-            if request.endpoint in ("healthz", "stylesheet"):
+            if request.endpoint in ("healthz", "stylesheet", "brand_asset"):
                 return None
             return render_template("misconfigured.html", problems=problems), 503
 
@@ -175,7 +182,7 @@ def create_app() -> Flask:
             missing = str(getattr(error, "orig", error)).split("\n")[0]
             return render_template("misconfigured.html", problems=[
                 f"The database is missing something this version of the app "
-                f"expects — {missing.strip()}. The schema was not migrated when "
+                f"expects: {missing.strip()}. The schema was not migrated when "
                 f"this version deployed. Run `flask --app app init-db` against "
                 f"this environment's DATABASE_URL, or redeploy now that the "
                 f"build step runs migrations automatically. No data is lost; "
@@ -231,7 +238,7 @@ def create_app() -> Flask:
         db.session.commit()
 
         print(f"Organization {org.name!r} created (id {org.id}).")
-        print(f"Administrator {email} created — must change password at first sign-in.")
+        print(f"Administrator {email} created. Password change required at first sign-in.")
         if adopted:
             print("Adopted existing rows: "
                   + ", ".join(f"{k}={v}" for k, v in adopted.items() if v))
@@ -901,7 +908,7 @@ def create_app() -> Flask:
     def clear():
         """Delete this organization's care data, including retained evidence."""
         if not _confirmed(request):
-            flash('Type "delete" to confirm — nothing was deleted.')
+            flash('Type "delete" to confirm. Nothing was deleted.')
             return redirect(url_for("settings"))
 
         org_id = current_organization_id()
@@ -929,7 +936,7 @@ def create_app() -> Flask:
         """Delete one import: its rows, its receipt and its retained files."""
         receipt = owned_or_404(db.session.get(ImportReceipt, receipt_id))
         if not _confirmed(request):
-            flash('Type "delete" to confirm — nothing was deleted.')
+            flash('Type "delete" to confirm. Nothing was deleted.')
             return redirect(url_for("audit"))
 
         files = _purge_evidence([receipt])
@@ -1043,7 +1050,7 @@ def create_app() -> Flask:
         if facility is None:
             abort(404)
         if not _confirmed(request):
-            flash('Type "delete" to confirm — nothing was deleted.')
+            flash('Type "delete" to confirm. Nothing was deleted.')
             return redirect(url_for("facilities_view"))
 
         name = facility.name
@@ -1651,8 +1658,8 @@ def _config_problems(uri: str) -> list[str]:
     if not uri:
         problems.append(
             "DATABASE_URL is not set for this environment. CareMin stores "
-            "everything in Postgres. On Vercel, set it under Project → Settings "
-            "→ Environment Variables — Preview and Production are configured "
+            "everything in Postgres. On Vercel, open Project Settings, then "
+            "Environment Variables. Confirm Preview and Production are configured "
             "separately, so a variable ticked only for Production leaves preview "
             "builds without a database. Locally, run `docker compose up -d` and "
             "copy .env.example to .env."

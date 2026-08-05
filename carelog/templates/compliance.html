@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Compliance – CareMin{% endblock %}
+{% block title %}Compliance | CareMin{% endblock %}
 {% block content %}
 {% if tests %}
 <section class="block">
@@ -28,7 +28,7 @@
               {% elif x.passed %}<span class="pill pill-on_track">pass</span>
               {% else %}<span class="pill pill-behind">fail</span>{% endif %}
             </td>
-            <td>{% if x.shortfall %}{{ x.shortfall }} min/bed-day ({{ x.shortfall_minutes }} total){% else %}—{% endif %}</td>
+            <td>{% if x.shortfall %}{{ x.shortfall }} min/bed-day ({{ x.shortfall_minutes }} total){% else %}No shortfall{% endif %}</td>
           </tr>
         {% endfor %}
         </tbody>
@@ -37,7 +37,7 @@
     {% if tests.totals.excluded_minutes %}
     <p class="muted">
       {{ tests.totals.excluded_minutes }} minutes are excluded pending an eligibility
-      decision — see <a href="{{ url_for('eligibility_queue') }}">Eligibility</a>.
+      decision. See <a href="{{ url_for('eligibility_queue') }}">Eligibility</a>.
     </p>
     {% endif %}
     {% set tc = tests.target_reconciliation %}
@@ -170,6 +170,6 @@
   </div>
 </section>
 {% else %}
-<section class="block"><div class="section-card"><p class="muted">Not enough data this quarter to forecast — import at least one day of shifts.</p></div></section>
+<section class="block"><div class="section-card"><p class="muted">Not enough data this quarter to forecast. Import at least one day of shifts.</p></div></section>
 {% endif %}
 {% endblock %}

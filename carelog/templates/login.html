@@ -4,19 +4,23 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
-  <title>Sign in – CareMin</title>
+  <title>Sign in | CareMin</title>
+  <link rel="icon" type="image/png" href="{{ url_for('brand_asset', filename='simple.png') }}">
+  <link rel="apple-touch-icon" href="{{ url_for('brand_asset', filename='simple.png') }}">
   <link rel="stylesheet" href="/style.css">
 </head>
 <body class="auth-body">
   <main class="auth-shell">
     <section class="auth-intro" aria-label="About CareMin">
       <div>
-        <div class="auth-brand"><span class="auth-brand-mark">C</span><span>CareMin</span></div>
+        <div class="auth-logo-frame">
+          <img src="{{ url_for('brand_asset', filename='full.png') }}" alt="CareMin">
+        </div>
         <p class="auth-kicker">Australian aged care</p>
-        <h2>Care-minute evidence you can stand behind.</h2>
+        <h2>Care-minute reporting in one controlled workspace.</h2>
         <p>
-          Bring worked hours, occupied bed days and reporting evidence into one
-          controlled workspace.
+          Import worked hours and occupied bed days, then review calculations
+          and reporting evidence.
         </p>
       </div>
       <ul class="auth-assurances" aria-label="Workspace safeguards">
@@ -28,8 +32,8 @@
 
     <section class="auth-panel">
       <div class="auth-panel-inner">
-        <p class="eyebrow">Secure workspace</p>
-        <h1>Welcome back</h1>
+        <p class="eyebrow">Account access</p>
+        <h1>Sign in</h1>
         <p class="auth-lead">Sign in to continue to your CareMin account.</p>
 
         {% if error %}
@@ -40,7 +44,7 @@
         {% endwith %}
 
         <form method="post" class="form auth-form"
-              onsubmit="this.querySelector('button[type=submit]').disabled=true;this.querySelector('button[type=submit]').textContent='Signing in…';">
+              onsubmit="this.querySelector('button[type=submit]').disabled=true;this.querySelector('button[type=submit]').textContent='Signing in';">
           <label>Work email
             <input type="email" name="email" value="{{ email or '' }}"
                    autocomplete="username" inputmode="email" autocapitalize="none"
@@ -54,7 +58,7 @@
                       aria-controls="login-password" aria-pressed="false">Show</button>
             </span>
           </label>
-          <button type="submit" class="auth-submit">Sign in securely</button>
+          <button type="submit" class="auth-submit">Sign in</button>
         </form>
 
         <p class="auth-help">

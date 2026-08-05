@@ -82,7 +82,7 @@ def classify(raw_role: str) -> tuple[str, str, str]:
     # Broad words suggest care work but are shared with ineligible titles, so
     # they need a human decision rather than an assumption.
     if any(w in text for w in ("assistant", "aide", "carer", "support", "care")):
-        return "OTHER", PENDING, "ambiguous title — needs approval before it counts"
+        return "OTHER", PENDING, "ambiguous title; approval is required before it counts"
 
     return "OTHER", PENDING, "unrecognised role"
 

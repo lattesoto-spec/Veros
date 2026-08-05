@@ -1,10 +1,10 @@
 {% extends "base.html" %}
-{% block title %}Audit trail – CareMin{% endblock %}
+{% block title %}Audit trail | CareMin{% endblock %}
 {% block content %}
 <section class="page-header">
   <div>
     <p class="eyebrow">Audit trail</p>
-    <h1>Every number has evidence</h1>
+    <h1>Import and calculation records</h1>
     <p class="muted">
       Calculation version {{ calc_version }} ·
       {% if readiness is not none %}{{ readiness }}% of imports retain their source file{% else %}no imports yet{% endif %}
@@ -25,17 +25,17 @@
           <tr>
             <td>{{ r.id }}</td>
             <td>{{ r.imported_at.strftime('%d %b %Y %H:%M') }}</td>
-            <td>{{ r.imported_by or '—' }}</td>
+            <td>{{ r.imported_by or 'Not recorded' }}</td>
             <td>{{ r.evidence_type or 'unverified' }}</td>
             <td>{{ r.shifts_imported }}</td>
             <td>{{ r.residents_imported }} / {{ r.resident_days_imported }} / {{ r.care_episodes_imported }}</td>
             <td>{{ r.shifts_skipped }}</td>
             <td>
               {% if r.first_shift_date and r.last_shift_date %}
-                {{ r.first_shift_date.strftime('%d %b') }} – {{ r.last_shift_date.strftime('%d %b %Y') }}
-              {% else %}—{% endif %}
+                {{ r.first_shift_date.strftime('%d %b') }} to {{ r.last_shift_date.strftime('%d %b %Y') }}
+              {% else %}Not recorded{% endif %}
             </td>
-            <td>{{ r.calc_version or '—' }}</td>
+            <td>{{ r.calc_version or 'Not recorded' }}</td>
             <td>
               {% if files_by_receipt.get(r.id) %}
                 {% for f in files_by_receipt[r.id] %}

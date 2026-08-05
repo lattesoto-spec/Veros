@@ -81,7 +81,9 @@ ROLES: dict[str, dict] = {
 }
 
 # Endpoints reachable without a session.
-PUBLIC_ENDPOINTS = {"auth.login", "stylesheet", "static", "import_run", "healthz"}
+PUBLIC_ENDPOINTS = {
+    "auth.login", "stylesheet", "brand_asset", "static", "import_run", "healthz",
+}
 
 
 def role_label(role: str) -> str:
@@ -322,7 +324,7 @@ def init_app(app):
             return redirect(url_for("auth.login", next=request.full_path.rstrip("?")))
         if user.is_superuser and not session.get("acting_org_id"):
             platform_endpoint = endpoint.startswith("platform_") or endpoint in {
-                "auth.change_password", "auth.logout", "healthz", "stylesheet",
+                "auth.change_password", "auth.logout", "healthz", "stylesheet", "brand_asset",
             } or endpoint.startswith("debug_")
             if not platform_endpoint:
                 # Never execute a provider mutation without an explicitly

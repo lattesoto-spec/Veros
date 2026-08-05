@@ -132,7 +132,7 @@ def board_pdf(facility, today: date) -> bytes:
         kpi_rows = [
             ["Quarter-to-date average", f"{fc['qtd_avg']:.1f} mins/resident/day",
              f"Target {facility.ancc_target:.0f}"],
-            ["Compliance", f"{pct:.1f}% of target" if pct is not None else "—", ""],
+            ["Compliance", f"{pct:.1f}% of target" if pct is not None else "Not available", ""],
             ["RN-only quarter-to-date", f"{fc['qtd_rn_avg']:.1f} mins/bed-day",
              f"Required {facility.rn_target * 0.9:.1f}"],
             ["RN + EN quarter-to-date", f"{fc['qtd_rn_en_avg']:.1f} mins/bed-day",

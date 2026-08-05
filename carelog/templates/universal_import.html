@@ -1,12 +1,12 @@
 {% extends "base.html" %}
-{% block title %}Universal import – CareMin{% endblock %}
+{% block title %}Universal import | CareMin{% endblock %}
 {% block content %}
 <section class="page-header">
   <div>
     <p class="eyebrow">Universal import</p>
     <h1>Upload any roster or resident export</h1>
     <p class="muted">
-      CSV, Excel, JSON or a SQL dump, from any system — Humanforce, AlayaCare, ShiftCare,
+      CSV, Excel, JSON or a SQL dump from any system, including Humanforce, AlayaCare, ShiftCare,
       payroll exports, API extracts, database backups or hand-made spreadsheets. CareMin
       validates and organises the records into the correct evidence categories.
     </p>
@@ -25,13 +25,13 @@
       <div>
         <h2>Import files</h2>
         <p class="muted">
-          Select one or more files — shifts, residents, or both.
+          Select one or more files containing shifts, residents or both.
           Nested JSON and multi-table SQL dumps are unpacked automatically.
         </p>
       </div>
     </div>
     <form method="post" enctype="multipart/form-data" class="form"
-          onsubmit="var b=this.querySelector('button[type=submit]');b.disabled=true;b.textContent='Uploading…';">
+          onsubmit="var b=this.querySelector('button[type=submit]');b.disabled=true;b.textContent='Uploading';">
       {% if not facility %}
       <label>Facility name
         <input type="text" name="facility_name" placeholder="Sunrise Aged Care" required>

@@ -3,12 +3,16 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Configuration needed – CareMin</title>
+  <title>Configuration needed | CareMin</title>
+  <link rel="icon" type="image/png" href="{{ url_for('brand_asset', filename='simple.png') }}">
+  <link rel="apple-touch-icon" href="{{ url_for('brand_asset', filename='simple.png') }}">
   <link rel="stylesheet" href="/style.css">
 </head>
 <body class="auth-body">
   <main class="auth-card" style="max-width:620px">
-    <p class="eyebrow">CareMin</p>
+    <div class="config-logo-frame">
+      <img src="{{ url_for('brand_asset', filename='full.png') }}" alt="CareMin">
+    </div>
     <h1>This deployment is not configured yet</h1>
     <p class="muted">
       The application started, but it is missing settings it cannot run without.

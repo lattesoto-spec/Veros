@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Integrations – CareMin{% endblock %}
+{% block title %}Integrations | CareMin{% endblock %}
 {% block content %}
 <section class="page-header">
   <div>
@@ -32,7 +32,7 @@
       <button type="submit">Sync now</button>
     </form>
     <p class="muted">
-      {% if cfg.last_sync_at %}Last sync {{ cfg.last_sync_at.strftime('%d %b %Y %H:%M UTC') }} — {{ cfg.last_result }}{% else %}Never synced.{% endif %}
+      {% if cfg.last_sync_at %}Last sync {{ cfg.last_sync_at.strftime('%d %b %Y %H:%M UTC') }}. {{ cfg.last_result }}{% else %}Never synced.{% endif %}
     </p>
     {% endif %}
   </div>

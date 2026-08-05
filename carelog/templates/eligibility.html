@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Eligibility – CareMin{% endblock %}
+{% block title %}Eligibility | CareMin{% endblock %}
 {% block content %}
 <section class="page-header">
   <div>
@@ -8,7 +8,7 @@
     <p class="muted">
       Only registered nurses, enrolled nurses and personal care workers may count
       toward the targets. Anything unresolved is <strong>excluded from the
-      figures</strong> until someone confirms it — an unreviewed row must never
+      figures</strong> until someone confirms it. An unreviewed row must never
       quietly inflate a regulated number.
     </p>
   </div>
@@ -29,7 +29,7 @@
     ('pending',  'Awaiting decision',  'Not counted. Approve only if the person genuinely performs direct care in an eligible classification.'),
     ('blocked',  'Approved but missing evidence', 'Not counted until current Ahpra registration evidence is recorded.'),
     ('approved', 'Counted',            'These minutes contribute to all three quarterly tests.'),
-    ('excluded', 'Not counted',        'Roles that cannot contribute — allied health, lifestyle, care management, hotel services.')] %}
+    ('excluded', 'Not counted',        'Roles that cannot contribute, including allied health, lifestyle, care management and hotel services.')] %}
 {% if buckets.get(status) %}
 <section class="block">
   <div class="section-card">
@@ -50,14 +50,14 @@
           <tr>
             <td>{{ s.name }}</td>
             <td><code>{{ s.role }}</code></td>
-            <td class="muted">{{ s.source_role or '—' }}</td>
-            <td class="muted">{{ s.eligibility_reason or '—' }}</td>
+            <td class="muted">{{ s.source_role or 'Not recorded' }}</td>
+            <td class="muted">{{ s.eligibility_reason or 'Not recorded' }}</td>
             <td>
               {% set problem = registration_problem(s) %}
               {% if problem %}<span class="pill pill-at_risk">{{ problem }}</span>
                 {% if s.registration_number %}<br><span class="muted">{{ s.registration_number }}</span>{% endif %}
               {% elif s.registration_number %}{{ s.registration_number }}
-              {% else %}—{% endif %}
+              {% else %}Not recorded{% endif %}
             </td>
             {% if has_permission('manage_facility') %}
             <td>
@@ -66,7 +66,7 @@
                 <form method="post" action="{{ url_for('eligibility_decide', staff_id=s.id) }}" class="form">
                   <label>Decision
                     <select name="decision">
-                      <option value="approved" {% if s.eligibility_status=='approved' %}selected{% endif %}>Counted — eligible direct care</option>
+                      <option value="approved" {% if s.eligibility_status=='approved' %}selected{% endif %}>Counted: eligible direct care</option>
                       <option value="excluded" {% if s.eligibility_status=='excluded' %}selected{% endif %}>Not counted</option>
                       <option value="pending"  {% if s.eligibility_status=='pending'  %}selected{% endif %}>Leave undecided</option>
                     </select>

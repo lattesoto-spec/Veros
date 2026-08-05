@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}{{ facility.name }} – Dashboard{% endblock %}
+{% block title %}{{ facility.name }} | Dashboard{% endblock %}
 {% block content %}
 <section class="page-header">
   <div>
@@ -32,7 +32,7 @@
 <section class="cards">
   <div class="card status-{{ 'on_track' if compliance_pct and compliance_pct >= 100 else ('at_risk' if compliance_pct and compliance_pct >= 95 else 'behind') }}">
     <div class="card-label">Compliance (quarter to date)</div>
-    <div class="card-value">{{ compliance_pct if compliance_pct is not none else '—' }}{% if compliance_pct is not none %}%{% endif %}</div>
+    <div class="card-value">{{ compliance_pct if compliance_pct is not none else 'Not available' }}{% if compliance_pct is not none %}%{% endif %}</div>
     <div class="card-sub">of AN-ACC target</div>
   </div>
   <div class="card status-{{ today_stats.status }}">
@@ -68,7 +68,7 @@
       <p><span class="pill pill-{{ 'behind' if a.severity == 'high' else ('at_risk' if a.severity == 'medium' else 'on_track') }}">{{ a.severity }}</span> {{ a.message }}</p>
     {% endfor %}
     {% if data_age_days is not none and data_age_days > 7 %}
-      <p><span class="pill pill-at_risk">medium</span> Pending upload: newest import is {{ data_age_days }} days old — import the latest roster.</p>
+      <p><span class="pill pill-at_risk">medium</span> Pending upload: newest import is {{ data_age_days }} days old. Import the latest roster.</p>
     {% endif %}
     <p class="muted"><a href="{{ url_for('compliance_view') }}">Full compliance view →</a> · <a href="{{ url_for('scenarios') }}">Scenario planning →</a></p>
   </div>
@@ -168,7 +168,7 @@
         <select name="q">
           {% for q in quarters %}
             <option value="{{ q.year }}-Q{{ q.quarter }}" {% if loop.first %}selected{% endif %}>
-              {{ q.label }} ({{ q.start.strftime('%d %b %Y') }} – {{ q.end.strftime('%d %b %Y') }})
+              {{ q.label }} ({{ q.start.strftime('%d %b %Y') }} to {{ q.end.strftime('%d %b %Y') }})
             </option>
           {% endfor %}
         </select>
