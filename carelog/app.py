@@ -102,6 +102,7 @@ def create_app() -> Flask:
                 "database": "configured" if uri else "MISSING",
                 "storage": "vercel_blob" if find_blob_token()[0] else "local",
                 "worker": import_jobs.worker_mode(),
+                "schema_drift": _schema_drift() if uri and not current_problems else None,
             }, (200 if not current_problems else 503)
 
         @app.route("/style.css")
@@ -142,6 +143,30 @@ def create_app() -> Flask:
             if request.endpoint in ("healthz", "stylesheet"):
                 return None
             return render_template("misconfigured.html", problems=problems), 503
+
+    @app.errorhandler(Exception)
+    def _explain_schema_drift(error):
+        """A missing column means the database predates the deployed code.
+
+        Without this the user sees a raw 500 and a stack trace, which says
+        nothing about the one command that fixes it.
+        """
+        from sqlalchemy.exc import ProgrammingError, OperationalError
+
+        if isinstance(error, (ProgrammingError, OperationalError)) and \
+                "does not exist" in str(getattr(error, "orig", error)):
+            db.session.rollback()
+            app.logger.error("Schema is behind the code: %s", error)
+            missing = str(getattr(error, "orig", error)).split("\n")[0]
+            return render_template("misconfigured.html", problems=[
+                f"The database is missing something this version of the app "
+                f"expects — {missing.strip()}. The schema was not migrated when "
+                f"this version deployed. Run `flask --app app init-db` against "
+                f"this environment's DATABASE_URL, or redeploy now that the "
+                f"build step runs migrations automatically. No data is lost; "
+                f"the migration only adds what is missing."
+            ]), 503
+        raise error
 
     auth.init_app(app)
 
@@ -1429,6 +1454,25 @@ def _engine_options(uri: str) -> dict:
         opts.pop("pool_pre_ping", None)
         opts.pop("pool_recycle", None)
     return opts
+
+
+def _schema_drift() -> list[str] | None:
+    """Columns the models expect that the database does not have."""
+    try:
+        from sqlalchemy import inspect
+
+        inspector = inspect(db.engine)
+        present = set(inspector.get_table_names())
+        missing = []
+        for table in db.metadata.sorted_tables:
+            if table.name not in present:
+                missing.append(f"{table.name} (whole table)")
+                continue
+            have = {c["name"] for c in inspector.get_columns(table.name)}
+            missing += [f"{table.name}.{c.name}" for c in table.columns if c.name not in have]
+        return missing or None
+    except Exception as e:
+        return [f"could not inspect schema: {type(e).__name__}"]
 
 
 def _config_problems(uri: str) -> list[str]:
