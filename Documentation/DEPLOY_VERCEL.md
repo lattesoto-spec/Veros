@@ -23,12 +23,21 @@ getting it wrong means recreating them.
 | `STORAGE_DATABASE_URL` | Automatically added by Vercel's current Neon Storage connection and preferred by Vercel deployments |
 | `BLOB_READ_WRITE_TOKEN` | Vercel Blob credential. Connecting a store injects it as `<PREFIX>_READ_WRITE_TOKEN`, where the prefix is whatever you typed at connection time — the app finds the token under any name, preferring a correctly-shaped one |
 | `SECRET_KEY` | Signs session cookies. Random, and never the dev default in production |
+| `MFA_ENCRYPTION_KEY` | Encrypts authenticator secrets. A Fernet key configured before deploy and retained across releases |
 | `WORKER_SECRET` | Required header on `/import/run/<job>`. Without it, anyone could trigger import workers |
 | `ANTHROPIC_API_KEY` | Format learning. Environment only — it is deliberately not settable from the UI |
 | `STORAGE_BACKEND` | `local` or `vercel_blob`. Inferred from the token when unset |
 | `VERCEL_BLOB_ACCESS` | `private` (default) or `public`. Only an optimisation — a wrong value is detected and corrected automatically |
 | `IMPORT_WORKER` | `thread` or `invoke`. Defaults to `invoke` on Vercel |
 | `DEBUG_TOKEN` | Opens `/debug/*` to a caller sending it as `x-debug-token`, without a session |
+
+Generate `MFA_ENCRYPTION_KEY` once with
+`python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`
+and store it as a secret in both Preview and Production. Back it up separately
+from the database. Do not replace it during an ordinary secret rotation: the
+existing TOTP secrets must first be decrypted with the old key and encrypted
+with the new one. `/healthz` refuses a Vercel deployment where the key is
+missing or malformed.
 
 ## How imports run without a background process
 

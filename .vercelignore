@@ -1,4 +1,5 @@
 # Keep the function bundle small and free of local state.
+.env*
 *.db
 vero/
 caremin.db

@@ -29,6 +29,7 @@
           <td>{{ u.name or 'Not provided' }}</td>
           <td>
             <form method="post" action="{{ url_for('admin_update_user', user_id=u.id) }}" class="inline-form">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <input type="hidden" name="action" value="set_role">
               <select name="role" onchange="this.form.submit()">
                 {% for key, meta in roles.items() %}
@@ -37,13 +38,36 @@
               </select>
             </form>
           </td>
-          <td>{% if u.is_active %}Active{% else %}Deactivated{% endif %}</td>
+          <td>
+            {% if u.is_active %}Active{% else %}Deactivated{% endif %}<br>
+            <span class="muted">Two-step: {{ 'enabled' if u.mfa_enabled else 'setup required' }}</span>
+          </td>
           <td>{{ u.last_login_at.strftime('%d %b %Y %H:%M') if u.last_login_at else 'never' }}</td>
           <td>
             <form method="post" action="{{ url_for('admin_update_user', user_id=u.id) }}" class="inline-form">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <input type="hidden" name="action" value="{{ 'reactivate' if not u.is_active else 'deactivate' }}">
               <button type="submit" class="link-button">{{ 'Reactivate' if not u.is_active else 'Deactivate' }}</button>
             </form>
+            {% if u.mfa_enabled and current_user.id != u.id %}
+            <form method="post" action="{{ url_for('admin_update_user', user_id=u.id) }}" class="inline-form">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="action" value="reset_mfa">
+              <button type="submit" class="link-button">Reset two-step</button>
+            </form>
+            {% endif %}
+            {% if current_user.id != u.id %}
+            <details class="user-reset">
+              <summary>Reset password</summary>
+              <form method="post" action="{{ url_for('admin_update_user', user_id=u.id) }}" class="form">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="action" value="reset_password">
+                <label>Temporary password <input type="password" name="password" minlength="12" autocomplete="new-password" required></label>
+                <label>Confirm password <input type="password" name="confirm_password" minlength="12" autocomplete="new-password" required></label>
+                <button type="submit">Set temporary password</button>
+              </form>
+            </details>
+            {% endif %}
           </td>
         </tr>
       {% endfor %}
@@ -62,6 +86,7 @@
       </div>
     </div>
     <form method="post" action="{{ url_for('admin_create_user') }}" class="form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <label>Email <input type="email" name="email" required></label>
       <label>Full name <input type="text" name="name"></label>
       <label>Role

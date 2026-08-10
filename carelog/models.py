@@ -30,8 +30,53 @@ class User(db.Model):
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     last_login_at = db.Column(db.DateTime)
     must_change_password = db.Column(db.Boolean, nullable=False, default=False)
+    # A session is valid only while its stamped version matches this value.
+    # Credential, MFA and account-state changes increment it to revoke every
+    # signed cookie immediately without needing server-side Flask sessions.
+    auth_version = db.Column(db.Integer, nullable=False, default=1)
+    mfa_enabled = db.Column(db.Boolean, nullable=False, default=False)
+    mfa_secret_encrypted = db.Column(db.Text)
+    mfa_enrolled_at = db.Column(db.DateTime)
+    # Reject a TOTP counter which has already been accepted. A valid code must
+    # never be reusable inside the normal clock-skew window.
+    mfa_last_totp_counter = db.Column(db.BigInteger)
 
     organization = db.relationship("Organization")
+
+
+class MfaRecoveryCode(db.Model):
+    """A single-use MFA recovery code. The plaintext is displayed once."""
+    __tablename__ = "mfa_recovery_codes"
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
+    code_prefix = db.Column(db.Text, nullable=False, index=True)
+    code_hash = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    used_at = db.Column(db.DateTime)
+
+
+class TrustedDevice(db.Model):
+    """Server-side half of a revocable 30-day trusted-device token."""
+    __tablename__ = "trusted_devices"
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
+    selector = db.Column(db.Text, nullable=False, unique=True, index=True)
+    token_hash = db.Column(db.Text, nullable=False)
+    auth_version = db.Column(db.Integer, nullable=False)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    last_used_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    expires_at = db.Column(db.DateTime, nullable=False, index=True)
+    revoked_at = db.Column(db.DateTime)
+
+
+class AuthRateLimit(db.Model):
+    """Database-backed failed-login buckets suitable for serverless workers."""
+    __tablename__ = "auth_rate_limits"
+    key_hash = db.Column(db.String(64), primary_key=True)
+    failures = db.Column(db.Integer, nullable=False, default=0)
+    window_started_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    blocked_until = db.Column(db.DateTime)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
 
 
 class AuditLog(db.Model):

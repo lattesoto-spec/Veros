@@ -64,6 +64,7 @@
               <details class="row-danger">
                 <summary>Change</summary>
                 <form method="post" action="{{ url_for('eligibility_decide', staff_id=s.id) }}" class="form">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                   <label>Decision
                     <select name="decision">
                       <option value="approved" {% if s.eligibility_status=='approved' %}selected{% endif %}>Counted: eligible direct care</option>

@@ -17,6 +17,7 @@
     <div class="section-heading"><div><h2>Scheduled file fetch</h2><p class="muted">Works today: point CareMin at any URL that serves an export</p></div></div>
     {% set cfg = configs.get('url_fetch') %}
     <form method="post" class="form row compact-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="platform" value="url_fetch">
       <input type="hidden" name="action" value="configure">
       <label>Export URL
@@ -27,6 +28,7 @@
     </form>
     {% if cfg %}
     <form method="post" class="inline-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="platform" value="url_fetch">
       <input type="hidden" name="action" value="sync">
       <button type="submit">Sync now</button>

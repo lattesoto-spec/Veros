@@ -45,6 +45,7 @@
 
         <form method="post" class="form auth-form"
               onsubmit="this.querySelector('button[type=submit]').disabled=true;this.querySelector('button[type=submit]').textContent='Signing in';">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <label>Work email
             <input type="email" name="email" value="{{ email or '' }}"
                    autocomplete="username" inputmode="email" autocapitalize="none"
@@ -58,11 +59,23 @@
                       aria-controls="login-password" aria-pressed="false">Show</button>
             </span>
           </label>
+          <div class="auth-options">
+            <label class="checkbox">
+              <input type="checkbox" name="remember_email" {% if remember_email %}checked{% endif %}>
+              Remember my email
+            </label>
+            <a href="{{ url_for('auth.forgot_password') }}">Forgot password?</a>
+          </div>
           <button type="submit" class="auth-submit">Sign in</button>
         </form>
 
         <p class="auth-help">
           Trouble signing in? Contact your organisation administrator or CareMin support.
+        </p>
+        <p class="auth-privacy">
+          {% if connection_encrypted %}Your connection is encrypted.
+          {% else %}This local development connection is not encrypted.{% endif %}
+          <a href="{{ url_for('auth.privacy') }}">Review our privacy information.</a>
         </p>
       </div>
     </section>

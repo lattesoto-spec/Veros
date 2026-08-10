@@ -51,6 +51,7 @@
               <div class="table-actions">
                 <a href="{{ url_for('platform_organization', organization_id=r.org.id) }}">Open account</a>
                 <form method="post" action="{{ url_for('platform_act') }}" class="inline-form">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                   <input type="hidden" name="organization_id" value="{{ r.org.id }}">
                   <button type="submit">Enter workspace</button>
                 </form>
@@ -75,6 +76,7 @@
       </div>
     </div>
     <form method="post" action="{{ url_for('platform_create_org') }}" class="form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <label>Organisation name <input type="text" name="name" required></label>
       <label>Administrator email <input type="email" name="admin_email" required></label>
       <label>Administrator name <input type="text" name="admin_name"></label>

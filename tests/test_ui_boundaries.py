@@ -15,6 +15,9 @@ def web_app(monkeypatch):
     module = importlib.import_module("carelog.app")
     app = module.create_app()
     app.config["TESTING"] = True
+    # This legacy boundary suite posts directly. Dedicated authentication tests
+    # exercise the production CSRF middleware with real form tokens.
+    app.config["WTF_CSRF_ENABLED"] = False
     with app.app_context():
         db.create_all()
         customer = Organization(name="Sunrise Group")
@@ -54,6 +57,7 @@ def sign_in_as(client, user_id):
     with client.session_transaction() as session:
         session.clear()
         session["user_id"] = user_id
+        session["auth_version"] = 1
 
 
 def test_login_is_branded_accessible_and_keeps_context_on_error(web_app):
@@ -100,7 +104,9 @@ def test_login_rejects_external_redirects(web_app):
         data={"email": "admin@example.com", "password": "Password123!"},
     )
     assert response.status_code == 302
-    assert response.headers["Location"] == "/"
+    assert response.headers["Location"].endswith("/mfa/setup")
+    with client.session_transaction() as session:
+        assert session["preauth_next"] == "/"
 
 
 def test_platform_owner_defaults_to_platform_only_ui(web_app):

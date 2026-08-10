@@ -90,6 +90,7 @@ def create_app() -> Flask:
         # the only place without TLS.
         SESSION_COOKIE_SECURE=bool(os.environ.get("VERCEL") or os.environ.get("FORCE_HTTPS")),
         PERMANENT_SESSION_LIFETIME=timedelta(hours=12),
+        MFA_ENCRYPTION_KEY=auth.resolve_mfa_encryption_key(app.secret_key),
     )
     app.template_filter("fromjson")(json.loads)
 
@@ -254,6 +255,31 @@ def create_app() -> Flask:
         db.session.commit()
         print(f"{user.email} is now a platform owner (can create and enter client organisations).")
 
+    @app.cli.command("reset-mfa")
+    @click.argument("email")
+    def reset_mfa_command(email):
+        """Reset MFA when a platform owner has lost every recovery method."""
+        user = User.query.filter(db.func.lower(User.email) == email.strip().lower()).first()
+        if user is None:
+            raise SystemExit(f"No user with email {email}.")
+        if not user.is_superuser:
+            raise SystemExit(
+                "The CLI recovery command is restricted to platform owners; "
+                "customer accounts must be reset by their organization administrator."
+            )
+        auth.reset_mfa(user)
+        db.session.add(AuditLog(
+            organization_id=user.organization_id,
+            user_id=user.id,
+            user_email=user.email,
+            action="mfa_reset_by_cli",
+            entity="user",
+            entity_id=str(user.id),
+            detail="Platform-owner emergency recovery",
+        ))
+        db.session.commit()
+        print(f"Two-step verification reset for {user.email}; next sign-in requires enrollment.")
+
     @app.cli.command("seed-demo")
     @click.option("--name", default="Demo", help="Organisation name")
     @click.option("--admin-email", default="demo@caremin.app")
@@ -387,6 +413,7 @@ def create_app() -> Flask:
         return redirect(url_for("import_status", job_id=job_id))
 
     @app.route("/import/run/<job_id>", methods=["POST"])
+    @auth.csrf.exempt
     def import_run(job_id):
         """Worker entrypoint. On serverless hosts the upload request cannot do
         the work itself, so it calls this to run the job in its own
@@ -1423,6 +1450,8 @@ def create_app() -> Flask:
                 flash("You cannot remove your own administrator access.")
             else:
                 user.role = role
+                user.auth_version += 1
+                auth.revoke_trusted_devices(user)
                 auth.record("user_role_changed", "user", user.id, role)
                 flash(f"{user.email} is now {ROLES[role]['label']}.")
         elif action == "deactivate":
@@ -1430,15 +1459,19 @@ def create_app() -> Flask:
                 flash("You cannot deactivate your own account.")
             else:
                 user.is_active = False
+                user.auth_version += 1
+                auth.revoke_trusted_devices(user)
                 auth.record("user_deactivated", "user", user.id)
                 flash(f"{user.email} can no longer sign in.")
         elif action == "reactivate":
             user.is_active = True
+            user.auth_version += 1
             auth.record("user_reactivated", "user", user.id)
             flash(f"{user.email} can sign in again.")
         elif action == "reset_password":
             password = request.form.get("password") or ""
-            problem = auth.password_problem(password, password)
+            confirm = request.form.get("confirm_password") or ""
+            problem = auth.password_problem(password, confirm)
             if problem:
                 flash(problem)
             else:
@@ -1446,8 +1479,20 @@ def create_app() -> Flask:
 
                 user.password_hash = generate_password_hash(password)
                 user.must_change_password = True
+                user.auth_version += 1
+                auth.revoke_trusted_devices(user)
                 auth.record("password_reset", "user", user.id)
                 flash(f"Password reset for {user.email}; they must change it at next sign-in.")
+        elif action == "reset_mfa":
+            if user.id == actor.id:
+                flash("Use Account security to replace your own authenticator.")
+            else:
+                auth.reset_mfa(user)
+                auth.record("mfa_reset_by_admin", "user", user.id)
+                flash(
+                    f"Two-step verification reset for {user.email}; "
+                    "they must enroll again at next sign-in."
+                )
         db.session.commit()
         return redirect(url_for("admin_users"))
 
@@ -1674,6 +1719,18 @@ def _config_problems(uri: str) -> list[str]:
             "SECRET_KEY is not set, so sessions would be signed with the shared "
             "development key and anyone could forge a login. Set it in the same "
             "place as DATABASE_URL."
+        )
+    mfa_key = (os.environ.get("MFA_ENCRYPTION_KEY") or "").strip()
+    if os.environ.get("VERCEL") and not mfa_key:
+        problems.append(
+            "MFA_ENCRYPTION_KEY is not set. CareMin cannot safely store authenticator "
+            "secrets without a dedicated encryption key. Set the same valid Fernet key "
+            "for Preview and Production before deploying mandatory two-step verification."
+        )
+    elif mfa_key and not auth.valid_mfa_encryption_key(mfa_key):
+        problems.append(
+            "MFA_ENCRYPTION_KEY is not a valid Fernet key. Generate a URL-safe base64 "
+            "32-byte key and update the environment without exposing the value in logs."
         )
     return problems
 

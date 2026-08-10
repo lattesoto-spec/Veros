@@ -26,6 +26,7 @@
         <p class="switcher-label">Facility</p>
         {% if org_facilities|length > 1 %}
         <form method="post" action="{{ url_for('facility_switch') }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="hidden" name="next" value="{{ request.path }}">
           <select name="facility_id" onchange="this.form.submit()">
             {% for f in org_facilities %}
@@ -83,6 +84,7 @@
         {% if acting_org %}
         <p class="nav-group">Platform</p>
         <form method="post" action="{{ url_for('platform_stop_acting') }}" class="inline-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <button type="submit" class="link-button">Back to platform</button>
         </form>
         {% endif %}
@@ -101,7 +103,9 @@
         <p class="user-name">{{ current_user.name or current_user.email }}</p>
         <p class="user-role">{% if platform_mode %}Platform owner{% else %}{{ role_label(current_user.role) }}{% if acting_org %} · supporting {{ acting_org.name }}{% endif %}{% endif %}</p>
         <a href="{{ url_for('auth.change_password') }}">Change password</a>
+        <a href="{{ url_for('auth.account_security') }}">Account security</a>
         <form method="post" action="{{ url_for('auth.logout') }}" class="inline-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <button type="submit" class="link-button">Sign out</button>
         </form>
       </div>
@@ -115,6 +119,7 @@
           Everything shown below is that client's data.
         </span>
         <form method="post" action="{{ url_for('platform_stop_acting') }}" class="inline-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <button type="submit" class="link-button">Leave {{ acting_org.name }}</button>
         </form>
       </div>

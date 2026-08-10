@@ -18,6 +18,7 @@
       </div>
     </div>
     <form method="post" class="form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="section" value="facility">
       <label>Facility name
         <input type="text" name="facility_name" value="{{ facility.name if facility else '' }}" placeholder="Sunrise Aged Care" required>
@@ -49,6 +50,7 @@
       <p class="danger-title">Administrative reset</p>
       <p class="muted">Permanently deletes all imported care data and retained evidence for this organisation.</p>
       <form method="post" action="{{ url_for('clear') }}" class="form confirm-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <label>Type <code>delete</code> to confirm
           <input type="text" name="confirm" placeholder="delete" autocomplete="off" required>
         </label>

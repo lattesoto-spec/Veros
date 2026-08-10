@@ -8,6 +8,7 @@
     <p class="muted">Created {{ summary.org.created_at.strftime('%d %b %Y') }} · {{ summary.users }} active users · {{ summary.facilities }} facilities</p>
   </div>
   <form method="post" action="{{ url_for('platform_act') }}" class="inline-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="organization_id" value="{{ summary.org.id }}">
     <button type="submit">Enter support workspace</button>
   </form>
@@ -17,6 +18,7 @@
   <div class="section-card">
     <div class="section-heading"><div><h2>Account details</h2><p class="muted">Platform-owned account metadata</p></div></div>
     <form method="post" action="{{ url_for('platform_update_organization', organization_id=summary.org.id) }}" class="form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <label>Organisation name <input type="text" name="name" value="{{ summary.org.name }}" required></label>
       <label>Timezone <input type="text" name="timezone" value="{{ summary.org.timezone }}" required></label>
       <button type="submit">Save account</button>

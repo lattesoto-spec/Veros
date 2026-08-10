@@ -16,6 +16,7 @@
   <div class="section-card upload-card">
     <div class="section-heading"><div><h2>Scenario</h2><p class="muted">Applied to every remaining day of the quarter</p></div></div>
     <form method="post" class="form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <label>RN sick / 8-hour RN shifts removed per day
         <input type="number" name="rn_shifts_removed" min="0" max="20" value="{{ params.rn_shifts_removed }}">
       </label>

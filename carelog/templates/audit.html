@@ -48,6 +48,7 @@
               <details class="row-danger">
                 <summary>Delete</summary>
                 <form method="post" action="{{ url_for('delete_receipt', receipt_id=r.id) }}" class="form">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                   <p class="muted">
                     Removes this import's {{ r.shifts_imported }} shift row(s) and its
                     retained file(s). Residents and staff are left in place.
