@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Save recovery codes | CareMin</title>
+  <link rel="icon" type="image/png" href="{{ url_for('brand_asset', filename='favicon.png') }}">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body class="auth-body">
+  <main class="auth-shell">
+    <section class="auth-intro" aria-label="Account recovery">
+      <div>
+        <div class="auth-logo-frame"><img src="{{ url_for('brand_asset', filename='full.png') }}" alt="CareMin"></div>
+        <p class="auth-kicker">Account recovery</p>
+        <h2>Keep these codes somewhere safe.</h2>
+        <p>Each code works once if you lose access to your authenticator app.</p>
+      </div>
+      <ul class="auth-assurances">
+        <li>Shown only on this page</li>
+        <li>Stored by CareMin only as hashes</li>
+        <li>Can be replaced from Account security</li>
+      </ul>
+    </section>
+    <section class="auth-panel">
+      <div class="auth-panel-inner">
+        <p class="eyebrow">One-time display</p>
+        <h1>Save your recovery codes</h1>
+        <p class="auth-lead">Copy or print these now. CareMin cannot show the same codes again.</p>
+        <ul class="recovery-code-list" aria-label="Recovery codes">
+          {% for code in recovery_codes %}<li><code>{{ code }}</code></li>{% endfor %}
+        </ul>
+        {% if account_action %}
+        <p class="auth-help"><a class="button-link" href="{{ url_for('auth.account_security') }}">Return to account security</a></p>
+        {% else %}
+        <form method="post" action="{{ url_for('auth.mfa_complete') }}" class="form auth-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" class="auth-submit">I have saved these codes</button>
+        </form>
+        {% endif %}
+      </div>
+    </section>
+  </main>
+</body>
+</html>

@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Use a recovery code | CareMin</title>
+  <link rel="icon" type="image/png" href="{{ url_for('brand_asset', filename='favicon.png') }}">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body class="auth-body">
+  <main class="auth-shell">
+    <section class="auth-intro" aria-label="Account recovery">
+      <div>
+        <div class="auth-logo-frame"><img src="{{ url_for('brand_asset', filename='full.png') }}" alt="CareMin"></div>
+        <p class="auth-kicker">Account recovery</p>
+        <h2>Use one of your saved recovery codes.</h2>
+        <p>A recovery code can be used once when your authenticator is unavailable.</p>
+      </div>
+    </section>
+    <section class="auth-panel">
+      <div class="auth-panel-inner">
+        <p class="eyebrow">Two-step verification</p>
+        <h1>Enter a recovery code</h1>
+        {% if error %}<div class="errors auth-message" role="alert"><p>{{ error }}</p></div>{% endif %}
+        <form method="post" class="form auth-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <label>Recovery code
+            <input type="text" name="recovery_code" autocomplete="one-time-code" maxlength="23" required autofocus>
+          </label>
+          <label class="checkbox"><input type="checkbox" name="remember_device"> Trust this device for 30 days</label>
+          <button type="submit" class="auth-submit">Continue</button>
+        </form>
+        <p class="auth-help"><a href="{{ url_for('auth.mfa_challenge') }}">Use an authenticator code</a></p>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Set up two-step verification | CareMin</title>
+  <link rel="icon" type="image/png" href="{{ url_for('brand_asset', filename='favicon.png') }}">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body class="auth-body">
+  <main class="auth-shell">
+    <section class="auth-intro" aria-label="Account security">
+      <div>
+        <div class="auth-logo-frame"><img src="{{ url_for('brand_asset', filename='full.png') }}" alt="CareMin"></div>
+        <p class="auth-kicker">Account security</p>
+        <h2>Add a second check to your CareMin account.</h2>
+        <p>Your password and a code from your authenticator app are required on a new device.</p>
+      </div>
+      <ul class="auth-assurances">
+        <li>Standard authenticator apps supported</li>
+        <li>Codes work without mobile reception</li>
+        <li>Recovery codes provided next</li>
+      </ul>
+    </section>
+    <section class="auth-panel">
+      <div class="auth-panel-inner">
+        <p class="eyebrow">Required setup</p>
+        <h1>Set up two-step verification</h1>
+        <p class="auth-lead">Scan this QR code with your authenticator app, then enter the six-digit code it shows.</p>
+        {% if error %}<div class="errors auth-message" role="alert"><p>{{ error }}</p></div>{% endif %}
+        <div class="mfa-qr"><img src="{{ qr_data_uri }}" alt="QR code for authenticator setup"></div>
+        <details class="mfa-manual">
+          <summary>Cannot scan the QR code?</summary>
+          <p>Enter this setup key manually:</p>
+          <code>{{ secret }}</code>
+        </details>
+        <form method="post" class="form auth-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <label>Verification code
+            <input type="text" name="code" inputmode="numeric" autocomplete="one-time-code"
+                   pattern="[0-9 ]{6,11}" maxlength="11" required autofocus>
+          </label>
+          <label class="checkbox"><input type="checkbox" name="remember_device"> Trust this device for 30 days</label>
+          <button type="submit" class="auth-submit">Verify and continue</button>
+        </form>
+        <form method="post" action="{{ url_for('auth.logout') }}" class="inline-form auth-help">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" class="link-button">Cancel and sign out</button>
+        </form>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

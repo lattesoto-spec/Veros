@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Form expired | CareMin</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body class="auth-body">
+  <main class="auth-card">
+    <p class="eyebrow">Request not completed</p>
+    <h1>Reload and try again</h1>
+    <div class="errors" role="alert"><p>{{ message }}</p></div>
+    <p><a href="{{ request.referrer if request.referrer and request.referrer.startswith(request.host_url) else url_for('auth.login') }}">Return</a></p>
+  </main>
+</body>
+</html>

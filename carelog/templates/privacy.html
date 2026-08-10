@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Privacy information | CareMin</title>
+  <link rel="icon" type="image/png" href="{{ url_for('brand_asset', filename='favicon.png') }}">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body class="legal-body">
+  <main class="legal-shell">
+    <header class="legal-header">
+      <a class="brand-logo-frame" href="{{ url_for('auth.login') }}" aria-label="CareMin sign in">
+        <img src="{{ url_for('brand_asset', filename='full.png') }}" alt="CareMin">
+      </a>
+      <p class="eyebrow">Privacy and security</p>
+      <h1>Privacy information</h1>
+      <p class="muted">Last updated 10 August 2026</p>
+      <p>
+        {% if connection_encrypted %}Your connection to this page is encrypted using HTTPS.
+        {% else %}This is a local development connection and is not using HTTPS.{% endif %}
+      </p>
+    </header>
+
+    <section>
+      <h2>Information CareMin handles</h2>
+      <p>CareMin stores account names, work email addresses, roles, sign-in security events and IP addresses. If selected, it also stores an encrypted remembered email preference and hashed trusted-device and recovery tokens.</p>
+      <p>Provider workspaces may contain resident, staffing, roster, worked-time, occupied-bed-day, compliance and retained source-file evidence supplied by the provider.</p>
+    </section>
+
+    <section>
+      <h2>Why the information is used</h2>
+      <p>The information is used to authenticate users, isolate organisations, calculate and report care minutes, retain audit evidence, investigate security events and provide authorised support.</p>
+    </section>
+
+    <section>
+      <h2>Storage and service providers</h2>
+      <p>Production database and object storage are configured for Australian data residency where supported. Hosting and storage providers encrypt information at rest, and deployed browser connections use HTTPS.</p>
+      <p>When CareMin encounters a new upload format, a limited preview may be sent to the configured AI mapping provider to learn the file structure. Known formats are mapped deterministically without another AI request.</p>
+    </section>
+
+    <section>
+      <h2>Cookies and remembered email</h2>
+      <p>CareMin uses an HttpOnly session cookie for account access. A user may opt into a separate 30-day trusted-device cookie and a 90-day remembered-email cookie. The remembered email is encrypted before it is stored in the browser and can be removed by signing in with the option unchecked.</p>
+    </section>
+
+    <section>
+      <h2>Retention and access</h2>
+      <p>Security and audit records are retained to support accountability. Care data and evidence remain controlled by the provider. CareMin does not yet apply an automated retention schedule, and authorized deletion actions are immediate rather than soft deletion.</p>
+      <p>To ask about information associated with your account, contact your organisation administrator or CareMin support. Requests must be verified before account or provider information is disclosed or changed.</p>
+    </section>
+
+    <footer class="legal-footer">
+      <a href="{{ url_for('auth.login') }}">Return to sign in</a>
+      <a href="{{ url_for('auth.forgot_password') }}">Forgot password?</a>
+    </footer>
+  </main>
+</body>
+</html>
