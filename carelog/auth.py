@@ -431,8 +431,11 @@ def _totp_counter(user: User, submitted: str) -> int | None:
     return None
 
 
-def _qr_data_uri(user: User, secret: str) -> str:
-    uri = pyotp.TOTP(secret).provisioning_uri(name=user.email, issuer_name="CareMin")
+def _provisioning_uri(user: User, secret: str) -> str:
+    return pyotp.TOTP(secret).provisioning_uri(name=user.email, issuer_name="CareMin")
+
+
+def _qr_data_uri(uri: str) -> str:
     image = qrcode.make(uri, image_factory=qrcode.image.svg.SvgPathImage)
     buffer = io.BytesIO()
     image.save(buffer)
@@ -738,6 +741,7 @@ def mfa_setup():
         secret = _decrypt_secret(user)
     except (InvalidToken, ValueError):
         abort(503)
+    provisioning_uri = _provisioning_uri(user, secret)
 
     error = None
     if request.method == "POST":
@@ -763,7 +767,8 @@ def mfa_setup():
         "mfa_setup.html",
         error=error,
         secret=secret,
-        qr_data_uri=_qr_data_uri(user, secret),
+        authenticator_uri=provisioning_uri,
+        qr_data_uri=_qr_data_uri(provisioning_uri),
     ), (400 if error else 200)
 
 

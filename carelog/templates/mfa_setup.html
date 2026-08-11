@@ -27,8 +27,23 @@
       <div class="auth-panel-inner">
         <p class="eyebrow">Required setup</p>
         <h1>Set up two-step verification</h1>
-        <p class="auth-lead">Scan this QR code with your authenticator app, then enter the six-digit code it shows.</p>
+        <p class="auth-lead">Add CareMin to an authenticator app, then enter the six-digit code it shows.</p>
         {% if error %}<div class="errors auth-message" role="alert"><p>{{ error }}</p></div>{% endif %}
+
+        <div class="mfa-app-action">
+          <p><strong>Setting this up on your phone?</strong></p>
+          <a class="auth-app-button" href="{{ authenticator_uri }}">Open in authenticator app</a>
+          <p class="mfa-app-downloads">
+            Need an app? Get Google Authenticator for
+            <a href="https://play.google.com/store/apps/details?id=com.google.android.apps.authenticator2"
+               target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">Android</a>
+            or
+            <a href="https://apps.apple.com/au/app/google-authenticator/id388497605"
+               target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">iPhone and iPad</a>.
+          </p>
+        </div>
+
+        <p class="mfa-scan-label"><span>Or scan with your phone</span></p>
         <div class="mfa-qr"><img src="{{ qr_data_uri }}" alt="QR code for authenticator setup"></div>
         <details class="mfa-manual">
           <summary>Cannot scan the QR code?</summary>

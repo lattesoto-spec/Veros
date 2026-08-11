@@ -96,6 +96,12 @@ def test_customer_facing_templates_avoid_rejected_copy():
         assert rejected not in copy
 
 
+def test_recovery_codes_use_a_non_clipping_layout():
+    stylesheet = (Path(__file__).parents[1] / "public" / "style.css").read_text()
+    assert "grid-template-columns: minmax(0, 1fr);" in stylesheet
+    assert "overflow-wrap: anywhere;" in stylesheet
+
+
 def test_login_rejects_external_redirects(web_app):
     app, _ = web_app
     client = app.test_client()

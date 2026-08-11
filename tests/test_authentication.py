@@ -111,6 +111,10 @@ def test_mandatory_enrollment_stages_session_and_hashes_recovery_codes(auth_app)
 
     setup = client.get("/mfa/setup")
     assert setup.status_code == 200
+    assert b'href="otpauth://totp/CareMin:' in setup.data
+    assert b"play.google.com/store/apps/details?id=com.google.android.apps.authenticator2" in setup.data
+    assert b"apps.apple.com/au/app/google-authenticator/id388497605" in setup.data
+    assert b'referrerpolicy="no-referrer"' in setup.data
     with app.app_context():
         user = db.session.get(User, ids["user"])
         secret = auth._decrypt_secret(user)

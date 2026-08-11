@@ -736,6 +736,47 @@ button:hover {
 .user-reset .form label { font-size: 11px; }
 .user-reset .form button { padding: 8px 10px; font-size: 12px; }
 
+.mfa-app-action {
+  margin-top: 22px;
+  padding: 16px;
+  border: 1px solid #bfdbfe;
+  border-radius: 12px;
+  background: #eff6ff;
+  text-align: center;
+}
+
+.mfa-app-action p { margin: 0; }
+
+.auth-app-button {
+  display: block;
+  width: 100%;
+  margin: 12px 0;
+  padding: 12px 16px;
+  border-radius: 8px;
+  color: #fff;
+  background: var(--navy);
+  font-size: 14px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.auth-app-button:hover { color: #fff; background: #243958; }
+.mfa-app-downloads { color: var(--text-muted); font-size: 12px; line-height: 1.5; }
+
+.mfa-scan-label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 20px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.mfa-scan-label::before,
+.mfa-scan-label::after { content: ""; flex: 1; border-top: 1px solid var(--border); }
+.mfa-scan-label span { flex: none; }
+
 .mfa-qr {
   width: 190px;
   height: 190px;
@@ -752,8 +793,8 @@ button:hover {
 
 .recovery-code-list {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px 16px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
   margin: 24px 0;
   padding: 18px;
   list-style: none;
@@ -762,7 +803,13 @@ button:hover {
   background: #f8fafc;
 }
 
-.recovery-code-list code { font-size: 13px; white-space: nowrap; }
+.recovery-code-list li { min-width: 0; }
+.recovery-code-list code {
+  display: block;
+  max-width: 100%;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
 
 .auth-card {
   width: 100%;
@@ -794,7 +841,6 @@ button:hover {
   .auth-intro { padding: 22px 24px; }
   .auth-kicker, .auth-intro h2 { display: none; }
   .auth-panel { padding: 34px 24px 40px; }
-  .recovery-code-list { grid-template-columns: 1fr; }
 }
 
 .user-block {
