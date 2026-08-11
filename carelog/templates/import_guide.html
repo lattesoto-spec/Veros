@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}How imports work | CareMin{% endblock %}
+{% block content %}
+<section class="page-header">
+  <div>
+    <p class="eyebrow">Data and evidence / Import guide</p>
+    <h1>How imports work</h1>
+    <p class="page-purpose">Reference information for teams that want to review file handling, validation, and evidence treatment.</p>
+  </div>
+  <a class="primary-action" href="{{ url_for('universal_import') }}">Import files</a>
+</section>
+
+<section class="guide-intro" aria-labelledby="guide-sequence-title">
+  <p class="section-kicker">Simple by default</p>
+  <h2 id="guide-sequence-title">Upload, check, review</h2>
+  <div class="guide-sequence">
+    <div><span>01</span><strong>Upload</strong><p>Choose the facility and add the original exports.</p></div>
+    <div><span>02</span><strong>Automatic checks</strong><p>CareMin identifies records, validates fields, and withholds anything ambiguous.</p></div>
+    <div><span>03</span><strong>Review</strong><p>You receive a clear receipt with included records, warnings, and next actions.</p></div>
+  </div>
+</section>
+
+<section class="record-section" aria-labelledby="sources-title">
+  <div class="section-heading"><div><h2 id="sources-title">Files you can use</h2><p class="muted">Export directly from your existing system. Do not reshape the file to fit a CareMin template.</p></div></div>
+  <div class="guide-grid">
+    <div><h3>Supported formats</h3><p>CSV, TSV, text, Excel, JSON, SQL, SQLite, and ZIP.</p><p>Each upload request is currently limited to 4.5 MB by the platform edge.</p></div>
+    <div><h3>Common records</h3><p>Worked staffing, planned rosters, residents, occupied bed days, staff credentials, and optional delivered-care records.</p></div>
+  </div>
+</section>
+
+<section class="record-section" aria-labelledby="evidence-title">
+  <div class="section-heading"><div><h2 id="evidence-title">Evidence treatment</h2><p class="muted">CareMin keeps evidence streams separate so a plausible-looking number cannot hide a source problem.</p></div></div>
+  <div class="table-wrap"><table><thead><tr><th>Source evidence</th><th>Treatment</th></tr></thead><tbody>
+    <tr><td>Approved timesheets, payroll, or clocking records</td><td>May be classified as actual worked.</td></tr>
+    <tr><td>Planned schedules and rosters</td><td>Remain rostered and do not become actual results.</td></tr>
+    <tr><td>Ambiguous source or staff classification</td><td>Withheld as unverified until reviewed.</td></tr>
+    <tr><td>Original files</td><td>Retained with the import receipt as audit evidence.</td></tr>
+  </tbody></table></div>
+</section>
+
+<section class="record-section" aria-labelledby="samples-title">
+  <div class="section-heading"><div><h2 id="samples-title">Sample files</h2><p class="muted">Use these only to see the structure of a complete demonstration import.</p></div></div>
+  <div class="sample-register">
+    <a href="{{ url_for('sample_file', filename='resident_census_july_2026.xlsx') }}"><strong>Resident census</strong><span>Excel sample</span></a>
+    <a href="{{ url_for('sample_file', filename='worked_staffing_july_2026.xlsx') }}"><strong>Worked staffing</strong><span>Excel sample</span></a>
+    <a href="{{ url_for('sample_file', filename='care_delivery_july_2026.xlsx') }}"><strong>Care delivery</strong><span>Excel sample</span></a>
+  </div>
+</section>
+{% endblock %}

@@ -1,31 +1,45 @@
 {% extends "base.html" %}
 {% block title %}Imports | CareMin{% endblock %}
 {% block content %}
-<section class="page-header"><div><p class="eyebrow">Data and evidence / Imports</p><h1>Import source records</h1><p class="page-purpose">Add provider exports through a controlled validation and evidence-classification sequence.</p><p class="page-meta">Source dates determine the reporting period during validation. Files remain linked to their import receipt.</p></div></section>
+<section class="page-header">
+  <div>
+    <p class="eyebrow">Data and evidence / Imports</p>
+    <h1>Import files</h1>
+    <p class="page-purpose">Upload the files you already use. CareMin checks them and shows you anything that needs attention.</p>
+  </div>
+  <a class="secondary-action" href="{{ url_for('import_guide') }}">How imports work</a>
+</section>
 
-<ol class="workflow-steps" aria-label="Import workflow"><li class="active"><span>1</span><strong>Source files</strong></li><li><span>2</span><strong>Assign records</strong></li><li><span>3</span><strong>Validate</strong></li><li><span>4</span><strong>Resolve</strong></li><li><span>5</span><strong>Confirm</strong></li></ol>
+<ol class="simple-steps" aria-label="Import workflow">
+  <li class="active"><span>1</span><strong>Upload</strong></li>
+  <li><span>2</span><strong>Automatic checks</strong></li>
+  <li><span>3</span><strong>Review result</strong></li>
+</ol>
 
 {% if errors %}<div class="errors" role="alert"><ul>{% for error in errors %}<li>{{ error }}</li>{% endfor %}</ul></div>{% endif %}
 
-<section class="import-workspace">
-  <section class="working-panel" aria-labelledby="source-title"><div class="section-heading"><div><p class="section-kicker">Step 1</p><h2 id="source-title">Choose source files</h2><p class="muted">Select the facility before adding original exports. Do not edit source files to fit a template.</p></div></div>
+<section class="import-simple" aria-labelledby="source-title">
+  <div class="working-panel working-panel-primary">
+    <div class="section-heading"><div><h2 id="source-title">Choose your files</h2><p class="muted">Use exports directly from your existing system.</p></div></div>
     <form method="post" enctype="multipart/form-data" class="form" id="import-form">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      {% if not facility %}<label>Facility name<input type="text" name="facility_name" placeholder="Riverside Lodge" required></label>
-      {% elif facilities|length > 1 %}<label>Facility<select name="facility_id">{% for item in facilities %}<option value="{{ item.id }}" {% if item.id == facility.id %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></label>
-      {% else %}<input type="hidden" name="facility_id" value="{{ facility.id }}"><div class="read-only-field"><span>Facility</span><strong>{{ facility.name }}</strong></div>{% endif %}
-      <div class="read-only-field"><span>Reporting period</span><strong>Determined from dated source records</strong></div>
-      <label>Source files
-        <span class="file-drop" id="dropzone"><span id="dropzone-label"><strong>Select files</strong> or drop them here</span><input type="file" id="file-input" name="data_files" accept=".csv,.tsv,.txt,.xlsx,.xlsm,.xls,.json,.jsonl,.ndjson,.sql,.db,.sqlite,.sqlite3,.zip" multiple required></span>
-        <span class="field-help">Accepted formats: CSV, Excel, JSON, SQL, SQLite and ZIP. The platform edge currently limits each request to 4.5 MB.</span>
+      {% if not facility %}
+      <label>Facility name<input type="text" name="facility_name" placeholder="Riverside Lodge" required></label>
+      {% elif facilities|length > 1 %}
+      <label>Facility<select name="facility_id">{% for item in facilities %}<option value="{{ item.id }}" {% if item.id == facility.id %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></label>
+      {% else %}
+      <input type="hidden" name="facility_id" value="{{ facility.id }}">
+      <div class="read-only-field"><span>Facility</span><strong>{{ facility.name }}</strong></div>
+      {% endif %}
+
+      <label>Files
+        <span class="file-drop" id="dropzone"><span id="dropzone-label"><strong>Choose files</strong><br>or drag them here</span><input type="file" id="file-input" name="data_files" accept=".csv,.tsv,.txt,.xlsx,.xlsm,.xls,.json,.jsonl,.ndjson,.sql,.db,.sqlite,.sqlite3,.zip" multiple required></span>
       </label>
       <div id="selected-files" class="file-ledger" aria-live="polite"></div>
-      <p class="notice notice-neutral"><strong>Evidence classification.</strong> CareMin classifies shift evidence automatically. Approved timesheets, payroll and clocking records can be classified as actual worked. Planned schedules remain rostered. Ambiguous rows are withheld as unverified.</p>
-      <button type="submit" id="import-submit">Upload and validate</button>
+      <p class="simple-assurance">CareMin classifies shift evidence automatically and flags anything that needs review.</p>
+      <button type="submit" id="import-submit">Import files</button>
     </form>
-  </section>
-
-  <aside class="process-register" aria-labelledby="process-title"><p class="section-kicker">Controlled sequence</p><h2 id="process-title">What happens next</h2><ol><li><span>02</span><div><strong>Assign records</strong><p>Detect worked staffing, rosters, credentials, residents, occupied bed days and optional delivered-care evidence.</p></div></li><li><span>03</span><div><strong>Validate</strong><p>Separate accepted, filtered, warning, rejected and unresolved rows with original source references.</p></div></li><li><span>04</span><div><strong>Resolve</strong><p>Withhold ambiguous roles and incomplete evidence for focused review.</p></div></li><li><span>05</span><div><strong>Confirm</strong><p>Create one receipt containing source files, counts, limitations and the calculation version.</p></div></li></ol><p class="sample-links">Sample records: <a href="{{ url_for('sample_file', filename='resident_census_july_2026.xlsx') }}">resident census</a>, <a href="{{ url_for('sample_file', filename='worked_staffing_july_2026.xlsx') }}">worked staffing</a>, <a href="{{ url_for('sample_file', filename='care_delivery_july_2026.xlsx') }}">care delivery</a>.</p></aside>
+  </div>
 </section>
 {% endblock %}
 {% block scripts %}
@@ -37,7 +51,6 @@
     var form = document.getElementById("import-form");
     var submit = document.getElementById("import-submit");
     if (!zone || !input || !ledger) return;
-    function fileType(name) { var part = name.split(".").pop(); return part ? part.toUpperCase() : "Unknown"; }
     function render() {
       ledger.textContent = "";
       Array.from(input.files).forEach(function (file, index) {
@@ -47,7 +60,7 @@
         var meta = document.createElement("span");
         var remove = document.createElement("button");
         name.textContent = file.name;
-        meta.textContent = fileType(file.name) + " · " + Math.max(Math.round(file.size / 1024), 1) + " KB · source type pending validation";
+        meta.textContent = Math.max(Math.round(file.size / 1024), 1) + " KB";
         record.appendChild(name); record.appendChild(meta);
         remove.type = "button"; remove.className = "link-button"; remove.textContent = "Remove";
         remove.addEventListener("click", function () {
@@ -63,7 +76,7 @@
     ["dragover", "dragenter"].forEach(function (name) { zone.addEventListener(name, function (event) { event.preventDefault(); zone.classList.add("drag-active"); }); });
     ["dragleave", "drop"].forEach(function (name) { zone.addEventListener(name, function (event) { event.preventDefault(); zone.classList.remove("drag-active"); }); });
     zone.addEventListener("drop", function (event) { input.files = event.dataTransfer.files; render(); });
-    form.addEventListener("submit", function () { submit.disabled = true; submit.textContent = "Uploading source files"; });
+    form.addEventListener("submit", function () { submit.disabled = true; submit.textContent = "Importing files"; });
   })();
 </script>
 {% endblock %}

@@ -1,8 +1,8 @@
 {% extends "base.html" %}
 {% block title %}Import processing | CareMin{% endblock %}
 {% block content %}
-<section class="page-header"><div><p class="eyebrow">Data and evidence / Imports</p><h1 id="status-title">Validating source records</h1><p class="page-purpose" id="status-subtitle">Processing continues if you leave this page. No partial result is presented as complete.</p></div></section>
-<ol class="workflow-steps" aria-label="Import workflow"><li class="complete"><span>1</span><strong>Source files</strong></li><li class="active"><span>2</span><strong>Assign records</strong></li><li class="active"><span>3</span><strong>Validate</strong></li><li><span>4</span><strong>Resolve</strong></li><li><span>5</span><strong>Confirm</strong></li></ol>
+<section class="page-header"><div><p class="eyebrow">Data and evidence / Imports</p><h1 id="status-title">Checking your files</h1><p class="page-purpose" id="status-subtitle">You can leave this page while CareMin finishes the import.</p></div><a class="secondary-action" href="{{ url_for('import_guide') }}">How checks work</a></section>
+<ol class="simple-steps" aria-label="Import workflow"><li class="complete"><span>1</span><strong>Upload</strong></li><li class="active"><span>2</span><strong>Automatic checks</strong></li><li><span>3</span><strong>Review result</strong></li></ol>
 <div class="errors" id="job-error" hidden role="alert"><p id="job-error-text"></p></div>
 <section class="record-section" aria-labelledby="files-title"><div class="section-heading"><div><p class="section-kicker">File ledger</p><h2 id="files-title">Processing state</h2><p class="muted" id="overall-stage" aria-live="polite">Waiting</p></div></div><div id="file-list" class="processing-ledger">{% for file in job.files %}<div><strong>{{ file.filename }}</strong><span class="stage">{{ file.stage }}</span></div>{% endfor %}</div><div class="next-actions" id="done-link" hidden><a class="primary-action" href="#">Review import receipt</a></div><div class="next-actions" id="retry-link" hidden><a class="secondary-action" href="{{ url_for('universal_import') }}">Return to imports</a><a href="{{ url_for('audit') }}">Open audit trail</a></div></section>
 {% endblock %}
@@ -10,9 +10,9 @@
   (function () {
     var jobId = {{ job.id | tojson }};
     var items = document.querySelectorAll("#file-list .stage");
-    function label(stage) { var labels = { waiting: "Waiting", reading: "Validating", analyzing: "Assigning records", mapping: "Validating", importing: "Importing", done: "Complete", failed: "Failed" }; return labels[stage] || stage; }
+    function label(stage) { var labels = { waiting: "Waiting", reading: "Checking", analyzing: "Checking", mapping: "Checking", importing: "Saving", done: "Complete", failed: "Needs attention" }; return labels[stage] || "Checking"; }
     function apply(job) {
-      job.files.forEach(function (file, index) { if (items[index]) { items[index].textContent = label(file.stage) + (file.detail ? ": " + file.detail : ""); items[index].className = "stage stage-" + file.stage; }});
+      job.files.forEach(function (file, index) { if (items[index]) { items[index].textContent = label(file.stage); items[index].className = "stage stage-" + file.stage; }});
       var running = job.files.filter(function (file) { return file.stage !== "waiting" && file.stage !== "done"; });
       document.getElementById("overall-stage").textContent = job.status === "queued" ? "Waiting to start" : (running.length ? label(running[0].stage) : "Processing");
       if (job.status === "done") { document.getElementById("status-title").textContent = "Import ready for review"; var done = document.getElementById("done-link"); done.hidden = false; done.querySelector("a").href = "/import/summary/" + job.receipt_id; document.getElementById("overall-stage").textContent = "All files processed. Review the receipt before relying on updated results."; return true; }

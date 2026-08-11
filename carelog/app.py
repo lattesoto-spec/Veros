@@ -412,6 +412,12 @@ def create_app() -> Flask:
         db.session.commit()
         return redirect(url_for("import_status", job_id=job_id))
 
+    @app.route("/import/guide")
+    @require("import_data")
+    def import_guide():
+        """Optional import reference kept outside the primary upload task."""
+        return render_template("import_guide.html")
+
     @app.route("/import/run/<job_id>", methods=["POST"])
     @auth.csrf.exempt
     def import_run(job_id):

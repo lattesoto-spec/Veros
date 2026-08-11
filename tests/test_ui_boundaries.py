@@ -196,7 +196,13 @@ def test_import_classifies_evidence_without_asking_the_user(web_app):
     assert page.status_code == 200
     assert b'name="evidence_type"' not in page.data
     assert b"CareMin classifies shift evidence automatically" in page.data
-    assert b"worked_staffing_july_2026.xlsx" in page.data
+    assert b"platform edge" not in page.data
+    assert b"Automatic checks" in page.data
+
+    guide = client.get("/import/guide")
+    assert guide.status_code == 200
+    assert b"Evidence treatment" in guide.data
+    assert b"worked_staffing_july_2026.xlsx" in guide.data
 
     sample = client.get("/samples/worked_staffing_july_2026.xlsx")
     assert sample.status_code == 200
@@ -212,6 +218,7 @@ def test_redesigned_provider_workspace_routes_render_with_sparse_data(web_app):
         "/dashboard", "/compliance", "/rn-coverage", "/scenarios",
         "/reports", "/audit", "/eligibility", "/facility",
         "/facilities", "/integrations", "/admin/users", "/settings",
+        "/import/guide",
     ):
         response = client.get(path)
         assert response.status_code == 200, path

@@ -40,7 +40,7 @@
           <p class="nav-group">Data and evidence</p>
           {% endif %}
           {% if has_permission('import_data') %}
-          <a href="{{ url_for('universal_import') }}" class="{{ 'active' if ep in ('universal_import', 'import_status', 'import_summary') }}" {% if ep in ('universal_import', 'import_status', 'import_summary') %}aria-current="page"{% endif %}>Imports</a>
+          <a href="{{ url_for('universal_import') }}" class="{{ 'active' if ep in ('universal_import', 'import_guide', 'import_status', 'import_summary') }}" {% if ep in ('universal_import', 'import_guide', 'import_status', 'import_summary') %}aria-current="page"{% endif %}>Imports</a>
           {% endif %}
           {% if has_permission('view_audit') %}
           <a href="{{ url_for('eligibility_queue') }}" class="{{ 'active' if ep == 'eligibility_queue' }}" {% if ep == 'eligibility_queue' %}aria-current="page"{% endif %}>Eligibility review</a>
