@@ -172,11 +172,47 @@ def rn_coverage(facility_id: int, day: date, ignore_gap_minutes: int = 30,
             merged[-1] = (iv[0], iv[1])
     covered = sum((e - s).total_seconds() / 60 for s, e in merged)
     covered = min(covered, 1440)
+    # Presentation metadata for the dedicated coverage view. These values are
+    # derived from the exact merged intervals used above, so the UI never
+    # recreates RN eligibility or gap logic independently.
+    day_end = datetime.combine(day + timedelta(days=1), time(0))
+    timeline = []
+    for start, end in merged:
+        start_minute = max(int((start - day_start).total_seconds() / 60), 0)
+        end_minute = min(int((end - day_start).total_seconds() / 60), 1440)
+        timeline.append({
+            "start_minute": start_minute,
+            "end_minute": end_minute,
+            "left_pct": round(start_minute / 1440 * 100, 4),
+            "width_pct": round(max(end_minute - start_minute, 0) / 1440 * 100, 4),
+        })
+    gap_intervals = []
+    cursor = day_start
+    for start, end in merged:
+        if start > cursor:
+            minutes = int((start - cursor).total_seconds() / 60)
+            gap_intervals.append({
+                "start_minute": int((cursor - day_start).total_seconds() / 60),
+                "end_minute": int((start - day_start).total_seconds() / 60),
+                "minutes": minutes,
+                "reportable": minutes >= ignore_gap_minutes,
+            })
+        cursor = max(cursor, end)
+    if cursor < day_end:
+        minutes = int((day_end - cursor).total_seconds() / 60)
+        gap_intervals.append({
+            "start_minute": int((cursor - day_start).total_seconds() / 60),
+            "end_minute": 1440,
+            "minutes": minutes,
+            "reportable": minutes >= ignore_gap_minutes,
+        })
     return {
         "covered_minutes": int(covered),
         "coverage_pct": round(covered / 1440 * 100, 1),
         "full_coverage": covered >= 1440,
         "gaps": max(len(merged) - 1, 0) if merged else (1 if not intervals else 0),
+        "timeline": timeline,
+        "gap_intervals": gap_intervals,
     }
 
 

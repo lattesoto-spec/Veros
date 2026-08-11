@@ -1,118 +1,54 @@
 {% extends "base.html" %}
-{% block title %}Eligibility | CareMin{% endblock %}
+{% block title %}Eligibility review | CareMin{% endblock %}
 {% block content %}
-<section class="page-header">
-  <div>
-    <p class="eyebrow">Compliance</p>
-    <h1>Care minute eligibility</h1>
-    <p class="muted">
-      Only registered nurses, enrolled nurses and personal care workers may count
-      toward the targets. Anything unresolved is <strong>excluded from the
-      figures</strong> until someone confirms it. An unreviewed row must never
-      quietly inflate a regulated number.
-    </p>
-  </div>
+<section class="page-header"><div><p class="eyebrow">Data and evidence / Eligibility review</p><h1>Eligibility review</h1><p class="page-purpose">Resolve staff classifications and registration evidence before minutes enter a reported result.</p><p class="page-meta">Unresolved records remain excluded · approximately {{ withheld }} minutes withheld across the latest 30 days</p></div></section>
+
+<dl class="queue-summary"><div><dt>Awaiting decision</dt><dd>{{ buckets.pending|length }}</dd></div><div><dt>Missing evidence</dt><dd>{{ buckets.blocked|length }}</dd></div><div><dt>Counted</dt><dd>{{ buckets.approved|length }}</dd></div><div><dt>Not counted</dt><dd>{{ buckets.excluded|length }}</dd></div></dl>
+
+{% if buckets.pending or buckets.blocked %}<p class="notice notice-warning"><strong>Calculation impact.</strong> Records awaiting a decision or required registration evidence do not contribute to any care-minute result.</p>{% endif %}
+
+<section class="record-section" aria-labelledby="queue-title">
+  <div class="section-heading"><div><h2 id="queue-title">Staff classification queue</h2><p class="muted">Select a record to inspect its source role, evidence basis and calculation treatment.</p></div></div>
+  <div class="filter-bar"><label>Search<input type="search" placeholder="Name, role or evidence" data-table-filter="eligibility-table"></label></div>
+  <div class="table-wrap"><table id="eligibility-table"><caption class="sr-only">Eligibility decisions for {{ facility.name }}</caption><thead><tr><th>Name</th><th>Imported role</th><th>Proposed role</th><th>Evidence basis</th><th>Status</th><th><span class="sr-only">Action</span></th></tr></thead><tbody>
+  {% for status, label in [('pending','Review required'),('blocked','Missing evidence'),('approved','Counted'),('excluded','Not counted')] %}
+    {% for staff in buckets[status] %}
+    {% set problem = registration_problem(staff) %}
+    <tr>
+      <td><strong>{{ staff.name }}</strong><span class="cell-note">ID {{ staff.staff_id }}</span></td>
+      <td>{{ staff.source_role or 'Not recorded' }}</td><td>{{ staff.role }}</td>
+      <td>{{ problem or staff.eligibility_reason or 'Not recorded' }}</td>
+      <td><span class="status-text {% if status == 'approved' %}status-pass{% elif status in ('pending','blocked') %}status-review{% else %}status-na{% endif %}">{{ label }}</span></td>
+      <td>{% if has_permission('manage_facility') %}<button type="button" class="secondary" data-dialog-open="eligibility-{{ staff.id }}">Review</button>{% else %}<button type="button" class="secondary" data-dialog-open="eligibility-{{ staff.id }}">View</button>{% endif %}</td>
+    </tr>
+    {% endfor %}
+  {% endfor %}
+  </tbody></table></div>
 </section>
 
-{% if buckets['pending'] %}
-<div class="errors">
-  <ul><li>
-    {{ buckets['pending']|length }} staff member{{ 's' if buckets['pending']|length != 1 }}
-    awaiting a decision.
-    {% if withheld %}Roughly {{ withheld }} minutes in the last 30 days are being
-    withheld from your care-minute totals as a result.{% endif %}
-  </li></ul>
-</div>
-{% endif %}
-
-{% for status, title, note in [
-    ('pending',  'Awaiting decision',  'Not counted. Approve only if the person genuinely performs direct care in an eligible classification.'),
-    ('blocked',  'Approved but missing evidence', 'Not counted until current Ahpra registration evidence is recorded.'),
-    ('approved', 'Counted',            'These minutes contribute to all three quarterly tests.'),
-    ('excluded', 'Not counted',        'Roles that cannot contribute, including allied health, lifestyle, care management and hotel services.')] %}
-{% if buckets.get(status) %}
-<section class="block">
-  <div class="section-card">
-    <div class="section-heading">
-      <div>
-        <h2>{{ title }} ({{ buckets[status]|length }})</h2>
-        <p class="muted">{{ note }}</p>
-      </div>
+{% for status, label in [('pending','Review required'),('blocked','Missing evidence'),('approved','Counted'),('excluded','Not counted')] %}
+  {% for staff in buckets[status] %}
+  {% set problem = registration_problem(staff) %}
+  <dialog class="drawer" id="eligibility-{{ staff.id }}" aria-labelledby="eligibility-title-{{ staff.id }}">
+    <div class="dialog-header"><div><p class="section-kicker">Staff record {{ staff.staff_id }}</p><h2 id="eligibility-title-{{ staff.id }}">{{ staff.name }}</h2></div><button type="button" class="dialog-close" data-dialog-close>Close</button></div>
+    <div class="dialog-body">
+      <dl class="ruled-list"><div><dt>Imported role</dt><dd>{{ staff.source_role or 'Not recorded' }}</dd></div><div><dt>Mapped role</dt><dd>{{ staff.role }}</dd></div><div><dt>Current status</dt><dd>{{ label }}</dd></div><div><dt>Evidence basis</dt><dd>{{ staff.eligibility_reason or 'Not recorded' }}</dd></div><div><dt>Ahpra registration</dt><dd>{{ staff.registration_number or 'Not recorded' }}</dd></div><div><dt>Registration expiry</dt><dd>{{ staff.registration_expiry.strftime('%d %b %Y') if staff.registration_expiry else 'Not recorded' }}</dd></div><div><dt>Employment type</dt><dd>{{ staff.employment_type or 'Not recorded' }}</dd></div><div><dt>Decision timestamp</dt><dd>{{ staff.approved_at.strftime('%d %b %Y %H:%M UTC') if staff.approved_at else 'Not recorded' }}</dd></div></dl>
+      {% if problem %}<p class="notice notice-warning"><strong>Evidence problem.</strong> {{ problem }}. This record cannot be approved until the required evidence is current.</p>{% endif %}
+      <p class="notice notice-neutral"><strong>Calculation impact.</strong> An approved eligible role releases its qualifying actual-worked minutes into the next calculation. Pending and excluded records remain withheld.</p>
+      {% if has_permission('manage_facility') %}
+      <form method="post" action="{{ url_for('eligibility_decide', staff_id=staff.id) }}" class="form dialog-section">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <label>Decision<select name="decision"><option value="approved" {% if staff.eligibility_status=='approved' %}selected{% endif %}>Counted: eligible direct care</option><option value="excluded" {% if staff.eligibility_status=='excluded' %}selected{% endif %}>Not counted</option><option value="pending" {% if staff.eligibility_status=='pending' %}selected{% endif %}>Leave undecided</option></select></label>
+        <label>Count as<select name="mapped_role">{% for code, role_label in [('RN','Registered nurse'),('EN','Enrolled nurse'),('PCW','PCW / PCA / AIN'),('OTHER','Not an eligible role')] %}<option value="{{ code }}" {% if staff.role==code or (code=='PCW' and staff.role in ('PCA','AIN')) %}selected{% endif %}>{{ role_label }}</option>{% endfor %}</select></label>
+        <div class="row"><label>Ahpra registration<input type="text" name="registration_number" value="{{ staff.registration_number or '' }}"></label><label>Registration expiry<input type="date" name="registration_expiry" value="{{ staff.registration_expiry.isoformat() if staff.registration_expiry else '' }}"></label></div>
+        <div class="row"><label>Eligible from<input type="date" name="eligible_from" value="{{ staff.eligible_from.isoformat() if staff.eligible_from else '' }}"></label><label>Eligible to<input type="date" name="eligible_to" value="{{ staff.eligible_to.isoformat() if staff.eligible_to else '' }}"></label></div>
+        <label>Employment type<select name="employment_type">{% for type in ('', 'employee', 'agency', 'contractor') %}<option value="{{ type }}" {% if staff.employment_type==type %}selected{% endif %}>{{ type or 'Not recorded' }}</option>{% endfor %}</select></label>
+        <label>Basis for the decision<input type="text" name="reason" value="{{ staff.eligibility_reason or '' }}" placeholder="Evidence reviewed and reason for inclusion or exclusion"></label>
+        <button type="submit">Save decision</button>
+      </form>
+      {% endif %}
     </div>
-    <div style="overflow-x:auto">
-      <table class="data-table">
-        <thead>
-          <tr><th>Name</th><th>Role</th><th>As imported</th><th>Basis</th>
-              <th>Registration</th>{% if has_permission('manage_facility') %}<th>Decision</th>{% endif %}</tr>
-        </thead>
-        <tbody>
-        {% for s in buckets[status] %}
-          <tr>
-            <td>{{ s.name }}</td>
-            <td><code>{{ s.role }}</code></td>
-            <td class="muted">{{ s.source_role or 'Not recorded' }}</td>
-            <td class="muted">{{ s.eligibility_reason or 'Not recorded' }}</td>
-            <td>
-              {% set problem = registration_problem(s) %}
-              {% if problem %}<span class="pill pill-at_risk">{{ problem }}</span>
-                {% if s.registration_number %}<br><span class="muted">{{ s.registration_number }}</span>{% endif %}
-              {% elif s.registration_number %}{{ s.registration_number }}
-              {% else %}Not recorded{% endif %}
-            </td>
-            {% if has_permission('manage_facility') %}
-            <td>
-              <details class="row-danger">
-                <summary>Change</summary>
-                <form method="post" action="{{ url_for('eligibility_decide', staff_id=s.id) }}" class="form">
-                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                  <label>Decision
-                    <select name="decision">
-                      <option value="approved" {% if s.eligibility_status=='approved' %}selected{% endif %}>Counted: eligible direct care</option>
-                      <option value="excluded" {% if s.eligibility_status=='excluded' %}selected{% endif %}>Not counted</option>
-                      <option value="pending"  {% if s.eligibility_status=='pending'  %}selected{% endif %}>Leave undecided</option>
-                    </select>
-                  </label>
-                  <label>Count as
-                    <select name="mapped_role">
-                      {% for code, label in [('RN','Registered nurse'),('EN','Enrolled nurse'),('PCW','PCW / PCA / AIN'),('OTHER','Not an eligible role')] %}
-                      <option value="{{ code }}" {% if s.role==code or (code=='PCW' and s.role in ('PCA','AIN')) %}selected{% endif %}>{{ label }}</option>
-                      {% endfor %}
-                    </select>
-                  </label>
-                  <label>Ahpra registration (RN/EN)
-                    <input type="text" name="registration_number" value="{{ s.registration_number or '' }}">
-                  </label>
-                  <label>Registration expiry
-                    <input type="date" name="registration_expiry" value="{{ s.registration_expiry.isoformat() if s.registration_expiry else '' }}">
-                  </label>
-                  <label>Eligible from
-                    <input type="date" name="eligible_from" value="{{ s.eligible_from.isoformat() if s.eligible_from else '' }}">
-                  </label>
-                  <label>Eligible to
-                    <input type="date" name="eligible_to" value="{{ s.eligible_to.isoformat() if s.eligible_to else '' }}">
-                  </label>
-                  <label>Employment
-                    <select name="employment_type">
-                      {% for t in ('', 'employee', 'agency', 'contractor') %}
-                      <option value="{{ t }}" {% if s.employment_type==t %}selected{% endif %}>{{ t or 'not recorded' }}</option>
-                      {% endfor %}
-                    </select>
-                  </label>
-                  <label>Basis for the decision
-                    <input type="text" name="reason" value="{{ s.eligibility_reason or '' }}" placeholder="e.g. AIN, Cert III and payroll classification verified">
-                  </label>
-                  <button type="submit">Save decision</button>
-                </form>
-              </details>
-            </td>
-            {% endif %}
-          </tr>
-        {% endfor %}
-        </tbody>
-      </table>
-    </div>
-  </div>
-</section>
-{% endif %}
+  </dialog>
+  {% endfor %}
 {% endfor %}
 {% endblock %}

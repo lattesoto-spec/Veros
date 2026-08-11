@@ -1,55 +1,12 @@
 {% extends "base.html" %}
-{% block title %}Import complete | CareMin{% endblock %}
+{% block title %}Import receipt #{{ receipt.id }} | CareMin{% endblock %}
 {% block content %}
-<section class="page-header">
-  <div>
-    <p class="eyebrow">Universal import</p>
-    <h1>Import complete</h1>
-    <p class="muted">
-      {{ receipt.shifts_imported }} shifts, {{ receipt.residents_imported }} residents,
-      {{ receipt.resident_days_imported }} resident days and
-      {{ receipt.care_episodes_imported }} care episodes imported
-      for {{ facility.name }}{% if receipt.shifts_skipped %} · {{ receipt.shifts_skipped }} rows skipped{% endif %}.
-    </p>
-  </div>
-</section>
+<section class="page-header"><div><p class="eyebrow">Data and evidence / Imports</p><h1>Review import receipt #{{ receipt.id }}</h1><p class="page-purpose">Confirm what was included, withheld and recorded before using the updated calculation.</p><p class="page-meta">{{ facility.name }} · imported {{ receipt.imported_at.strftime('%d %b %Y %H:%M UTC') }} · calculation {{ receipt.calc_version or 'Not recorded' }}</p></div></section>
+<ol class="workflow-steps" aria-label="Import workflow"><li class="complete"><span>1</span><strong>Source files</strong></li><li class="complete"><span>2</span><strong>Assign records</strong></li><li class="complete"><span>3</span><strong>Validate</strong></li><li class="complete"><span>4</span><strong>Resolve</strong></li><li class="active"><span>5</span><strong>Confirm</strong></li></ol>
 
-{% for o in outcomes %}
-<section class="block">
-  <div class="section-card">
-    <div class="section-heading">
-      <div>
-        <h2>{{ o.filename }}</h2>
-        <p class="muted">Validated and added to import #{{ receipt.id }}.</p>
-      </div>
-    </div>
-    {% for r in o.results %}
-    <p>
-      <strong>{{ r.kind.replace('_', ' ') }}</strong> from sheet “{{ r.sheet }}”:
-      {{ r.imported }} of {{ r.rows_seen - r.rows_filtered }} rows imported
-      {% if r.rows_filtered %} · {{ r.rows_filtered }} filtered (leave/non-shift rows){% endif %}
-      {% if r.evidence_type %}
-        · classified as <strong>{{ r.evidence_type.replace('_', ' ') }}</strong>
-        {% if r.evidence_basis %}<span class="muted">({{ r.evidence_basis }})</span>{% endif %}
-      {% endif %}
-    </p>
-    {% endfor %}
-    {% if o.warnings %}
-    <div class="errors">
-      <p><strong>Data quality warnings</strong></p>
-      <ul>{% for w in o.warnings %}<li>{{ w }}</li>{% endfor %}</ul>
-    </div>
-    {% endif %}
-    {% if o.row_errors %}
-    <details class="muted helper-details">
-      <summary>Skipped rows ({{ o.row_errors|length }})</summary>
-      {% for e in o.row_errors[:25] %}<p>{{ e }}</p>{% endfor %}
-      {% if o.row_errors|length > 25 %}<p>{{ o.row_errors|length - 25 }} additional errors</p>{% endif %}
-    </details>
-    {% endif %}
-  </div>
-</section>
-{% endfor %}
+<section class="record-section" aria-labelledby="receipt-title"><div class="section-heading"><div><p class="section-kicker">Receipt summary</p><h2 id="receipt-title">Committed records</h2></div></div><div class="table-wrap"><table><thead><tr><th>Record type</th><th class="num">Included</th><th class="num">Skipped</th><th>Evidence treatment</th></tr></thead><tbody><tr><td>Staffing shifts</td><td class="num">{{ receipt.shifts_imported }}</td><td class="num">{{ receipt.shifts_skipped }}</td><td>{{ (receipt.evidence_type or 'unverified').replace('_', ' ') }}</td></tr><tr><td>Residents</td><td class="num">{{ receipt.residents_imported }}</td><td class="num">{{ receipt.residents_skipped }}</td><td>Reference and denominator inputs</td></tr><tr><td>Resident days</td><td class="num">{{ receipt.resident_days_imported }}</td><td class="num">Not recorded</td><td>Occupied-bed-day ledger</td></tr><tr><td>Delivered-care episodes</td><td class="num">{{ receipt.care_episodes_imported }}</td><td class="num">Not recorded</td><td>Reconciliation only</td></tr></tbody></table></div></section>
 
-<p><a href="{{ url_for('dashboard') }}">Go to dashboard →</a></p>
+<section class="record-section" aria-labelledby="files-title"><div class="section-heading"><div><p class="section-kicker">Source results</p><h2 id="files-title">File validation ledger</h2></div></div>{% for outcome in outcomes %}<details class="file-result" {% if outcome.warnings or outcome.row_errors %}open{% endif %}><summary><strong>{{ outcome.filename }}</strong><span>{% if outcome.warnings or outcome.row_errors %}Review required{% else %}Complete{% endif %}</span></summary><div>{% for result in outcome.results %}<p><strong>{{ result.kind.replace('_', ' ') }}</strong> · sheet {{ result.sheet }} · {{ result.imported }} of {{ result.rows_seen - result.rows_filtered }} candidate rows included{% if result.rows_filtered %} · {{ result.rows_filtered }} filtered{% endif %}{% if result.evidence_type %} · {{ result.evidence_type.replace('_', ' ') }}{% endif %}</p>{% endfor %}{% if outcome.warnings %}<div class="notice notice-warning"><strong>Warnings</strong><ul>{% for warning in outcome.warnings %}<li>{{ warning }}</li>{% endfor %}</ul></div>{% endif %}{% if outcome.row_errors %}<div class="row-errors"><strong>Rejected or skipped source rows ({{ outcome.row_errors|length }})</strong>{% for error in outcome.row_errors[:25] %}<p>{{ error }}</p>{% endfor %}{% if outcome.row_errors|length > 25 %}<p>{{ outcome.row_errors|length - 25 }} additional errors are retained in the receipt summary.</p>{% endif %}</div>{% endif %}</div></details>{% endfor %}</section>
+
+<nav class="next-actions" aria-label="Import next actions">{% if receipt.shifts_skipped %}<a class="secondary-action" href="{{ url_for('eligibility_queue') }}">Open eligibility review</a>{% endif %}<a class="primary-action" href="{{ url_for('dashboard') }}">View dashboard</a><a class="secondary-action" href="{{ url_for('audit') }}">Open audit receipt</a></nav>
 {% endblock %}

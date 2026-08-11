@@ -1,241 +1,124 @@
 {% extends "base.html" %}
 {% block title %}{{ facility.name }} | Dashboard{% endblock %}
+{% block head %}<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>{% endblock %}
 {% block content %}
 <section class="page-header">
   <div>
-    <p class="eyebrow">Dashboard</p>
-    <h1>{{ facility.name }}</h1>
-    <p class="muted">
-      {{ today.strftime('%A, %d %B %Y') }} · {{ resident_count }} active residents
-      {% if last_receipt %}
-        · last import {{ last_receipt.imported_at.strftime('%d %b %Y, %H:%M UTC') }}
-      {% endif %}
-    </p>
+    <p class="eyebrow">Overview / Dashboard</p>
+    <h1>Current reporting position</h1>
+    <p class="page-purpose">Monitor exceptions, period results and the evidence supporting {{ facility.name }}.</p>
+    <p class="page-meta">{{ q_start.strftime('%d %b %Y') }} to {{ q_end.strftime('%d %b %Y') }} · calculation {{ calc_version }} · data through {{ today.strftime('%d %b %Y') }}</p>
   </div>
+  {% if has_permission('import_data') %}<a class="primary-action" href="{{ url_for('universal_import') }}">Import latest data</a>{% endif %}
 </section>
 
-{% if evidence and (evidence.rostered_minutes or evidence.unverified_minutes or evidence.worked_withheld_minutes or evidence.care_episode_count or not evidence.resident_day_ledger_complete) %}
-<section class="block">
-  <div class="section-card">
-    <div class="section-heading"><div><h2>Evidence status</h2><p class="muted">Only eligible actual-worked rows are in the compliance result</p></div></div>
-    <p>
-      Actual worked <strong>{{ evidence.worked_minutes }}</strong> min ·
-      rostered <strong>{{ evidence.rostered_minutes }}</strong> min ·
-      unverified <strong>{{ evidence.unverified_minutes }}</strong> min ·
-      delivered-care evidence <strong>{{ evidence.delivered_minutes }}</strong> min.
-    </p>
+<section class="attention-register" aria-labelledby="attention-title">
+  <div class="section-heading">
+    <div><p class="section-kicker">Attention required</p><h2 id="attention-title">Open review items</h2></div>
+  </div>
+  <div class="attention-rows">
+    {% if pending_eligibility %}
+    <a href="{{ url_for('eligibility_queue') }}"><strong>{{ pending_eligibility }}</strong><span>classification decision{{ 's' if pending_eligibility != 1 }}</span><span>Open eligibility review</span></a>
+    {% endif %}
     {% if evidence.worked_withheld_minutes %}
-    <p>
-      <span class="pill pill-at_risk">action required</span>
-      <strong>{{ evidence.worked_withheld_minutes }}</strong> actual-worked minutes are
-      withheld because staff eligibility or registration evidence is incomplete.
-      <a href="{{ url_for('eligibility_queue') }}">Review eligibility</a>.
-    </p>
+    <a href="{{ url_for('eligibility_queue') }}"><strong>{{ evidence.worked_withheld_minutes }}</strong><span>actual-worked minutes withheld</span><span>Review evidence</span></a>
     {% endif %}
-    {% if not evidence.resident_day_ledger_complete %}<p><span class="pill pill-at_risk">denominator warning</span> Resident-day ledger coverage is {{ evidence.resident_day_dates }}/{{ evidence.resident_day_expected_dates }} days; uncovered days use admission/discharge fallback.</p>{% endif %}
-  </div>
-</section>
-{% endif %}
-
-<section class="cards">
-  <div class="card status-{{ 'on_track' if compliance_pct and compliance_pct >= 100 else ('at_risk' if compliance_pct and compliance_pct >= 95 else 'behind') }}">
-    <div class="card-label">Compliance (quarter to date)</div>
-    <div class="card-value">{{ compliance_pct if compliance_pct is not none else 'Not available' }}{% if compliance_pct is not none %}%{% endif %}</div>
-    <div class="card-sub">of AN-ACC target</div>
-  </div>
-  <div class="card status-{{ today_stats.status }}">
-    <div class="card-label">Care minutes / resident (today)</div>
-    <div class="card-value">{{ today_stats.care_per_resident }}</div>
-    <div class="card-sub">Target {{ facility.ancc_target }}</div>
-  </div>
-  <div class="card status-{{ today_stats.rn_status }}">
-    <div class="card-label">RN minutes / resident (today)</div>
-    <div class="card-value">{{ today_stats.rn_per_resident }}</div>
-    <div class="card-sub">Target {{ facility.rn_target }}</div>
-  </div>
-  <div class="card status-{{ 'on_track' if coverage.full_coverage else 'at_risk' }}">
-    <div class="card-label">RN 24/7 coverage</div>
-    <div class="card-value">{{ coverage.coverage_pct }}%</div>
-    <div class="card-sub">{{ coverage.covered_minutes }} of 1440 mins</div>
-  </div>
-</section>
-
-<section class="block">
-  <div class="section-card">
-    <div class="section-heading">
-      <div>
-        <h2>Risk alerts</h2>
-        <p class="muted">
-          Gap detection and predictions ·
-          {% if data_age_days is not none %}data last imported {{ data_age_days }} day(s) ago{% else %}no imports yet{% endif %}
-          {% if audit_readiness is not none %} · audit readiness {{ audit_readiness }}%{% endif %}
-        </p>
-      </div>
-    </div>
-    {% for a in alerts %}
-      <p><span class="pill pill-{{ 'behind' if a.severity == 'high' else ('at_risk' if a.severity == 'medium' else 'on_track') }}">{{ a.severity }}</span> {{ a.message }}</p>
-    {% endfor %}
+    {% if not evidence.resident_day_ledger_complete %}
+    <a href="{{ url_for('audit') }}"><strong>{{ evidence.resident_day_dates }}/{{ evidence.resident_day_expected_dates }}</strong><span>resident-day dates supported by the ledger</span><span>Review source record</span></a>
+    {% endif %}
+    {% if not coverage_available %}
+    <a href="{{ url_for('universal_import') if has_permission('import_data') else url_for('rn_coverage_view') }}"><strong>Not available</strong><span>RN coverage has no actual-worked source on the latest included date</span><span>{{ 'Import attendance data' if has_permission('import_data') else 'Open RN coverage' }}</span></a>
+    {% elif not coverage.full_coverage %}
+    <a href="{{ url_for('rn_coverage_view') }}"><strong>{{ 1440 - coverage.covered_minutes }}</strong><span>RN coverage minutes unresolved on latest day</span><span>Open RN coverage</span></a>
+    {% endif %}
     {% if data_age_days is not none and data_age_days > 7 %}
-      <p><span class="pill pill-at_risk">medium</span> Pending upload: newest import is {{ data_age_days }} days old. Import the latest roster.</p>
+    <a href="{{ url_for('universal_import') }}"><strong>{{ data_age_days }} days</strong><span>since the latest import</span><span>Import current data</span></a>
     {% endif %}
-    <p class="muted"><a href="{{ url_for('compliance_view') }}">Full compliance view →</a> · <a href="{{ url_for('scenarios') }}">Scenario planning →</a></p>
-  </div>
-</section>
-
-<section class="block">
-  <div class="section-card chart-card">
-    <div class="section-heading">
-      <div>
-        <h2>Last 14 days</h2>
-        <p class="muted">Daily care minutes per resident against target</p>
-      </div>
-    </div>
-    <canvas id="trend" height="120"></canvas>
-  </div>
-</section>
-
-<section class="block qtd">
-  <div class="section-card">
-    <div class="section-heading">
-      <div>
-        <h2>Quarter to date</h2>
-        <p class="muted">Performance since {{ q_start.strftime('%d %b') }}</p>
-      </div>
-    </div>
-    <p>
-      Weighted result <strong>{{ q_avg.care_per_resident }}</strong> mins/occupied-bed-day across
-      {{ q_avg.days }} days since {{ q_start.strftime('%d %b') }}.
-      {% if q_gap >= 0 %}
-        <span class="badge ok">{{ q_gap }} above target</span>
-      {% else %}
-        <span class="badge {% if q_gap_pct < -5 %}bad{% else %}warn{% endif %}">
-          {{ q_gap }} mins ({{ q_gap_pct }}%) below target
-        </span>
-      {% endif %}
-    </p>
-    <p class="muted">RN average: {{ q_avg.rn_per_resident }} mins (target {{ facility.rn_target }})</p>
-  </div>
-</section>
-
-<section class="block">
-  <div class="section-card">
-    <div class="section-heading">
-      <div>
-        <h2>Daily breakdown</h2>
-        <p class="muted">Latest 14-day resident and staffing summary</p>
-      </div>
-    </div>
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>Date</th>
-            <th>Residents</th>
-            <th>Total care mins</th>
-            <th>RN mins</th>
-            <th>Care / resident</th>
-            <th>RN / resident</th>
-            <th>Status</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for r in last_14 %}
-          <tr>
-            <td>{{ r.date.strftime('%d %b') }}</td>
-            <td>{{ r.active_residents }}</td>
-            <td>{{ r.total_minutes }}</td>
-            <td>{{ r.rn_minutes }}</td>
-            <td>{{ r.care_per_resident }}</td>
-            <td>{{ r.rn_per_resident }}</td>
-            <td><span class="pill pill-{{ r.status }}">{{ r.status.replace('_', ' ') }}</span></td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-  </div>
-</section>
-
-<section class="block">
-  <div class="section-card">
-    <div class="section-heading">
-      <div>
-        <h2>Quarterly report</h2>
-        <p class="muted">Generate a Care Minutes Performance Statement-style PDF for QFR and annual audit use</p>
-      </div>
-    </div>
-    <p class="muted">
-      More exports:
-      <a href="{{ url_for('board_report') }}">Board report (PDF)</a> ·
-      <a href="{{ url_for('export_summary_xlsx') }}">90-day summary (Excel)</a> ·
-      <a href="{{ url_for('export_daily_csv') }}">Daily breakdown (CSV)</a>
-    </p>
-    {% if quarters %}
-    <form method="get" action="{{ url_for('quarterly_report') }}" class="form row compact-form">
-      <label>Financial-year quarter
-        <select name="q">
-          {% for q in quarters %}
-            <option value="{{ q.year }}-Q{{ q.quarter }}" {% if loop.first %}selected{% endif %}>
-              {{ q.label }} ({{ q.start.strftime('%d %b %Y') }} to {{ q.end.strftime('%d %b %Y') }})
-            </option>
-          {% endfor %}
-        </select>
-      </label>
-      <button type="submit">Download PDF</button>
-    </form>
-    {% else %}
-    <p class="muted">No shift data yet. Upload a roster to enable quarterly reporting.</p>
+    {% if not pending_eligibility and not evidence.worked_withheld_minutes and evidence.resident_day_ledger_complete and coverage_available and coverage.full_coverage and (data_age_days is none or data_age_days <= 7) %}
+    <p class="empty-row"><strong>No open evidence exceptions detected.</strong><span>Continue monitoring new imports and reporting-period movement.</span></p>
     {% endif %}
   </div>
 </section>
 
-<p class="muted section-link"><a href="{{ url_for('universal_import') }}">Import new data</a></p>
+<section class="record-section" aria-labelledby="period-title">
+  <div class="section-heading">
+    <div><p class="section-kicker">Current period</p><h2 id="period-title">Care-minute tests and RN continuity</h2></div>
+    <a href="{{ url_for('compliance_view') }}">Open care-minute detail</a>
+  </div>
+  <div class="table-wrap">
+    <table class="result-ledger">
+      <caption class="sr-only">Current reporting-period results for {{ facility.name }}</caption>
+      <thead><tr><th>Measure</th><th class="num">Result</th><th class="num">Target</th><th>Position</th><th>Evidence</th></tr></thead>
+      <tbody>
+      {% for test in tests.tests %}
+        <tr>
+          <td><strong>{{ test.label }}</strong><span class="cell-note">{{ test.basis }}</span></td>
+          <td class="num">{{ test.achieved if tests.totals.bed_days else 'Not available' }}</td>
+          <td class="num">{{ test.target }}</td>
+          <td>{% if not tests.totals.bed_days %}Not available{% elif test.shortfall %}{{ test.shortfall }} below{% else %}{{ (test.achieved - test.target)|round(1) }} above{% endif %}</td>
+          <td>{% if not tests.totals.bed_days or test.passed is none %}<span class="status-text status-na">Not available</span>{% elif test.passed %}<span class="status-text status-pass">Pass</span>{% else %}<span class="status-text status-fail">Fail</span>{% endif %}</td>
+        </tr>
+      {% endfor %}
+        <tr>
+          <td><strong>RN 24-hour coverage</strong><span class="cell-note">Latest included day</span></td>
+          <td class="num">{{ coverage.coverage_pct ~ '%' if coverage_available else 'Not available' }}</td><td class="num">100%</td>
+          <td>{% if not coverage_available %}Not available{% elif coverage.full_coverage %}Complete{% else %}{{ 1440 - coverage.covered_minutes }} min uncovered{% endif %}</td>
+          <td><span class="status-text {% if not coverage_available %}status-na{% elif coverage.full_coverage %}status-pass{% else %}status-review{% endif %}">{% if not coverage_available %}Not available{% elif coverage.full_coverage %}Complete{% else %}Review required{% endif %}</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="record-basis">{{ tests.totals.bed_days }} occupied bed days · {{ tests.totals.days }} included dates · target {{ facility.ancc_target }} total and {{ facility.rn_target }} RN minutes per occupied bed day · calculation {{ tests.calc_version }}</p>
+</section>
 
+<section class="record-section chart-section" aria-labelledby="trend-title">
+  <div class="section-heading"><div><p class="section-kicker">14-day trend</p><h2 id="trend-title">Daily total care minutes</h2><p class="muted">Missing or incomplete days are left as gaps, not connected as observed results.</p></div></div>
+  <div class="chart-frame"><canvas id="trend" height="120" aria-label="Daily care minutes against the facility target"></canvas></div>
+  <details class="table-alternative">
+    <summary>View trend as a table</summary>
+    <div class="table-wrap"><table><thead><tr><th>Date</th><th class="num">Residents</th><th class="num">Care minutes</th><th class="num">RN minutes</th><th>Position</th></tr></thead><tbody>
+      {% for row in last_14 %}<tr><td>{{ row.date.strftime('%d %b %Y') }}</td><td class="num">{{ row.active_residents }}</td><td class="num">{{ row.care_per_resident if row.active_residents and row.total_minutes else 'Not available' }}</td><td class="num">{{ row.rn_per_resident if row.active_residents and row.total_minutes else 'Not available' }}</td><td>{{ row.status.replace('_', ' ') if row.active_residents and row.total_minutes else 'Not available' }}</td></tr>{% endfor %}
+    </tbody></table></div>
+  </details>
+</section>
+
+<section class="split-records">
+  <section class="record-section" aria-labelledby="evidence-title">
+    <div class="section-heading"><div><p class="section-kicker">Evidence health</p><h2 id="evidence-title">Supporting record</h2></div><a href="{{ url_for('audit') }}">Open audit trail</a></div>
+    <dl class="ruled-list">
+      <div><dt>Eligible actual worked</dt><dd>{{ evidence.worked_minutes }} min</dd></div>
+      <div><dt>Rostered, held separate</dt><dd>{{ evidence.rostered_minutes }} min</dd></div>
+      <div><dt>Unverified, withheld</dt><dd>{{ evidence.unverified_minutes }} min</dd></div>
+      <div><dt>Resident-day ledger</dt><dd>{{ evidence.resident_day_dates }}/{{ evidence.resident_day_expected_dates }} dates</dd></div>
+      <div><dt>Retained import files</dt><dd>{{ audit_readiness ~ '%' if audit_readiness is not none else 'Not available' }}</dd></div>
+    </dl>
+  </section>
+  <section class="record-section" aria-labelledby="dates-title">
+    <div class="section-heading"><div><p class="section-kicker">Reporting controls</p><h2 id="dates-title">Period record</h2></div><a href="{{ url_for('reports_view') }}">Open reports</a></div>
+    <dl class="ruled-list">
+      <div><dt>Period end</dt><dd>{{ q_end.strftime('%d %b %Y') }}</dd></div>
+      <div><dt>Included data date</dt><dd>{{ today.strftime('%d %b %Y') }}</dd></div>
+      <div><dt>Latest import</dt><dd>{{ last_receipt.imported_at.strftime('%d %b %Y %H:%M UTC') if last_receipt else 'Not available' }}</dd></div>
+      <div><dt>Calculation version</dt><dd>{{ calc_version }}</dd></div>
+    </dl>
+  </section>
+</section>
+{% endblock %}
+
+{% block scripts %}
 <script>
-  const data = {{ chart_data | tojson }};
-  const ctx = document.getElementById('trend').getContext('2d');
-  new Chart(ctx, {
-    type: 'bar',
-    data: {
-      labels: data.labels,
-      datasets: [{
-        label: 'Care mins / resident',
-        data: data.values,
-        backgroundColor: data.colors,
-        borderWidth: 0,
-      }]
-    },
-    options: {
-      plugins: {
-        legend: { display: false },
-        annotation: {}
-      },
-      scales: {
-        y: {
-          beginAtZero: false,
-          suggestedMin: Math.min(...data.values, data.target) - 10,
-          suggestedMax: Math.max(...data.values, data.target) + 10,
-        }
-      }
-    },
-    plugins: [{
-      id: 'targetLine',
-      afterDraw(chart) {
-        const {ctx, chartArea: {left, right}, scales: {y}} = chart;
-        const yVal = y.getPixelForValue(data.target);
-        ctx.save();
-        ctx.strokeStyle = '#333';
-        ctx.setLineDash([4, 4]);
-        ctx.beginPath();
-        ctx.moveTo(left, yVal);
-        ctx.lineTo(right, yVal);
-        ctx.stroke();
-        ctx.fillStyle = '#333';
-        ctx.font = '11px sans-serif';
-        ctx.fillText('Target ' + data.target, right - 70, yVal - 4);
-        ctx.restore();
-      }
-    }]
-  });
+  (function () {
+    var canvas = document.getElementById("trend");
+    if (!canvas || typeof Chart === "undefined") return;
+    var data = {{ chart_data | tojson }};
+    new Chart(canvas.getContext("2d"), {
+      type: "line",
+      data: { labels: data.labels, datasets: [
+        { label: "Care minutes", data: data.values, borderColor: "#1c6b6e", backgroundColor: "#1c6b6e", pointRadius: 3, borderWidth: 2, spanGaps: false, tension: 0 },
+        { label: "Target " + data.target, data: data.labels.map(function () { return data.target; }), borderColor: "#5d6b73", pointRadius: 0, borderWidth: 1, borderDash: [5, 4] }
+      ]},
+      options: { responsive: true, maintainAspectRatio: true, animation: false, plugins: { legend: { position: "bottom", align: "start" }}, scales: { y: { beginAtZero: false, title: { display: true, text: "Minutes per resident" }}}}
+    });
+  })();
 </script>
 {% endblock %}

@@ -1,114 +1,17 @@
 {% extends "base.html" %}
 {% block title %}Users | CareMin{% endblock %}
 {% block content %}
-<section class="page-header">
-  <div>
-    <p class="eyebrow">Administration</p>
-    <h1>Users</h1>
-    <p class="muted">
-      Everyone who can sign in to {{ organization.name if organization else 'your organization' }}.
-      Each person sees only this organization's data.
-    </p>
-  </div>
-</section>
+<section class="page-header"><div><p class="eyebrow">Administration / Users</p><h1>User register</h1><p class="page-purpose">Manage provider access, roles, account state and two-step verification.</p><p class="page-meta">{{ organization.name if organization else 'Provider organisation' }} · {{ users|length }} account{{ 's' if users|length != 1 }}</p></div><button type="button" data-dialog-open="add-user">Add user</button></section>
 
-<section class="block">
-  <div class="section-card">
-    <div class="section-heading">
-      <div><h2>People</h2><p class="muted">{{ users|length }} account{{ 's' if users|length != 1 }}</p></div>
-    </div>
-    <div style="overflow-x:auto">
-    <table class="data-table">
-      <thead>
-        <tr><th>Email</th><th>Name</th><th>Role</th><th>Status</th><th>Last sign-in</th><th></th></tr>
-      </thead>
-      <tbody>
-      {% for u in users %}
-        <tr{% if not u.is_active %} class="muted"{% endif %}>
-          <td>{{ u.email }}</td>
-          <td>{{ u.name or 'Not provided' }}</td>
-          <td>
-            <form method="post" action="{{ url_for('admin_update_user', user_id=u.id) }}" class="inline-form">
-              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-              <input type="hidden" name="action" value="set_role">
-              <select name="role" onchange="this.form.submit()">
-                {% for key, meta in roles.items() %}
-                <option value="{{ key }}" {% if u.role == key %}selected{% endif %}>{{ meta.label }}</option>
-                {% endfor %}
-              </select>
-            </form>
-          </td>
-          <td>
-            {% if u.is_active %}Active{% else %}Deactivated{% endif %}<br>
-            <span class="muted">Two-step: {{ 'enabled' if u.mfa_enabled else 'setup required' }}</span>
-          </td>
-          <td>{{ u.last_login_at.strftime('%d %b %Y %H:%M') if u.last_login_at else 'never' }}</td>
-          <td>
-            <form method="post" action="{{ url_for('admin_update_user', user_id=u.id) }}" class="inline-form">
-              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-              <input type="hidden" name="action" value="{{ 'reactivate' if not u.is_active else 'deactivate' }}">
-              <button type="submit" class="link-button">{{ 'Reactivate' if not u.is_active else 'Deactivate' }}</button>
-            </form>
-            {% if u.mfa_enabled and current_user.id != u.id %}
-            <form method="post" action="{{ url_for('admin_update_user', user_id=u.id) }}" class="inline-form">
-              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-              <input type="hidden" name="action" value="reset_mfa">
-              <button type="submit" class="link-button">Reset two-step</button>
-            </form>
-            {% endif %}
-            {% if current_user.id != u.id %}
-            <details class="user-reset">
-              <summary>Reset password</summary>
-              <form method="post" action="{{ url_for('admin_update_user', user_id=u.id) }}" class="form">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <input type="hidden" name="action" value="reset_password">
-                <label>Temporary password <input type="password" name="password" minlength="12" autocomplete="new-password" required></label>
-                <label>Confirm password <input type="password" name="confirm_password" minlength="12" autocomplete="new-password" required></label>
-                <button type="submit">Set temporary password</button>
-              </form>
-            </details>
-            {% endif %}
-          </td>
-        </tr>
-      {% endfor %}
-      </tbody>
-    </table>
-    </div>
-  </div>
-</section>
+<section class="record-section" aria-labelledby="users-title"><div class="section-heading"><div><h2 id="users-title">People with access</h2><p class="muted">Open a person to change access. Sensitive actions require confirmation.</p></div></div><div class="filter-bar"><label>Search users<input type="search" placeholder="Name, email, role or status" data-table-filter="users-table"></label></div><div class="table-wrap"><table id="users-table"><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Account</th><th>MFA</th><th>Last sign-in</th><th><span class="sr-only">Action</span></th></tr></thead><tbody>{% for user in users %}<tr><td><strong>{{ user.name or 'Not provided' }}</strong></td><td>{{ user.email }}</td><td>{{ roles[user.role].label }}</td><td><span class="status-text {{ 'status-pass' if user.is_active else 'status-na' }}">{{ 'Active' if user.is_active else 'Deactivated' }}</span></td><td><span class="status-text {{ 'status-pass' if user.mfa_enabled else 'status-review' }}">{{ 'Enabled' if user.mfa_enabled else 'Setup required' }}</span></td><td>{{ user.last_login_at.strftime('%d %b %Y %H:%M') if user.last_login_at else 'Never' }}</td><td><button type="button" class="secondary" data-dialog-open="user-{{ user.id }}">Manage</button></td></tr>{% endfor %}</tbody></table></div></section>
 
-<section class="block">
-  <div class="section-card">
-    <div class="section-heading">
-      <div>
-        <h2>Add a user</h2>
-        <p class="muted">They will be asked to choose their own password at first sign-in.</p>
-      </div>
-    </div>
-    <form method="post" action="{{ url_for('admin_create_user') }}" class="form">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <label>Email <input type="email" name="email" required></label>
-      <label>Full name <input type="text" name="name"></label>
-      <label>Role
-        <select name="role">
-          {% for key, meta in roles.items() %}
-          <option value="{{ key }}">{{ meta.label }}: {{ meta.description }}</option>
-          {% endfor %}
-        </select>
-      </label>
-      <label>Temporary password <input type="password" name="password" required minlength="12"></label>
-      <label>Confirm password <input type="password" name="confirm_password" required minlength="12"></label>
-      <button type="submit">Add user</button>
-    </form>
-  </div>
-</section>
+<section class="record-section" aria-labelledby="permissions-title"><div class="section-heading"><div><h2 id="permissions-title">Role comparison</h2><p class="muted">Compact summary of the primary operational boundaries.</p></div></div><div class="table-wrap"><table><thead><tr><th>Role</th><th>Monitoring</th><th>Import data</th><th>Evidence download</th><th>Facility settings</th><th>User management</th></tr></thead><tbody>{% for key, meta in roles.items() %}<tr><td><strong>{{ meta.label }}</strong><span class="cell-note">{{ meta.description }}</span></td>{% for permission in ('view_dashboard','import_data','download_evidence','manage_facility','manage_users') %}<td>{{ 'Yes' if permission in meta.permissions else 'No' }}</td>{% endfor %}</tr>{% endfor %}</tbody></table></div></section>
 
-<section class="block">
-  <div class="section-card">
-    <div class="section-heading"><div><h2>What each role can do</h2></div></div>
-    {% for key, meta in roles.items() %}
-    <p><strong>{{ meta.label }}</strong>: {{ meta.description }}</p>
-    {% endfor %}
-  </div>
-</section>
+<dialog id="add-user" aria-labelledby="add-user-title"><div class="dialog-header"><div><p class="section-kicker">New account</p><h2 id="add-user-title">Add user</h2></div><button type="button" class="dialog-close" data-dialog-close>Close</button></div><div class="dialog-body"><form method="post" action="{{ url_for('admin_create_user') }}" class="form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><label>Work email<input type="email" name="email" required></label><label>Full name<input type="text" name="name"></label><label>Role<select name="role">{% for key, meta in roles.items() %}<option value="{{ key }}">{{ meta.label }}: {{ meta.description }}</option>{% endfor %}</select></label><label>Temporary password<input type="password" name="password" minlength="12" autocomplete="new-password" required></label><label>Confirm password<input type="password" name="confirm_password" minlength="12" autocomplete="new-password" required></label><p class="notice notice-neutral">The user must replace this temporary password and enroll an authenticator before entering the workspace.</p><button type="submit">Add user</button></form></div></dialog>
+
+{% for user in users %}<dialog class="drawer" id="user-{{ user.id }}" aria-labelledby="user-title-{{ user.id }}"><div class="dialog-header"><div><p class="section-kicker">User account</p><h2 id="user-title-{{ user.id }}">{{ user.name or user.email }}</h2></div><button type="button" class="dialog-close" data-dialog-close>Close</button></div><div class="dialog-body"><dl class="ruled-list"><div><dt>Email</dt><dd>{{ user.email }}</dd></div><div><dt>Account</dt><dd>{{ 'Active' if user.is_active else 'Deactivated' }}</dd></div><div><dt>Two-step verification</dt><dd>{{ 'Enabled' if user.mfa_enabled else 'Setup required' }}</dd></div><div><dt>Last sign-in</dt><dd>{{ user.last_login_at.strftime('%d %b %Y %H:%M UTC') if user.last_login_at else 'Never' }}</dd></div></dl>
+  <form method="post" action="{{ url_for('admin_update_user', user_id=user.id) }}" class="form dialog-section"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="set_role"><label>Role<select name="role">{% for key, meta in roles.items() %}<option value="{{ key }}" {% if user.role == key %}selected{% endif %}>{{ meta.label }}</option>{% endfor %}</select></label><button type="submit">Save role</button></form>
+  {% if current_user.id != user.id %}<div class="dialog-section"><h3>Account access</h3><form method="post" action="{{ url_for('admin_update_user', user_id=user.id) }}" data-confirm="{{ 'Reactivate this account?' if not user.is_active else 'Deactivate this account and revoke its sessions?' }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="{{ 'reactivate' if not user.is_active else 'deactivate' }}"><button type="submit" class="secondary">{{ 'Reactivate account' if not user.is_active else 'Deactivate account' }}</button></form>{% if user.mfa_enabled %}<form method="post" action="{{ url_for('admin_update_user', user_id=user.id) }}" class="inline-form" data-confirm="Reset two-step verification and revoke trusted devices for this user?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="reset_mfa"><button type="submit" class="secondary">Reset two-step verification</button></form>{% endif %}</div>
+  <form method="post" action="{{ url_for('admin_update_user', user_id=user.id) }}" class="form dialog-section"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="reset_password"><h3>Temporary password</h3><p class="muted">Existing sessions and trusted devices will be revoked.</p><label>Temporary password<input type="password" name="password" minlength="12" autocomplete="new-password" required></label><label>Confirm password<input type="password" name="confirm_password" minlength="12" autocomplete="new-password" required></label><button type="submit">Set temporary password</button></form>{% else %}<p class="notice notice-neutral">Use Account security to change your own password or authenticator.</p>{% endif %}
+</div></dialog>{% endfor %}
 {% endblock %}

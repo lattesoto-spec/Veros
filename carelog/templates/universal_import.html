@@ -1,111 +1,69 @@
 {% extends "base.html" %}
-{% block title %}Universal import | CareMin{% endblock %}
+{% block title %}Imports | CareMin{% endblock %}
 {% block content %}
-<section class="page-header">
-  <div>
-    <p class="eyebrow">Universal import</p>
-    <h1>Upload staffing and resident exports</h1>
-    <p class="muted">
-      CSV, Excel, JSON or a SQL dump from any system, including Humanforce, AlayaCare, ShiftCare,
-      payroll exports, API extracts, database backups or hand-made spreadsheets. CareMin
-      validates and organises the records into the correct evidence categories.
-    </p>
-  </div>
-</section>
+<section class="page-header"><div><p class="eyebrow">Data and evidence / Imports</p><h1>Import source records</h1><p class="page-purpose">Add provider exports through a controlled validation and evidence-classification sequence.</p><p class="page-meta">Source dates determine the reporting period during validation. Files remain linked to their import receipt.</p></div></section>
 
-{% if errors %}
-<div class="errors">
-  <ul>{% for e in errors %}<li>{{ e }}</li>{% endfor %}</ul>
-</div>
-{% endif %}
+<ol class="workflow-steps" aria-label="Import workflow"><li class="active"><span>1</span><strong>Source files</strong></li><li><span>2</span><strong>Assign records</strong></li><li><span>3</span><strong>Validate</strong></li><li><span>4</span><strong>Resolve</strong></li><li><span>5</span><strong>Confirm</strong></li></ol>
 
-<section class="block upload-layout">
-  <div class="section-card upload-card">
-    <div class="section-heading">
-      <div>
-        <h2>Import files</h2>
-        <p class="muted">
-          Select one or more files containing worked time, rosters, staff credentials,
-          residents, occupied bed days or delivered-care records.
-          Nested JSON and multi-table SQL dumps are unpacked automatically.
-        </p>
-      </div>
-    </div>
-    <form method="post" enctype="multipart/form-data" class="form"
-          onsubmit="var b=this.querySelector('button[type=submit]');b.disabled=true;b.textContent='Uploading';">
+{% if errors %}<div class="errors" role="alert"><ul>{% for error in errors %}<li>{{ error }}</li>{% endfor %}</ul></div>{% endif %}
+
+<section class="import-workspace">
+  <section class="working-panel" aria-labelledby="source-title"><div class="section-heading"><div><p class="section-kicker">Step 1</p><h2 id="source-title">Choose source files</h2><p class="muted">Select the facility before adding original exports. Do not edit source files to fit a template.</p></div></div>
+    <form method="post" enctype="multipart/form-data" class="form" id="import-form">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      {% if not facility %}
-      <label>Facility name
-        <input type="text" name="facility_name" placeholder="Sunrise Aged Care" required>
+      {% if not facility %}<label>Facility name<input type="text" name="facility_name" placeholder="Riverside Lodge" required></label>
+      {% elif facilities|length > 1 %}<label>Facility<select name="facility_id">{% for item in facilities %}<option value="{{ item.id }}" {% if item.id == facility.id %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></label>
+      {% else %}<input type="hidden" name="facility_id" value="{{ facility.id }}"><div class="read-only-field"><span>Facility</span><strong>{{ facility.name }}</strong></div>{% endif %}
+      <div class="read-only-field"><span>Reporting period</span><strong>Determined from dated source records</strong></div>
+      <label>Source files
+        <span class="file-drop" id="dropzone"><span id="dropzone-label"><strong>Select files</strong> or drop them here</span><input type="file" id="file-input" name="data_files" accept=".csv,.tsv,.txt,.xlsx,.xlsm,.xls,.json,.jsonl,.ndjson,.sql,.db,.sqlite,.sqlite3,.zip" multiple required></span>
+        <span class="field-help">Accepted formats: CSV, Excel, JSON, SQL, SQLite and ZIP. The platform edge currently limits each request to 4.5 MB.</span>
       </label>
-      {% elif facilities|length > 1 %}
-      <label>Import into
-        <select name="facility_id">
-          {% for f in facilities %}
-          <option value="{{ f.id }}" {% if f.id == facility.id %}selected{% endif %}>{{ f.name }}</option>
-          {% endfor %}
-        </select>
-      </label>
-      {% else %}
-      <input type="hidden" name="facility_id" value="{{ facility.id }}">
-      {% endif %}
-      <p class="muted">
-        CareMin classifies shift evidence automatically. Clear payroll, approved-timesheet
-        and actual clocking fields are treated as worked time. Planned schedules are kept as
-        rostered time. Ambiguous rows are withheld as unverified and identified for review.
-      </p>
-      <label>Data files (CSV, Excel, JSON, SQL, ZIP)
-        <div id="dropzone" style="border:2px dashed #bbb;border-radius:8px;padding:1.5rem;text-align:center;cursor:pointer;margin:.4rem 0;">
-          <span id="dropzone-label">Drag &amp; drop files here, or click to browse</span>
-          <input type="file" id="file-input" name="data_files" accept=".csv,.tsv,.txt,.xlsx,.xlsm,.xls,.json,.jsonl,.ndjson,.sql,.db,.sqlite,.sqlite3,.zip" multiple required style="display:none">
-        </div>
-      </label>
-      <button type="submit">Import</button>
+      <div id="selected-files" class="file-ledger" aria-live="polite"></div>
+      <p class="notice notice-neutral"><strong>Evidence classification.</strong> CareMin classifies shift evidence automatically. Approved timesheets, payroll and clocking records can be classified as actual worked. Planned schedules remain rostered. Ambiguous rows are withheld as unverified.</p>
+      <button type="submit" id="import-submit">Upload and validate</button>
     </form>
-    <script>
-      (function () {
-        var zone = document.getElementById("dropzone");
-        var input = document.getElementById("file-input");
-        var label = document.getElementById("dropzone-label");
-        function show() {
-          var names = Array.from(input.files).map(function (f) { return f.name; });
-          label.textContent = names.length ? names.join(", ") : "Drag & drop files here, or click to browse";
-        }
-        zone.addEventListener("click", function () { input.click(); });
-        input.addEventListener("change", show);
-        ["dragover", "dragenter"].forEach(function (ev) {
-          zone.addEventListener(ev, function (e) { e.preventDefault(); zone.style.borderColor = "#4a7"; });
-        });
-        ["dragleave", "drop"].forEach(function (ev) {
-          zone.addEventListener(ev, function (e) { e.preventDefault(); zone.style.borderColor = "#bbb"; });
-        });
-        zone.addEventListener("drop", function (e) {
-          input.files = e.dataTransfer.files;
-          show();
-        });
-      })();
-    </script>
-  </div>
+  </section>
 
-  <div class="section-card side-card">
-    <div class="section-heading">
-      <div>
-        <h2>How it works</h2>
-        <p class="muted">A controlled path from source file to reviewable evidence</p>
-      </div>
-    </div>
-    <details class="muted helper-details" open>
-      <summary>What happens to your file</summary>
-      <p>1. Select the facility and upload the source exports as they came from each system.</p>
-      <p>2. CareMin validates the files and separates staff credentials, actual worked shifts, planned rosters, residents, occupied bed days and delivered-care records.</p>
-      <p>3. Review skipped rows and warnings before relying on the figures. Every accepted row retains its import lineage.</p>
-      <p>
-        No data handy? Try the realistic samples:
-        <a href="{{ url_for('sample_file', filename='resident_census_july_2026.xlsx') }}">resident census</a> ·
-        <a href="{{ url_for('sample_file', filename='worked_staffing_july_2026.xlsx') }}">worked staffing</a> ·
-        <a href="{{ url_for('sample_file', filename='care_delivery_july_2026.xlsx') }}">optional care delivery</a>
-      </p>
-    </details>
-  </div>
+  <aside class="process-register" aria-labelledby="process-title"><p class="section-kicker">Controlled sequence</p><h2 id="process-title">What happens next</h2><ol><li><span>02</span><div><strong>Assign records</strong><p>Detect worked staffing, rosters, credentials, residents, occupied bed days and optional delivered-care evidence.</p></div></li><li><span>03</span><div><strong>Validate</strong><p>Separate accepted, filtered, warning, rejected and unresolved rows with original source references.</p></div></li><li><span>04</span><div><strong>Resolve</strong><p>Withhold ambiguous roles and incomplete evidence for focused review.</p></div></li><li><span>05</span><div><strong>Confirm</strong><p>Create one receipt containing source files, counts, limitations and the calculation version.</p></div></li></ol><p class="sample-links">Sample records: <a href="{{ url_for('sample_file', filename='resident_census_july_2026.xlsx') }}">resident census</a>, <a href="{{ url_for('sample_file', filename='worked_staffing_july_2026.xlsx') }}">worked staffing</a>, <a href="{{ url_for('sample_file', filename='care_delivery_july_2026.xlsx') }}">care delivery</a>.</p></aside>
 </section>
+{% endblock %}
+{% block scripts %}
+<script>
+  (function () {
+    var zone = document.getElementById("dropzone");
+    var input = document.getElementById("file-input");
+    var ledger = document.getElementById("selected-files");
+    var form = document.getElementById("import-form");
+    var submit = document.getElementById("import-submit");
+    if (!zone || !input || !ledger) return;
+    function fileType(name) { var part = name.split(".").pop(); return part ? part.toUpperCase() : "Unknown"; }
+    function render() {
+      ledger.textContent = "";
+      Array.from(input.files).forEach(function (file, index) {
+        var row = document.createElement("div");
+        var record = document.createElement("div");
+        var name = document.createElement("strong");
+        var meta = document.createElement("span");
+        var remove = document.createElement("button");
+        name.textContent = file.name;
+        meta.textContent = fileType(file.name) + " · " + Math.max(Math.round(file.size / 1024), 1) + " KB · source type pending validation";
+        record.appendChild(name); record.appendChild(meta);
+        remove.type = "button"; remove.className = "link-button"; remove.textContent = "Remove";
+        remove.addEventListener("click", function () {
+          var transfer = new DataTransfer();
+          Array.from(input.files).forEach(function (candidate, candidateIndex) { if (candidateIndex !== index) transfer.items.add(candidate); });
+          input.files = transfer.files; render();
+        });
+        row.appendChild(record); row.appendChild(remove); ledger.appendChild(row);
+      });
+    }
+    zone.addEventListener("click", function (event) { if (event.target !== input) input.click(); });
+    input.addEventListener("change", render);
+    ["dragover", "dragenter"].forEach(function (name) { zone.addEventListener(name, function (event) { event.preventDefault(); zone.classList.add("drag-active"); }); });
+    ["dragleave", "drop"].forEach(function (name) { zone.addEventListener(name, function (event) { event.preventDefault(); zone.classList.remove("drag-active"); }); });
+    zone.addEventListener("drop", function (event) { input.files = event.dataTransfer.files; render(); });
+    form.addEventListener("submit", function () { submit.disabled = true; submit.textContent = "Uploading source files"; });
+  })();
+</script>
 {% endblock %}

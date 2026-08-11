@@ -1,50 +1,10 @@
 {% extends "base.html" %}
 {% block title %}Account security | CareMin{% endblock %}
 {% block content %}
-<section class="page-header">
-  <div>
-    <p class="eyebrow">Your account</p>
-    <h1>Account security</h1>
-    <p class="muted">Manage recovery methods and devices that can skip the verification-code step.</p>
-  </div>
-</section>
+<section class="page-header"><div><p class="eyebrow">Your account / Security</p><h1>Account security</h1><p class="page-purpose">Manage recovery methods and devices that can skip the verification-code step.</p></div></section>
 {% if error %}<div class="errors" role="alert"><p>{{ error }}</p></div>{% endif %}
-<section class="block two-col">
-  <div class="section-card">
-    <h2>Two-step verification</h2>
-    <p><strong>Authenticator app:</strong> Enabled</p>
-    <p><strong>Unused recovery codes:</strong> {{ recovery_codes_remaining }}</p>
-    <h3>Generate new recovery codes</h3>
-    <p class="muted">This invalidates every recovery code you previously saved.</p>
-    <form method="post" action="{{ url_for('auth.regenerate_recovery_codes') }}" class="form">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <label>Current password <input type="password" name="current_password" autocomplete="current-password" required></label>
-      <label>Authenticator code <input type="text" name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="11" required></label>
-      <button type="submit">Generate new recovery codes</button>
-    </form>
-  </div>
-  <div class="section-card">
-    <h2>Trusted devices</h2>
-    <p>{{ trusted_devices|length }} active trusted device{{ 's' if trusted_devices|length != 1 }}.</p>
-    {% if trusted_devices %}
-    <ul>
-      {% for device in trusted_devices %}
-      <li>Trusted {{ device.created_at.strftime('%d %b %Y') }}, last used {{ device.last_used_at.strftime('%d %b %Y %H:%M') }}</li>
-      {% endfor %}
-    </ul>
-    <form method="post" action="{{ url_for('auth.revoke_devices') }}" class="form">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <button type="submit" class="secondary">Revoke all trusted devices</button>
-    </form>
-    {% endif %}
-    <h3>Replace authenticator</h3>
-    <p class="muted">You will be signed out and asked to set up two-step verification again.</p>
-    <form method="post" action="{{ url_for('auth.reset_own_mfa') }}" class="form">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <label>Current password <input type="password" name="current_password" autocomplete="current-password" required></label>
-      <label>Authenticator code <input type="text" name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="11" required></label>
-      <button type="submit" class="danger">Replace authenticator</button>
-    </form>
-  </div>
-</section>
+<section class="record-section"><div class="section-heading"><div><h2>Security status</h2></div></div><dl class="queue-summary"><div><dt>Authenticator app</dt><dd>Enabled</dd></div><div><dt>Recovery codes remaining</dt><dd>{{ recovery_codes_remaining }}</dd></div><div><dt>Trusted devices</dt><dd>{{ trusted_devices|length }}</dd></div></dl></section>
+<section class="split-records"><section class="working-panel"><h2>Recovery codes</h2><p>Generate a replacement set if the original codes are unavailable. Every previous recovery code will become invalid.</p><form method="post" action="{{ url_for('auth.regenerate_recovery_codes') }}" class="form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><label>Current password<input type="password" name="current_password" autocomplete="current-password" required></label><label>Authenticator code<input type="text" name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="11" required></label><button type="submit">Generate new recovery codes</button></form></section>
+<section class="working-panel"><h2>Trusted devices</h2>{% if trusted_devices %}<ul class="device-list">{% for device in trusted_devices %}<li><strong>Trusted {{ device.created_at.strftime('%d %b %Y') }}</strong><span>Last used {{ device.last_used_at.strftime('%d %b %Y %H:%M') }}</span></li>{% endfor %}</ul><form method="post" action="{{ url_for('auth.revoke_devices') }}" data-confirm="Revoke every trusted device for this account?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="secondary">Revoke all trusted devices</button></form>{% else %}<p class="empty-row"><strong>No trusted devices.</strong><span>A trusted device can skip only the authenticator-code step after a correct password.</span></p>{% endif %}</section></section>
+<section class="danger-zone settings-danger"><h2>Replace authenticator</h2><p>This signs you out, revokes trusted devices and requires fresh authenticator enrollment. Use it only when intentionally replacing your current authenticator.</p><form method="post" action="{{ url_for('auth.reset_own_mfa') }}" class="form" data-confirm="Replace your authenticator and revoke current sessions?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><label>Current password<input type="password" name="current_password" autocomplete="current-password" required></label><label>Authenticator code<input type="text" name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="11" required></label><button type="submit" class="danger-button">Replace authenticator</button></form></section>
 {% endblock %}

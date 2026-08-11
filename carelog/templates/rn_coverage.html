@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}RN coverage | CareMin{% endblock %}
+{% block content %}
+<section class="page-header">
+  <div><p class="eyebrow">Overview / RN coverage</p><h1>RN 24-hour coverage</h1><p class="page-purpose">Review continuity separately from RN care-minute contribution.</p><p class="page-meta">{{ start.strftime('%d %b %Y') }} to {{ end.strftime('%d %b %Y') }} · actual-worked RN shifts · calculation {{ calc_version }}</p></div>
+  {% if has_permission('import_data') %}<a class="secondary-action" href="{{ url_for('universal_import') }}">Import attendance data</a>{% endif %}
+</section>
+
+<form method="get" class="filter-bar period-filter"><label>Reporting month<input type="month" name="month" value="{{ month_value }}"></label><button type="submit" class="secondary">View month</button></form>
+
+<section class="period-position {{ 'position-pass' if period_pct == 100 else 'position-review' }}">
+  <p class="section-kicker">Current period</p><div><strong>{{ period_pct ~ '%' if period_pct is not none else 'Not available' }}</strong><span>{% if period_pct is not none %}Coverage across {{ available_days }} dates with actual-worked evidence. Target 100%.{% else %}No actual-worked RN shift evidence is available in this 30-day view.{% endif %}</span></div>
+</section>
+
+<section class="record-section" aria-labelledby="timeline-title">
+  <div class="section-heading"><div><h2 id="timeline-title">Daily coverage timeline</h2><p class="muted">Teal shows covered periods. Red interruptions are 30 minutes or longer. Grey dates have no included actual-worked source.</p></div></div>
+  <div class="timeline-scale" aria-hidden="true"><span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span><span>24:00</span></div>
+  <div class="coverage-ledger">
+    {% for row in days %}
+    <div class="coverage-row">
+      <div><strong>{{ row.date.strftime('%d %b') }}</strong><span>{{ row.coverage_pct ~ '%' if row.available else 'Not available' }}</span></div>
+      <div class="coverage-track {{ 'coverage-unavailable' if not row.available }}" aria-label="{{ row.date.strftime('%d %B %Y') }}: {{ row.coverage_pct ~ ' percent covered' if row.available else 'not available' }}">
+        {% if row.available %}{% for segment in row.timeline %}<span class="coverage-segment" style="left:{{ segment.left_pct }}%;width:{{ segment.width_pct }}%"></span>{% endfor %}{% endif %}
+      </div>
+      <span class="status-text {% if not row.available %}status-na{% elif row.full_coverage %}status-pass{% else %}status-review{% endif %}">{% if not row.available %}Not available{% elif row.full_coverage %}Complete{% else %}Review required{% endif %}</span>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="record-section" aria-labelledby="gaps-title">
+  <div class="section-heading"><div><h2 id="gaps-title">Reportable gap register</h2><p class="muted">Uncovered intervals lasting 30 minutes or more. Exactly 30 minutes remains reportable.</p></div></div>
+  {% if reportable_gaps %}<div class="table-wrap"><table><thead><tr><th>Date</th><th>Start</th><th>End</th><th class="num">Duration</th><th>Planned status</th><th>Delegation / on-call</th><th>Clinical access / transfer</th><th>Recruitment / action</th><th>Source evidence</th></tr></thead><tbody>{% for gap in reportable_gaps %}<tr><td>{{ gap.date.strftime('%d %b %Y') }}</td><td>{{ gap.start }}</td><td>{{ gap.end }}</td><td class="num">{{ gap.minutes }} min</td><td>Not recorded</td><td>Not recorded</td><td>Not recorded</td><td>Not recorded</td><td><span class="cell-note">Included RN attendance: {{ gap.source_intervals|join(', ') if gap.source_intervals else 'none recorded' }}</span><a href="{{ url_for('audit') }}">Open source receipts</a></td></tr>{% endfor %}</tbody></table></div>{% else %}<p class="empty-row"><strong>No reportable gaps in available source dates.</strong><span>Dates without actual-worked evidence remain marked Not available rather than complete.</span></p>{% endif %}
+  <p class="notice notice-neutral"><strong>Operational response fields are not stored yet.</strong> Planned versus unplanned status, delegation, on-call support, clinical-record access, transfers and recruitment actions cannot be inferred from shift data.</p>
+</section>
+
+<section class="record-section" aria-labelledby="approval-title"><div class="section-heading"><div><h2 id="approval-title">Monthly control record</h2><p class="muted">Approval and export states are shown separately from calculated coverage.</p></div></div><dl class="ruled-list"><div><dt>Monthly approval</dt><dd>Not recorded</dd></div><div><dt>Coverage export</dt><dd>Not available</dd></div><div><dt>Calculation version</dt><dd>{{ calc_version }}</dd></div></dl></section>
+{% endblock %}

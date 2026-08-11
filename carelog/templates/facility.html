@@ -1,80 +1,16 @@
 {% extends "base.html" %}
 {% block title %}{{ facility.name }} | Facility{% endblock %}
 {% block content %}
-<section class="page-header">
-  <div>
-    <p class="eyebrow">Facility</p>
-    <h1>{{ facility.name }}</h1>
-    <p class="muted">Reference settings, residents, and staffing records</p>
-  </div>
-</section>
+<section class="page-header"><div><p class="eyebrow">Administration / Facilities / {{ facility.name }}</p><h1>{{ facility.name }}</h1><p class="page-purpose">Reference records, target settings and source-data scope for the selected facility.</p></div>{% if has_permission('manage_facility') %}<a class="secondary-action" href="{{ url_for('settings') }}">Edit settings</a>{% endif %}</section>
+<nav class="section-tabs facility-tabs" aria-label="Facility record"><a href="#overview">Overview</a><a href="#targets">Targets</a><a href="#residents">Residents</a><a href="#staff">Staff</a><a href="#sources">Data sources</a><a href="#activity">Activity</a></nav>
 
-<section class="block">
-  <div class="section-card">
-    <div class="section-heading">
-      <div>
-        <h2>Targets</h2>
-        <p class="muted">
-          AN-ACC {{ facility.ancc_target }} · RN {{ facility.rn_target }} mins/resident/day.
-          edit in <a href="{{ url_for('settings') }}">Settings</a>
-        </p>
-      </div>
-    </div>
-  </div>
-</section>
+<section class="record-section" id="overview"><div class="section-heading"><div><h2>Overview</h2></div></div><dl class="queue-summary"><div><dt>Residents</dt><dd>{{ residents|length }}</dd></div><div><dt>Staff</dt><dd>{{ staff|length }}</dd></div><div><dt>Resident-day rows</dt><dd>{{ resident_day_count }}</dd></div><div><dt>Care episodes</dt><dd>{{ care_episode_count }}</dd></div></dl></section>
+<section class="record-section" id="targets"><div class="section-heading"><div><h2>Targets</h2><p class="muted">The prototype stores current values only; effective-period history is not yet available.</p></div></div><div class="table-wrap"><table><thead><tr><th>Measure</th><th class="num">Current target</th><th>Unit</th><th>Effective period</th><th>Source</th></tr></thead><tbody><tr><td>Total care minutes</td><td class="num">{{ facility.ancc_target }}</td><td>Minutes per occupied bed day</td><td>Not recorded</td><td>Provider configuration</td></tr><tr><td>RN minutes</td><td class="num">{{ facility.rn_target }}</td><td>Minutes per occupied bed day</td><td>Not recorded</td><td>Provider configuration</td></tr></tbody></table></div></section>
 
-<section class="block">
-  <div class="section-card">
-    <div class="section-heading">
-      <div>
-        <h2>Residents</h2>
-        <p class="muted">{{ residents|length }} resident records · {{ resident_day_count }} daily occupancy ledger rows · {{ care_episode_count }} delivered-care episodes</p>
-      </div>
-    </div>
-    <div class="table-wrap">
-      <table>
-        <thead><tr><th>ID</th><th>Name</th><th>AN-ACC class</th><th>Admitted</th><th>Discharged</th></tr></thead>
-        <tbody>
-          {% for r in residents %}
-          <tr>
-            <td>{{ r.resident_id }}</td>
-            <td>{{ r.name }}</td>
-            <td>{{ r.ancc_class }}</td>
-            <td>{{ r.admitted_date }}</td>
-            <td>{{ r.discharged_date or '' }}</td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-  </div>
-</section>
+<section class="record-section" id="residents"><div class="section-heading"><div><h2>Residents</h2><p class="muted">Reference population used with resident-day evidence.</p></div></div><div class="filter-bar"><label>Search residents<input type="search" placeholder="ID, name or AN-ACC class" data-table-filter="resident-table"></label></div><div class="table-wrap"><table id="resident-table"><thead><tr><th class="sticky-col">ID</th><th>Name</th><th>AN-ACC class</th><th>Admitted</th><th>Discharged</th><th>Status</th></tr></thead><tbody>{% for resident in residents %}<tr><td class="sticky-col">{{ resident.resident_id }}</td><td>{{ resident.name }}</td><td>{{ resident.ancc_class or 'Not recorded' }}</td><td>{{ resident.admitted_date.strftime('%d %b %Y') if resident.admitted_date else 'Not recorded' }}</td><td>{{ resident.discharged_date.strftime('%d %b %Y') if resident.discharged_date else 'Not recorded' }}</td><td>{{ 'Current' if not resident.discharged_date else 'Discharged' }}</td></tr>{% else %}<tr><td colspan="6">No resident records are available.</td></tr>{% endfor %}</tbody></table></div></section>
 
-<section class="block">
-  <div class="section-card">
-    <div class="section-heading">
-      <div>
-        <h2>Staff</h2>
-        <p class="muted">{{ staff|length }} staff records available for shift reporting · eligibility status controls counting</p>
-      </div>
-    </div>
-    <div class="table-wrap">
-      <table>
-        <thead><tr><th>ID</th><th>Name</th><th>Role</th><th>Source role</th><th>Eligibility</th><th>Employment</th></tr></thead>
-        <tbody>
-          {% for s in staff %}
-          <tr>
-            <td>{{ s.staff_id }}</td>
-            <td>{{ s.name }}</td>
-            <td>{{ s.role }}</td>
-            <td>{{ s.source_role or 'Not recorded' }}</td>
-            <td>{{ s.eligibility_status }}</td>
-            <td>{{ s.employment_type or 'Not recorded' }}</td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-  </div>
-</section>
+<section class="record-section" id="staff"><div class="section-heading"><div><h2>Staff</h2><p class="muted">Eligibility status determines whether actual-worked direct-care minutes may count.</p></div><a href="{{ url_for('eligibility_queue') }}">Open eligibility review</a></div><div class="filter-bar"><label>Search staff<input type="search" placeholder="ID, name, role or status" data-table-filter="staff-table"></label></div><div class="table-wrap"><table id="staff-table"><thead><tr><th class="sticky-col">ID</th><th>Name</th><th>Mapped role</th><th>Imported role</th><th>Eligibility</th><th>Employment</th></tr></thead><tbody>{% for member in staff %}<tr><td class="sticky-col">{{ member.staff_id }}</td><td>{{ member.name }}</td><td>{{ member.role }}</td><td>{{ member.source_role or 'Not recorded' }}</td><td>{{ member.eligibility_status.replace('_', ' ') }}</td><td>{{ member.employment_type or 'Not recorded' }}</td></tr>{% else %}<tr><td colspan="6">No staff records are available.</td></tr>{% endfor %}</tbody></table></div></section>
+
+<section class="record-section" id="sources"><div class="section-heading"><div><h2>Data sources</h2><p class="muted">Source filenames, classifications and retained files are managed in the audit trail.</p></div><a href="{{ url_for('audit') }}">Open source receipts</a></div></section>
+<section class="record-section" id="activity"><div class="section-heading"><div><h2>Activity</h2><p class="muted">Imports and facility changes are recorded in the audit and security logs according to user permissions.</p></div><a href="{{ url_for('audit') }}">Open audit trail</a></div></section>
 {% endblock %}

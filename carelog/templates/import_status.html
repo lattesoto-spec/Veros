@@ -1,87 +1,25 @@
 {% extends "base.html" %}
-{% block title %}Importing | CareMin{% endblock %}
+{% block title %}Import processing | CareMin{% endblock %}
 {% block content %}
-<section class="page-header">
-  <div>
-    <p class="eyebrow">Universal import</p>
-    <h1 id="status-title">Import in progress</h1>
-    <p class="muted" id="status-subtitle">
-      Files are validated and processed one after another in the background.
-      You can leave this page; the result will appear in the audit trail.
-    </p>
-  </div>
-</section>
-
-<div class="errors" id="job-error" style="display:none"><ul><li id="job-error-text"></li></ul></div>
-
-<section class="block">
-  <div class="section-card">
-    <div class="section-heading">
-      <div>
-        <h2>Files</h2>
-        <p class="muted" id="overall-stage">Starting</p>
-      </div>
-    </div>
-    <ul id="file-list" style="list-style:none;padding:0;margin:0">
-      {% for f in job.files %}
-      <li style="padding:.5rem 0;border-bottom:1px solid #eee">
-        <strong>{{ f.filename }}</strong>: <span class="muted stage">{{ f.stage }}</span>
-      </li>
-      {% endfor %}
-    </ul>
-    <p id="done-link" style="display:none"><a href="#">View import summary →</a></p>
-    <p id="retry-link" style="display:none"><a href="{{ url_for('universal_import') }}">← Back to import</a></p>
-  </div>
-</section>
-
-<script>
+<section class="page-header"><div><p class="eyebrow">Data and evidence / Imports</p><h1 id="status-title">Validating source records</h1><p class="page-purpose" id="status-subtitle">Processing continues if you leave this page. No partial result is presented as complete.</p></div></section>
+<ol class="workflow-steps" aria-label="Import workflow"><li class="complete"><span>1</span><strong>Source files</strong></li><li class="active"><span>2</span><strong>Assign records</strong></li><li class="active"><span>3</span><strong>Validate</strong></li><li><span>4</span><strong>Resolve</strong></li><li><span>5</span><strong>Confirm</strong></li></ol>
+<div class="errors" id="job-error" hidden role="alert"><p id="job-error-text"></p></div>
+<section class="record-section" aria-labelledby="files-title"><div class="section-heading"><div><p class="section-kicker">File ledger</p><h2 id="files-title">Processing state</h2><p class="muted" id="overall-stage" aria-live="polite">Waiting</p></div></div><div id="file-list" class="processing-ledger">{% for file in job.files %}<div><strong>{{ file.filename }}</strong><span class="stage">{{ file.stage }}</span></div>{% endfor %}</div><div class="next-actions" id="done-link" hidden><a class="primary-action" href="#">Review import receipt</a></div><div class="next-actions" id="retry-link" hidden><a class="secondary-action" href="{{ url_for('universal_import') }}">Return to imports</a><a href="{{ url_for('audit') }}">Open audit trail</a></div></section>
+{% endblock %}
+{% block scripts %}<script>
   (function () {
     var jobId = {{ job.id | tojson }};
-    var items = document.querySelectorAll("#file-list li .stage");
-
+    var items = document.querySelectorAll("#file-list .stage");
+    function label(stage) { var labels = { waiting: "Waiting", reading: "Validating", analyzing: "Assigning records", mapping: "Validating", importing: "Importing", done: "Complete", failed: "Failed" }; return labels[stage] || stage; }
     function apply(job) {
-      job.files.forEach(function (f, i) {
-        if (!items[i]) return;
-        items[i].textContent = f.stage + (f.detail ? ": " + f.detail : "");
-      });
-      var running = job.files.filter(function (f) { return f.stage !== "waiting" && f.stage !== "done"; });
-      document.getElementById("overall-stage").textContent =
-        job.status === "queued" ? "Waiting to start" :
-        running.length ? running[0].stage : "Working";
-
-      if (job.status === "done") {
-        document.getElementById("status-title").textContent = "Import complete";
-        var link = document.getElementById("done-link");
-        link.style.display = "";
-        link.querySelector("a").href = "/import/summary/" + job.receipt_id;
-        document.getElementById("overall-stage").textContent = "All files processed.";
-        window.location = "/import/summary/" + job.receipt_id;
-        return true;
-      }
-      if (job.status === "failed") {
-        document.getElementById("status-title").textContent = "Import failed";
-        document.getElementById("job-error-text").textContent = job.error || "Unknown error.";
-        document.getElementById("job-error").style.display = "";
-        document.getElementById("overall-stage").textContent = "Nothing was imported. The database is unchanged.";
-        document.getElementById("retry-link").style.display = "";
-        return true;
-      }
+      job.files.forEach(function (file, index) { if (items[index]) { items[index].textContent = label(file.stage) + (file.detail ? ": " + file.detail : ""); items[index].className = "stage stage-" + file.stage; }});
+      var running = job.files.filter(function (file) { return file.stage !== "waiting" && file.stage !== "done"; });
+      document.getElementById("overall-stage").textContent = job.status === "queued" ? "Waiting to start" : (running.length ? label(running[0].stage) : "Processing");
+      if (job.status === "done") { document.getElementById("status-title").textContent = "Import ready for review"; var done = document.getElementById("done-link"); done.hidden = false; done.querySelector("a").href = "/import/summary/" + job.receipt_id; document.getElementById("overall-stage").textContent = "All files processed. Review the receipt before relying on updated results."; return true; }
+      if (job.status === "failed") { document.getElementById("status-title").textContent = "Import failed"; document.getElementById("job-error-text").textContent = (job.error || "The processing stage failed.") + " No partial import is presented as complete."; document.getElementById("job-error").hidden = false; document.getElementById("overall-stage").textContent = "Failed. Review the recorded error before retrying."; document.getElementById("retry-link").hidden = false; return true; }
       return false;
     }
-
-    function poll() {
-      fetch("/import/status/" + jobId + ".json")
-        .then(function (r) {
-          if (r.status === 404) throw new Error("gone");
-          return r.json();
-        })
-        .then(function (job) { if (!apply(job)) setTimeout(poll, 1200); })
-        .catch(function () {
-          // Transient network blip or server restart: keep trying slowly.
-          setTimeout(poll, 4000);
-        });
-    }
+    function poll() { fetch("/import/status/" + jobId + ".json").then(function (response) { if (response.status === 404) throw new Error("gone"); return response.json(); }).then(function (job) { if (!apply(job)) window.setTimeout(poll, 1200); }).catch(function () { window.setTimeout(poll, 4000); }); }
     poll();
   })();
-</script>
-{% endblock %}
+</script>{% endblock %}

@@ -1,64 +1,16 @@
 {% extends "base.html" %}
 {% block title %}Integrations | CareMin{% endblock %}
 {% block content %}
-<section class="page-header">
-  <div>
-    <p class="eyebrow">Integrations</p>
-    <h1>Connect your existing systems</h1>
-    <p class="muted">
-      Any CSV/Excel export from these platforms already imports through Universal Import with no
-      template. Direct API sync activates per platform once you supply that vendor's API credentials.
-    </p>
-  </div>
-</section>
+<section class="page-header"><div><p class="eyebrow">Administration / Integrations</p><h1>Data sources</h1><p class="page-purpose">Separate connected functionality, export-based workflows and planned direct connectors.</p><p class="page-meta">Facility scope: {{ facility.name if facility else 'No facility selected' }}</p></div></section>
 
-<section class="block">
-  <div class="section-card">
-    <div class="section-heading"><div><h2>Scheduled file fetch</h2><p class="muted">Works today: point CareMin at any URL that serves an export</p></div></div>
-    {% set cfg = configs.get('url_fetch') %}
-    <form method="post" class="form row compact-form">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <input type="hidden" name="platform" value="url_fetch">
-      <input type="hidden" name="action" value="configure">
-      <label>Export URL
-        <input type="url" name="url" placeholder="https://example.com/roster-export.csv"
-               value="{{ (cfg.config_json | fromjson).url if cfg else '' }}">
-      </label>
-      <button type="submit">Save</button>
-    </form>
-    {% if cfg %}
-    <form method="post" class="inline-form">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <input type="hidden" name="platform" value="url_fetch">
-      <input type="hidden" name="action" value="sync">
-      <button type="submit">Sync now</button>
-    </form>
-    <p class="muted">
-      {% if cfg.last_sync_at %}Last sync {{ cfg.last_sync_at.strftime('%d %b %Y %H:%M UTC') }}. {{ cfg.last_result }}{% else %}Never synced.{% endif %}
-    </p>
-    {% endif %}
-  </div>
-</section>
+{% set cfg = configs.get('url_fetch') %}
+{% if cfg %}<section class="record-section" aria-labelledby="connected-title"><div class="section-heading"><div><p class="section-kicker">Connected sources</p><h2 id="connected-title">Scheduled file fetch</h2></div></div><div class="connection-record"><dl class="ruled-list"><div><dt>Data supplied</dt><dd>Published CSV or Excel export</dd></div><div><dt>Connection method</dt><dd>Provider export URL</dd></div><div><dt>Facility scope</dt><dd>{{ facility.name if facility else 'Not available' }}</dd></div><div><dt>Last successful sync</dt><dd>{{ cfg.last_sync_at.strftime('%d %b %Y %H:%M UTC') if cfg.last_sync_at else 'Never' }}</dd></div><div><dt>Last result</dt><dd>{{ cfg.last_result or 'Not available' }}</dd></div></dl><div class="connection-actions"><form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="platform" value="url_fetch"><input type="hidden" name="action" value="sync"><button type="submit">Sync now</button></form><button type="button" class="secondary" data-dialog-open="configure-source">Configure</button></div></div></section>{% endif %}
 
-<section class="block">
-  <div class="section-card">
-    <div class="section-heading"><div><h2>Platform connectors</h2><p class="muted">Status of each direct API</p></div></div>
-    <div class="table-wrap">
-      <table>
-        <thead><tr><th>Platform</th><th>Category</th><th>API status</th><th>Needs</th><th>Today</th></tr></thead>
-        <tbody>
-        {% for p in platforms if p.key != 'url_fetch' %}
-          <tr>
-            <td><strong>{{ p.name }}</strong></td>
-            <td>{{ p.category }}</td>
-            <td><span class="pill pill-{{ 'on_track' if p.api_status == 'available' else 'at_risk' }}">{{ p.api_status.replace('_', ' ') }}</span></td>
-            <td class="muted">{{ p.auth }}</td>
-            <td class="muted">{{ p.note }}</td>
-          </tr>
-        {% endfor %}
-        </tbody>
-      </table>
-    </div>
-  </div>
-</section>
+{% if not cfg %}<section class="record-section" aria-labelledby="available-title"><div class="section-heading"><div><p class="section-kicker">Available to configure</p><h2 id="available-title">Scheduled file fetch</h2><p class="muted">Works today with any system that publishes a protected CSV or Excel export URL.</p></div><button type="button" data-dialog-open="configure-source">Configure source</button></div><div class="table-wrap"><table><thead><tr><th>Data supplied</th><th>Method</th><th>Facility scope</th><th>Current state</th></tr></thead><tbody><tr><td>Staffing, resident or supporting export</td><td>Provider-controlled URL fetched on demand</td><td>{{ facility.name if facility else 'Select a facility first' }}</td><td><span class="status-text status-na">Not configured</span></td></tr></tbody></table></div></section>{% endif %}
+
+<dialog id="configure-source" aria-labelledby="configure-source-title"><div class="dialog-header"><div><p class="section-kicker">Protected configuration</p><h2 id="configure-source-title">Scheduled file source</h2></div><button type="button" class="dialog-close" data-dialog-close>Close</button></div><div class="dialog-body"><p class="notice notice-neutral">Only enter a provider-approved export location. Credentials embedded in a URL are stored in the integration configuration and should be limited to read-only export access.</p><form method="post" class="form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="platform" value="url_fetch"><input type="hidden" name="action" value="configure"><label>Export URL<input type="url" name="url" placeholder="https://provider.example/export.csv" value="{{ (cfg.config_json | fromjson).url if cfg else '' }}" required></label><button type="submit">Save source</button></form></div></dialog>
+
+<section class="record-section" aria-labelledby="export-title"><div class="section-heading"><div><p class="section-kicker">Export-based workflows</p><h2 id="export-title">Supported provider files</h2><p class="muted">These systems can supply files to the existing import workflow today, without direct API credentials.</p></div><a href="{{ url_for('universal_import') }}">Open imports</a></div><div class="table-wrap"><table><thead><tr><th>Source</th><th>Category</th><th>Data supplied today</th><th>Method</th><th>Status</th></tr></thead><tbody>{% for platform in platforms if platform.key != 'url_fetch' %}<tr><td><strong>{{ platform.name }}</strong></td><td>{{ platform.category }}</td><td>{{ platform.note }}</td><td>Provider export</td><td><span class="status-text status-pass">Available</span></td></tr>{% endfor %}</tbody></table></div></section>
+
+<section class="record-section" aria-labelledby="planned-title"><div class="section-heading"><div><p class="section-kicker">Planned connectors</p><h2 id="planned-title">Direct vendor APIs</h2><p class="muted">No direct vendor API below is active. Export-based imports remain the working path.</p></div></div><div class="connector-list">{% for platform in platforms if platform.key != 'url_fetch' %}<details><summary><strong>{{ platform.name }}</strong><span>Planned direct connector</span></summary><div><p><strong>Credentials required:</strong> {{ platform.auth }}</p><p>{{ platform.note }}</p><p class="status-text status-na">Not configured</p></div></details>{% endfor %}</div></section>
 {% endblock %}

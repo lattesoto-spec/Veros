@@ -1,62 +1,17 @@
 {% extends "base.html" %}
 {% block title %}Settings | CareMin{% endblock %}
 {% block content %}
-<section class="page-header">
-  <div>
-    <p class="eyebrow">Setup</p>
-    <h1>Settings</h1>
-    <p class="muted">Facility details, reporting targets and organisation data controls.</p>
-  </div>
-</section>
+<section class="page-header"><div><p class="eyebrow">Administration / Settings</p><h1>Settings</h1><p class="page-purpose">Separate routine facility configuration, reporting defaults, security and destructive data controls.</p></div></section>
 
-<section class="block upload-layout">
-  <div class="section-card upload-card">
-    <div class="section-heading">
-      <div>
-        <h2>Facility</h2>
-        <p class="muted">Name and care-minute targets used across all reports</p>
-      </div>
-    </div>
-    <form method="post" class="form">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <input type="hidden" name="section" value="facility">
-      <label>Facility name
-        <input type="text" name="facility_name" value="{{ facility.name if facility else '' }}" placeholder="Sunrise Aged Care" required>
-      </label>
-      <div class="row">
-        <label>AN-ACC target (mins/resident/day)
-          <input type="number" step="0.1" name="ancc_target" value="{{ facility.ancc_target if facility else 215 }}">
-        </label>
-        <label>RN target (mins/resident/day)
-          <input type="number" step="0.1" name="rn_target" value="{{ facility.rn_target if facility else 44 }}">
-        </label>
-      </div>
-      <button type="submit">Save facility</button>
-    </form>
-  </div>
+<nav class="section-tabs" aria-label="Settings sections"><a href="#facility-settings">Facility</a><a href="#organisation-settings">Organisation</a><a href="#reporting-settings">Reporting</a><a href="#security-settings">Security</a><a href="#retention-settings">Retention</a></nav>
 
-  <div class="section-card side-card">
-    <div class="section-heading">
-      <div>
-        <h2>Organisation data</h2>
-        <p class="muted">Controls for {{ organization.name if organization else 'this organisation' }}</p>
-      </div>
-    </div>
-    <p class="muted">
-      Imports, residents, staffing records and retained evidence are isolated
-      to your organisation. This reset affects every facility in the account.
-    </p>
-    <div class="danger-zone">
-      <p class="danger-title">Administrative reset</p>
-      <p class="muted">Permanently deletes all imported care data and retained evidence for this organisation.</p>
-      <form method="post" action="{{ url_for('clear') }}" class="form confirm-form">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <label>Type <code>delete</code> to confirm
-          <input type="text" name="confirm" placeholder="delete" autocomplete="off" required>
-        </label>
-        <button type="submit" class="danger-button">Delete all care data</button>
-      </form>
-    </div>
-  </div>
-</section>
+<section class="record-section settings-section" id="facility-settings"><div class="section-heading"><div><h2>Facility settings</h2><p class="muted">Name and current targets used by new calculations.</p></div></div><form method="post" class="form settings-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="section" value="facility"><label>Facility name<input type="text" name="facility_name" value="{{ facility.name if facility else '' }}" required></label><div class="row"><label>Total care-minute target<input type="number" step="0.1" name="ancc_target" value="{{ facility.ancc_target if facility else 215 }}"><span class="field-help">Minutes per occupied bed day</span></label><label>RN-minute target<input type="number" step="0.1" name="rn_target" value="{{ facility.rn_target if facility else 44 }}"><span class="field-help">Minutes per occupied bed day</span></label></div><p class="notice notice-warning"><strong>Historical target limitation.</strong> The prototype stores current targets without effective-period history. Review earlier reports before changing these values.</p><button type="submit">Save facility settings</button></form></section>
+
+<section class="record-section settings-section" id="organisation-settings"><div class="section-heading"><div><h2>Organisation settings</h2><p class="muted">Provider identity and account-wide context.</p></div></div><dl class="ruled-list settings-readonly"><div><dt>Organisation</dt><dd>{{ organization.name if organization else 'Not recorded' }}</dd></div><div><dt>Time zone</dt><dd>{{ organization.timezone if organization else 'Not recorded' }} · stored but not yet applied to displayed timestamps</dd></div><div><dt>Data boundary</dt><dd>All facilities in this organisation</dd></div></dl></section>
+
+<section class="record-section settings-section" id="reporting-settings"><div class="section-heading"><div><h2>Reporting defaults</h2><p class="muted">Current defaults are derived from the active facility and latest included data.</p></div></div><dl class="ruled-list settings-readonly"><div><dt>Default facility</dt><dd>{{ facility.name if facility else 'Not available' }}</dd></div><div><dt>Reporting period</dt><dd>Calendar quarter containing the latest included data date</dd></div><div><dt>Calculation version</dt><dd>{{ workspace_context.calc_version }}</dd></div></dl></section>
+
+<section class="record-section settings-section" id="security-settings"><div class="section-heading"><div><h2>Security</h2><p class="muted">Account security is managed per user.</p></div><a href="{{ url_for('auth.account_security') }}">Open account security</a></div><dl class="ruled-list settings-readonly"><div><dt>Two-step verification</dt><dd>Required</dd></div><div><dt>Application session</dt><dd>12 hours</dd></div><div><dt>Trusted device</dt><dd>Optional, 30 days</dd></div></dl></section>
+
+<section class="danger-zone settings-danger" id="retention-settings"><p class="section-kicker">Data retention and deletion</p><h2>Danger zone</h2><p>CareMin does not yet apply an automated retention schedule or soft deletion. This action immediately removes imported care data and retained evidence for every facility in {{ organization.name if organization else 'the organisation' }}.</p><form method="post" action="{{ url_for('clear') }}" class="form confirm-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><label>Type <code>delete</code> to confirm<input type="text" name="confirm" autocomplete="off" required></label><button type="submit" class="danger-button">Delete all organisation care data</button></form></section>
 {% endblock %}

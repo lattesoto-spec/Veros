@@ -1,67 +1,32 @@
 {% extends "base.html" %}
 {% block title %}Scenario planning | CareMin{% endblock %}
 {% block content %}
-<section class="page-header">
-  <div>
-    <p class="eyebrow">Scenario planning</p>
-    <h1>Staffing scenarios</h1>
-    <p class="muted">Adjust staffing or occupancy from tomorrow onward and see the quarter recalculated instantly.</p>
-  </div>
-</section>
+<section class="page-header"><div><p class="eyebrow">Planning and reporting / Scenarios</p><h1>Staffing scenarios</h1><p class="page-purpose">Compare explicit future assumptions with the current actual-worked baseline.</p><p class="page-meta">{{ facility.name }} · baseline data through {{ today.strftime('%d %b %Y') }}</p></div></section>
 
+<p class="scenario-label">Planning scenario - not actual reporting data</p>
 {% if not base %}
-<section class="block"><div class="section-card"><p class="muted">Not enough data this quarter to model scenarios.</p></div></section>
+<section class="empty-state"><h2>No baseline is available</h2><p>At least one current-quarter actual-worked day and a trailing staffing baseline are required before CareMin can calculate a scenario.</p></section>
 {% else %}
-<section class="block upload-layout">
-  <div class="section-card upload-card">
-    <div class="section-heading"><div><h2>Scenario</h2><p class="muted">Applied to every remaining day of the quarter</p></div></div>
+<section class="scenario-workspace">
+  <section class="working-panel" aria-labelledby="assumptions-title"><div class="section-heading"><div><p class="section-kicker">Assumptions</p><h2 id="assumptions-title">Future daily changes</h2><p class="muted">Applied to each remaining day in the quarter. The RN removal rule uses eight-hour shifts.</p></div></div>
     <form method="post" class="form">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <label>RN sick / 8-hour RN shifts removed per day
-        <input type="number" name="rn_shifts_removed" min="0" max="20" value="{{ params.rn_shifts_removed }}">
-      </label>
-      <label>Occupancy change (residents; discharges negative, admissions positive)
-        <input type="number" name="occupancy_delta" min="-50" max="50" value="{{ params.occupancy_delta }}">
-      </label>
-      <label style="flex-direction:row;align-items:center;gap:.5rem;">
-        <input type="checkbox" name="agency_removed" {% if params.agency_removed %}checked{% endif %}>
-        Agency staff cancelled
-      </label>
-      <button type="submit">Recalculate</button>
+      <label>Eight-hour RN shifts removed per future day<input type="number" name="rn_shifts_removed" min="0" max="20" value="{{ params.rn_shifts_removed }}"></label>
+      <label>Occupancy change in residents<input type="number" name="occupancy_delta" min="-50" max="50" value="{{ params.occupancy_delta }}"><span class="field-help">Use a negative number for discharges and a positive number for admissions.</span></label>
+      <label class="checkbox"><input type="checkbox" name="agency_removed" {% if params.agency_removed %}checked{% endif %}> Remove all agency minutes from future days</label>
+      <button type="submit">Calculate scenario</button>
     </form>
-  </div>
-
-  <div class="section-card side-card">
-    <div class="section-heading"><div><h2>Baseline</h2><p class="muted">Current trajectory, no changes</p></div></div>
-    <p>Projected quarter-end: <strong>{{ base.projected_avg }}</strong> mins/resident/day
-      ({{ 'on track' if base.on_track else 'below target' }}, target {{ facility.ancc_target }})</p>
-    <p>Projected RN: <strong>{{ base.projected_rn_avg }}</strong> (target {{ facility.rn_target }})</p>
-  </div>
+  </section>
+  <section class="working-panel" aria-labelledby="baseline-title"><div class="section-heading"><div><p class="section-kicker">Controlled baseline</p><h2 id="baseline-title">Current projection</h2></div></div>
+    <dl class="ruled-list"><div><dt>Total care minutes</dt><dd>{{ base.projected_avg }}</dd></div><div><dt>RN-only minutes</dt><dd>{{ base.projected_rn_avg }}</dd></div><div><dt>RN plus EN minutes</dt><dd>{{ base.projected_rn_en_avg }}</dd></div><div><dt>Occupancy baseline</dt><dd>{{ base.baseline_residents }}</dd></div><div><dt>Calculation</dt><dd>{{ base.calc_version }}</dd></div></dl>
+  </section>
 </section>
 
-{% if result %}
-<section class="cards">
-  <div class="card status-{{ 'on_track' if result.on_track else 'behind' }}">
-    <div class="card-label">Scenario: projected quarter-end</div>
-    <div class="card-value">{{ result.projected_avg }}</div>
-    <div class="card-sub">
-      was {{ base.projected_avg }} ·
-      {% if result.on_track %}still on track
-      {% elif result.days_until_breach %}breaches target in {{ result.days_until_breach }} day(s)
-      {% else %}below target{% endif %}
-    </div>
-  </div>
-  <div class="card status-{{ 'on_track' if result.rn_on_track else 'behind' }}">
-    <div class="card-label">Scenario: projected RN</div>
-    <div class="card-value">{{ result.projected_rn_avg }}</div>
-    <div class="card-sub">was {{ base.projected_rn_avg }} · target {{ facility.rn_target }}</div>
-  </div>
-  <div class="card">
-    <div class="card-label">Scenario typical day</div>
-    <div class="card-value">{{ result.future_per_resident }}</div>
-    <div class="card-sub">mins/resident at {{ result.baseline_residents }} residents (was {{ base.future_per_resident }} at {{ base.baseline_residents }})</div>
-  </div>
-</section>
-{% endif %}
+{% if result %}<section class="record-section scenario-result" aria-labelledby="result-title"><div class="section-heading"><div><p class="section-kicker">Scenario result</p><h2 id="result-title">Baseline comparison</h2></div></div><div class="table-wrap"><table><thead><tr><th>Measure</th><th class="num">Baseline</th><th class="num">Scenario</th><th class="num">Change</th><th>Target position</th></tr></thead><tbody>
+  <tr><td>Total care minutes</td><td class="num">{{ base.projected_avg }}</td><td class="num">{{ result.projected_avg }}</td><td class="num">{{ (result.projected_avg - base.projected_avg)|round(1) }}</td><td><span class="status-text {{ 'status-pass' if result.on_track else 'status-fail' }}">{{ 'On track' if result.on_track else 'Below target' }}</span></td></tr>
+  <tr><td>RN-only minutes</td><td class="num">{{ base.projected_rn_avg }}</td><td class="num">{{ result.projected_rn_avg }}</td><td class="num">{{ (result.projected_rn_avg - base.projected_rn_avg)|round(1) }}</td><td><span class="status-text {{ 'status-pass' if result.projected_rn_avg >= facility.rn_target * 0.9 else 'status-fail' }}">{{ 'On track' if result.projected_rn_avg >= facility.rn_target * 0.9 else 'Below target' }}</span></td></tr>
+  <tr><td>RN plus EN minutes</td><td class="num">{{ base.projected_rn_en_avg }}</td><td class="num">{{ result.projected_rn_en_avg }}</td><td class="num">{{ (result.projected_rn_en_avg - base.projected_rn_en_avg)|round(1) }}</td><td><span class="status-text {{ 'status-pass' if result.projected_rn_en_avg >= facility.rn_target else 'status-fail' }}">{{ 'On track' if result.projected_rn_en_avg >= facility.rn_target else 'Below target' }}</span></td></tr>
+  <tr><td>Occupancy</td><td class="num">{{ base.baseline_residents }}</td><td class="num">{{ result.baseline_residents }}</td><td class="num">{{ (result.baseline_residents - base.baseline_residents)|round(1) }}</td><td><span class="status-text status-na">Assumption</span></td></tr>
+</tbody></table></div><p class="record-basis">Planning scenario - not actual reporting data. Results apply assumptions to every remaining day and do not alter stored shifts, residents or reports.</p></section>{% endif %}
 {% endif %}
 {% endblock %}

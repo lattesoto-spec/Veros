@@ -1,72 +1,25 @@
 {% extends "base.html" %}
 {% block title %}Audit trail | CareMin{% endblock %}
 {% block content %}
-<section class="page-header">
-  <div>
-    <p class="eyebrow">Audit trail</p>
-    <h1>Import and calculation records</h1>
-    <p class="muted">
-      Calculation version {{ calc_version }} ·
-      {% if readiness is not none %}{{ readiness }}% of imports retain their source file{% else %}no imports yet{% endif %}
-    </p>
-  </div>
-</section>
+<section class="page-header"><div><p class="eyebrow">Data and evidence / Audit trail</p><h1>Import receipts</h1><p class="page-purpose">Trace included records to retained source files, import counts and calculation versions.</p><p class="page-meta">Calculation {{ calc_version }} · {% if readiness is not none %}{{ readiness }}% of receipts retain at least one source file{% else %}no receipts available{% endif %}</p></div></section>
 
-<section class="block">
-  <div class="section-card">
-    <div class="section-heading"><div><h2>Imports</h2><p class="muted">Newest first. Shift rows store their import id and original file row for row-level lineage.</p></div></div>
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr><th>#</th><th>When (UTC)</th><th>By</th><th>Evidence</th><th>Shifts</th><th>Residents / days / episodes</th><th>Skipped</th><th>Date range</th><th>Calculation</th><th>Source files</th><th></th></tr>
-        </thead>
-        <tbody>
-        {% for r in receipts %}
-          <tr>
-            <td>{{ r.id }}</td>
-            <td>{{ r.imported_at.strftime('%d %b %Y %H:%M') }}</td>
-            <td>{{ r.imported_by or 'Not recorded' }}</td>
-            <td>{{ (r.evidence_type or 'unverified').replace('_', ' ') }}</td>
-            <td>{{ r.shifts_imported }}</td>
-            <td>{{ r.residents_imported }} / {{ r.resident_days_imported }} / {{ r.care_episodes_imported }}</td>
-            <td>{{ r.shifts_skipped }}</td>
-            <td>
-              {% if r.first_shift_date and r.last_shift_date %}
-                {{ r.first_shift_date.strftime('%d %b') }} to {{ r.last_shift_date.strftime('%d %b %Y') }}
-              {% else %}Not recorded{% endif %}
-            </td>
-            <td>{{ r.calc_version or 'Not recorded' }}</td>
-            <td>
-              {% if files_by_receipt.get(r.id) %}
-                {% for f in files_by_receipt[r.id] %}
-                  <a href="{{ url_for('audit_file', receipt_id=r.id, filename=f) }}">{{ f }}</a>{% if not loop.last %} · {% endif %}
-                {% endfor %}
-              {% else %}not retained{% endif %}
-            </td>
-            <td>
-              {% if has_permission('manage_facility') %}
-              <details class="row-danger">
-                <summary>Delete</summary>
-                <form method="post" action="{{ url_for('delete_receipt', receipt_id=r.id) }}" class="form">
-                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                  <p class="muted">
-                    Removes this import's {{ r.shifts_imported }} shift row(s) and its
-                    retained file(s). Residents and staff are left in place.
-                  </p>
-                  <label>Type <code>delete</code>
-                    <input type="text" name="confirm" placeholder="delete" autocomplete="off" required>
-                  </label>
-                  <button type="submit" class="danger-button">Delete import #{{ r.id }}</button>
-                </form>
-              </details>
-              {% endif %}
-            </td>
-          </tr>
-        {% endfor %}
-        </tbody>
-      </table>
-    </div>
-  </div>
-</section>
+<section class="record-section" aria-labelledby="receipts-title"><div class="section-heading"><div><h2 id="receipts-title">Receipt register</h2><p class="muted">Newest first. Open a row for source files, record counts, quality and lineage.</p></div></div>
+  {% if receipts %}<div class="receipt-register">
+  {% for receipt in receipts %}
+    {% set review = receipt.shifts_skipped or receipt.residents_skipped or not files_by_receipt.get(receipt.id) %}
+    <details class="receipt-detail">
+      <summary><span class="receipt-id">#{{ receipt.id }}</span><span>{{ receipt.imported_at.strftime('%d %b %Y') }}<small>{{ receipt.imported_at.strftime('%H:%M UTC') }}</small></span><span>{{ (receipt.evidence_type or 'unverified').replace('_', ' ') }}<small>{{ receipt.first_shift_date.strftime('%d %b') ~ ' to ' ~ receipt.last_shift_date.strftime('%d %b %Y') if receipt.first_shift_date and receipt.last_shift_date else 'Date range not recorded' }}</small></span><span class="status-text {{ 'status-review' if review else 'status-pass' }}">{{ 'Review required' if review else 'Complete' }}</span><span class="num">{{ receipt.shifts_imported + receipt.residents_imported + receipt.resident_days_imported + receipt.care_episodes_imported }} rows</span></summary>
+      <div class="receipt-body">
+        <div class="receipt-meta"><div><p class="section-kicker">Receipt</p><dl class="ruled-list"><div><dt>Facility</dt><dd>{{ facility.name }}</dd></div><div><dt>Imported by</dt><dd>{{ receipt.imported_by or 'Not recorded' }}</dd></div><div><dt>Timestamp</dt><dd>{{ receipt.imported_at.strftime('%d %b %Y %H:%M UTC') }}</dd></div><div><dt>Calculation</dt><dd>{{ receipt.calc_version or 'Not recorded' }}</dd></div></dl></div>
+          <div><p class="section-kicker">Record counts</p><dl class="ruled-list"><div><dt>Shifts</dt><dd>{{ receipt.shifts_imported }}</dd></div><div><dt>Residents</dt><dd>{{ receipt.residents_imported }}</dd></div><div><dt>Resident days</dt><dd>{{ receipt.resident_days_imported }}</dd></div><div><dt>Care episodes</dt><dd>{{ receipt.care_episodes_imported }}</dd></div><div><dt>Skipped</dt><dd>{{ receipt.shifts_skipped + receipt.residents_skipped }}</dd></div></dl></div>
+          <div><p class="section-kicker">Quality</p><dl class="ruled-list"><div><dt>Evidence class</dt><dd>{{ (receipt.evidence_type or 'unverified').replace('_', ' ') }}</dd></div><div><dt>Source range</dt><dd>{{ receipt.first_shift_date.strftime('%d %b %Y') ~ ' to ' ~ receipt.last_shift_date.strftime('%d %b %Y') if receipt.first_shift_date and receipt.last_shift_date else 'Not recorded' }}</dd></div><div><dt>Original rows</dt><dd>Retained on imported records</dd></div><div><dt>Later corrections</dt><dd>Not recorded</dd></div></dl></div></div>
 
+        <div class="source-files"><p class="section-kicker">Source files</p>{% if files_by_receipt.get(receipt.id) %}<div class="file-ledger">{% for filename in files_by_receipt[receipt.id] %}<div><div><strong>{{ filename }}</strong><span>Retained · checksum not recorded</span></div><a href="{{ url_for('audit_file', receipt_id=receipt.id, filename=filename) }}">Download</a></div>{% endfor %}</div>{% else %}<p class="notice notice-warning"><strong>Source file not retained.</strong> The imported rows remain, but this receipt does not have downloadable source evidence.</p>{% endif %}</div>
+
+        {% if has_permission('manage_facility') %}<details class="danger-zone"><summary>Danger zone: delete this receipt</summary><p>Removes this receipt's shift rows and retained files. Resident and staff reference records remain in place. Deletion is immediate.</p><form method="post" action="{{ url_for('delete_receipt', receipt_id=receipt.id) }}" class="form confirm-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><label>Type <code>delete</code> to confirm<input type="text" name="confirm" autocomplete="off" required></label><button type="submit" class="danger-button">Delete import #{{ receipt.id }}</button></form></details>{% endif %}
+      </div>
+    </details>
+  {% endfor %}
+  </div>{% else %}<section class="empty-state"><h2>No import receipts</h2><p>Import source files to create a reviewable evidence and calculation record.</p>{% if has_permission('import_data') %}<a class="primary-action" href="{{ url_for('universal_import') }}">Import source records</a>{% endif %}</section>{% endif %}
+</section>
 {% endblock %}

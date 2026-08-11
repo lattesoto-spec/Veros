@@ -1,175 +1,82 @@
 {% extends "base.html" %}
-{% block title %}Compliance | CareMin{% endblock %}
+{% block title %}Care minutes | CareMin{% endblock %}
 {% block content %}
-{% if tests %}
-<section class="block">
-  <div class="section-card">
-    <div class="section-heading">
-      <div>
-        <h2>Quarterly compliance tests</h2>
-        <p class="muted">
-          All three must pass. Figures are total eligible worked minutes divided by
-          occupied bed days over {{ tests.totals.days }} day(s)
-          ({{ tests.totals.bed_days }} bed days) · calc {{ tests.calc_version }}
-        </p>
-      </div>
-    </div>
-    <div style="overflow-x:auto">
-      <table class="data-table">
-        <thead><tr><th>Test</th><th>Achieved</th><th>Required</th><th>Result</th><th>Shortfall</th></tr></thead>
-        <tbody>
-        {% for x in tests.tests %}
-          <tr>
-            <td>{{ x.label }}<br><span class="muted">{{ x.basis }}</span></td>
-            <td>{{ x.achieved }}</td>
-            <td>{{ x.target }}</td>
-            <td>
-              {% if x.passed is none %}<span class="pill">no target set</span>
-              {% elif x.passed %}<span class="pill pill-on_track">pass</span>
-              {% else %}<span class="pill pill-behind">fail</span>{% endif %}
-            </td>
-            <td>{% if x.shortfall %}{{ x.shortfall }} min/bed-day ({{ x.shortfall_minutes }} total){% else %}No shortfall{% endif %}</td>
-          </tr>
-        {% endfor %}
-        </tbody>
-      </table>
-    </div>
-    {% if tests.totals.excluded_minutes %}
-    <p class="muted">
-      {{ tests.totals.excluded_minutes }} minutes are excluded pending an eligibility
-      decision. See <a href="{{ url_for('eligibility_queue') }}">Eligibility</a>.
-    </p>
-    {% endif %}
-    {% set tc = tests.target_reconciliation %}
-    <p class="muted">
-      Target cross-check: reference period {{ tc.reference_start }} to {{ tc.reference_end }}
-      (calculation day {{ tc.calculation_day }}) -
-      {% if tc.matched %}<span class="pill pill-on_track">configured target matches AN-ACC ledger</span>
-      {% elif tc.complete %}<span class="pill pill-behind">configured {{ tc.configured_care_target }}/{{ tc.configured_rn_target }} vs derived {{ tc.derived_care_target }}/{{ tc.derived_rn_target }}</span>
-      {% else %}<span class="pill pill-at_risk">reference ledger {{ tc.ledger_dates }}/{{ tc.expected_dates }} dates; {{ tc.missing_classification_days }} unrecognised classification day(s)</span>{% endif %}
-    </p>
+<section class="page-header">
+  <div>
+    <p class="eyebrow">Overview / Care minutes</p>
+    <h1>Care-minute reporting position</h1>
+    <p class="page-purpose">Review period performance, the three defined tests, evidence qualifications and supporting detail.</p>
+    <p class="page-meta">Data through {{ today.strftime('%d %b %Y') }} · calculation {{ calc_version }} · targets {{ facility.ancc_target }} total and {{ facility.rn_target }} RN minutes</p>
   </div>
+  {% if has_permission('export_data') %}<a class="secondary-action" href="{{ url_for('reports_view') }}">Open reports</a>{% endif %}
+</section>
+
+{% if tests %}
+{% set has_period_result = tests.totals.bed_days > 0 %}
+<section class="period-position {% if not has_period_result %}position-review{% elif tests.passed %}position-pass{% else %}position-fail{% endif %}">
+  <p class="section-kicker">Overall period position</p>
+  <div><strong>{% if not has_period_result %}Not available{% elif tests.passed %}All defined tests pass{% else %}{{ tests.failed|length }} test{{ 's' if tests.failed|length != 1 }} below requirement{% endif %}</strong><span>{% if not has_period_result %}No occupied bed days are available for this period, so no performance result is stated.{% else %}All three tests must pass. Software results remain subject to complete and correctly classified source evidence.{% endif %}</span></div>
+</section>
+
+<section class="record-section" aria-labelledby="tests-title">
+  <div class="section-heading"><div><h2 id="tests-title">Regulatory tests</h2><p class="muted">Eligible actual-worked minutes divided by occupied bed days.</p></div></div>
+  <div class="table-wrap"><table class="result-ledger">
+    <caption class="sr-only">Three care-minute tests for {{ facility.name }}</caption>
+    <thead><tr><th>Test</th><th class="num">Achieved</th><th class="num">Required</th><th class="num">Position</th><th>Result</th></tr></thead>
+    <tbody>{% for test in tests.tests %}<tr>
+      <td><strong>{{ test.label }}</strong><span class="cell-note">{{ test.basis }}</span></td>
+      <td class="num">{{ test.achieved if has_period_result else 'Not available' }}</td><td class="num">{{ test.target }}</td>
+      <td class="num">{% if not has_period_result %}Not available{% elif test.shortfall %}{{ test.shortfall }} below{% else %}{{ (test.achieved - test.target)|round(1) }} above{% endif %}</td>
+      <td>{% if not has_period_result or test.passed is none %}<span class="status-text status-na">Not available</span>{% elif test.passed %}<span class="status-text status-pass">Pass</span>{% else %}<span class="status-text status-fail">Fail</span>{% endif %}</td>
+    </tr>{% endfor %}</tbody>
+  </table></div>
+  <p class="record-basis">{{ tests.totals.bed_days }} occupied bed days across {{ tests.totals.days }} dates · applicable calculation {{ tests.calc_version }}</p>
+  {% set tc = tests.target_reconciliation %}
+  <p class="record-basis">Target reference {{ tc.reference_start }} to {{ tc.reference_end }}: {% if tc.matched %}configured target matches the AN-ACC reference ledger{% elif tc.complete %}<strong>configured {{ tc.configured_care_target }}/{{ tc.configured_rn_target }} differs from derived {{ tc.derived_care_target }}/{{ tc.derived_rn_target }}</strong>{% else %}<strong>reference ledger incomplete: {{ tc.ledger_dates }}/{{ tc.expected_dates }} dates</strong>{% endif %}.</p>
 </section>
 
 {% if evidence %}
-<section class="block">
-  <div class="section-card">
-    <div class="section-heading"><div><h2>Evidence reconciliation</h2><p class="muted">Streams remain separate; only eligible actual-worked minutes feed the tests above</p></div></div>
-    <div class="table-wrap"><table>
-      <thead><tr><th>Actual worked</th><th>Rostered</th><th>Unverified</th><th>Delivered-care episodes</th><th>Resident-day ledger</th></tr></thead>
-      <tbody><tr>
-        <td>{{ evidence.worked_minutes }} min{% if evidence.worked_withheld_minutes %}<br><span class="muted">{{ evidence.worked_withheld_minutes }} withheld</span>{% endif %}</td>
-        <td>{{ evidence.rostered_minutes }} min{% if evidence.rostered_withheld_minutes %}<br><span class="muted">{{ evidence.rostered_withheld_minutes }} withheld</span>{% endif %}</td>
-        <td>{{ evidence.unverified_minutes }} min{% if evidence.unverified_withheld_minutes %}<br><span class="muted">{{ evidence.unverified_withheld_minutes }} withheld</span>{% endif %}</td>
-        <td>{{ evidence.delivered_minutes }} min across {{ evidence.care_episode_count }} episodes<br><span class="muted">{{ evidence.delivered_variance }} vs worked (not added to compliance)</span></td>
-        <td>{% if evidence.resident_day_ledger_complete %}{{ evidence.resident_day_rows }} rows across {{ evidence.resident_day_dates }} days{% elif evidence.uses_resident_day_ledger %}<span class="pill pill-at_risk">partial: {{ evidence.resident_day_dates }}/{{ evidence.resident_day_expected_dates }} days</span>{% else %}<span class="pill pill-at_risk">admission/discharge fallback</span>{% endif %}</td>
-      </tr></tbody>
-    </table></div>
-  </div>
+<section class="record-section" aria-labelledby="evidence-title">
+  <div class="section-heading"><div><h2 id="evidence-title">Evidence and denominator reconciliation</h2><p class="muted">Each evidence stream remains separate. Delivered-care evidence is not added to the worked-hours numerator.</p></div><a href="{{ url_for('audit') }}">Open source receipts</a></div>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Evidence record</th><th class="num">Included</th><th class="num">Withheld</th><th>Calculation treatment</th></tr></thead>
+    <tbody>
+      <tr><td>Actual worked</td><td class="num">{{ evidence.worked_minutes }} min</td><td class="num">{{ evidence.worked_withheld_minutes }} min</td><td>Eligible approved roles feed the three tests</td></tr>
+      <tr><td>Rostered</td><td class="num">{{ evidence.rostered_minutes }} min</td><td class="num">{{ evidence.rostered_withheld_minutes }} min</td><td>Retained as planning evidence, excluded from actual results</td></tr>
+      <tr><td>Unverified</td><td class="num">{{ evidence.unverified_minutes }} min</td><td class="num">{{ evidence.unverified_withheld_minutes }} min</td><td>Excluded until the source basis is confirmed</td></tr>
+      <tr><td>Delivered-care episodes</td><td class="num">{{ evidence.delivered_minutes }} min</td><td class="num">Not applicable</td><td>{{ evidence.care_episode_count }} episodes retained for reconciliation only</td></tr>
+      <tr><td>Resident-day ledger</td><td class="num">{{ evidence.resident_day_rows }} rows</td><td class="num">{{ evidence.resident_day_unverified_rows }} unverified</td><td>{% if evidence.resident_day_ledger_complete %}Complete for the period{% else %}{{ evidence.resident_day_dates }}/{{ evidence.resident_day_expected_dates }} dates; uncovered dates use the documented fallback{% endif %}</td></tr>
+    </tbody>
+  </table></div>
+  {% if evidence.worked_withheld_minutes or not evidence.resident_day_ledger_complete %}<p class="notice notice-warning"><strong>Review required.</strong> These evidence limitations affect the result shown above. <a href="{{ url_for('eligibility_queue') }}">Review classifications</a> or <a href="{{ url_for('audit') }}">open source receipts</a>.</p>{% endif %}
 </section>
 {% endif %}
 {% endif %}
 
-<section class="page-header">
-  <div>
-    <p class="eyebrow">Compliance engine</p>
-    <h1>Care minutes compliance</h1>
-    <p class="muted">As at {{ today.strftime('%A, %d %B %Y') }} (latest data day) · calculation v{{ calc_version }}</p>
-  </div>
-</section>
-
-<section class="block">
-  <div class="section-card">
-    <div class="section-heading"><div><h2>Alerts</h2><p class="muted">Gap detection and predicted breaches</p></div></div>
-    {% for a in alerts %}
-      <p><span class="pill pill-{{ 'behind' if a.severity == 'high' else ('at_risk' if a.severity == 'medium' else 'on_track') }}">{{ a.severity }}</span> {{ a.message }}</p>
-    {% endfor %}
-  </div>
+<section class="record-section" aria-labelledby="alerts-title">
+  <div class="section-heading"><div><h2 id="alerts-title">Monitoring exceptions</h2><p class="muted">Current-period and near-term conditions detected from included data.</p></div></div>
+  <div class="alert-ledger">{% for alert in alerts %}<p><span class="status-text {{ 'status-fail' if alert.severity == 'high' else ('status-review' if alert.severity == 'medium' else 'status-pass') }}">{{ 'Below target' if alert.severity == 'high' else ('Review required' if alert.severity == 'medium' else 'On track') }}</span><span>{{ alert.message }}</span></p>{% endfor %}</div>
 </section>
 
 {% if forecast %}
-<section class="cards">
-  <div class="card status-{{ 'on_track' if forecast.qtd_avg >= facility.ancc_target else 'behind' }}">
-    <div class="card-label">Quarter-to-date average</div>
-    <div class="card-value">{{ forecast.qtd_avg }}</div>
-    <div class="card-sub">Target {{ facility.ancc_target }} mins/resident/day</div>
-  </div>
-  <div class="card status-{{ 'on_track' if forecast.on_track else 'behind' }}">
-    <div class="card-label">Projected quarter-end</div>
-    <div class="card-value">{{ forecast.projected_avg }}</div>
-    <div class="card-sub">
-      {% if forecast.on_track %}On track
-      {% elif forecast.days_until_breach %}Falls below target in {{ forecast.days_until_breach }} day(s)
-      {% else %}Below target at quarter end{% endif %}
-    </div>
-  </div>
-  <div class="card status-{{ 'on_track' if forecast.rn_on_track else 'behind' }}">
-    <div class="card-label">Projected RN quarter-end</div>
-    <div class="card-value">{{ forecast.projected_rn_avg }}</div>
-    <div class="card-sub">RN-only ≥ {{ (facility.rn_target * 0.9)|round(1) }} and RN+EN ≥ {{ facility.rn_target }}</div>
-  </div>
-  <div class="card status-{{ 'on_track' if coverage.full_coverage else 'at_risk' }}">
-    <div class="card-label">RN 24/7 coverage (latest day)</div>
-    <div class="card-value">{{ coverage.coverage_pct }}%</div>
-    <div class="card-sub">{{ coverage.covered_minutes }} of 1440 minutes covered</div>
-  </div>
+<section class="record-section" aria-labelledby="forecast-title">
+  <div class="section-heading"><div><h2 id="forecast-title">Forecast and basis</h2><p class="muted">Cumulative period result projected from the trailing 14-day actual-worked baseline.</p></div><a href="{{ url_for('scenarios') }}">Open scenario planning</a></div>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Measure</th><th class="num">Period to date</th><th class="num">Projected</th><th class="num">Target</th><th>Position</th></tr></thead>
+    <tbody>
+      <tr><td>Total care minutes</td><td class="num">{{ forecast.qtd_avg }}</td><td class="num">{{ forecast.projected_avg }}</td><td class="num">{{ facility.ancc_target }}</td><td>{{ 'On track' if forecast.on_track else 'Below target' }}</td></tr>
+      <tr><td>RN-only minutes</td><td class="num">{{ forecast.qtd_rn_avg }}</td><td class="num">{{ forecast.projected_rn_avg }}</td><td class="num">{{ (facility.rn_target * 0.9)|round(1) }}</td><td>{{ 'On track' if forecast.projected_rn_avg >= facility.rn_target * 0.9 else 'Below target' }}</td></tr>
+      <tr><td>RN plus EN minutes</td><td class="num">{{ forecast.qtd_rn_en_avg }}</td><td class="num">{{ forecast.projected_rn_en_avg }}</td><td class="num">{{ facility.rn_target }}</td><td>{{ 'On track' if forecast.projected_rn_en_avg >= facility.rn_target else 'Below target' }}</td></tr>
+    </tbody>
+  </table></div>
+  <p class="record-basis">{{ forecast.qtd_days }} included dates · {{ forecast.days_remaining }} days remaining · typical future day {{ forecast.future_per_resident }} total and {{ forecast.future_rn_per_resident }} RN minutes per resident at {{ forecast.baseline_residents }} residents.</p>
 </section>
 
-<section class="block">
-  <div class="section-card">
-    <div class="section-heading"><div><h2>Forecast basis</h2><p class="muted">Cumulative-average projection from the trailing 14 days</p></div></div>
-    <p class="muted">
-      {{ forecast.qtd_days }} days of data this quarter · {{ forecast.days_remaining }} days remaining ·
-      typical day going forward: {{ forecast.future_per_resident }} mins/resident
-      ({{ forecast.future_rn_per_resident }} RN) at {{ forecast.baseline_residents }} residents.
-      <a href="{{ url_for('scenarios') }}">Run a what-if scenario →</a>
-    </p>
-  </div>
-</section>
+<nav class="section-tabs" aria-label="Care-minute detail"><a href="#by-month">By month</a><a href="#by-day-role">By day and role</a></nav>
+{% if months %}<section class="record-section" id="by-month" aria-labelledby="month-title"><div class="section-heading"><div><h2 id="month-title">Monthly movement</h2></div></div><div class="table-wrap"><table><thead><tr><th>Month</th><th class="num">Bed days</th><th class="num">Total min</th><th class="num">RN</th><th class="num">EN</th><th class="num">PCW/AIN</th><th class="num">Care / bed day</th><th class="num">RN / bed day</th></tr></thead><tbody>{% for month in months %}<tr><td>{{ month.label }}</td><td class="num">{{ month.bed_days }}</td><td class="num">{{ month.total_minutes }}</td><td class="num">{{ month.rn_minutes }}</td><td class="num">{{ month.en_minutes }}</td><td class="num">{{ month.pca_minutes }}</td><td class="num">{{ month.care_per_bed_day }}</td><td class="num">{{ month.rn_per_bed_day }}</td></tr>{% endfor %}</tbody></table></div></section>{% endif %}
 
-{% if months %}
-<section class="block">
-  <div class="section-card">
-    <div class="section-heading"><div><h2>Quarter by month</h2></div></div>
-    <div class="table-wrap">
-      <table>
-        <thead><tr><th>Month</th><th>Bed days</th><th>Total mins</th><th>RN</th><th>EN</th><th>PCA/PCW</th><th>Agency</th><th>Care/bed day</th><th>RN/bed day</th></tr></thead>
-        <tbody>
-        {% for m in months %}
-          <tr>
-            <td>{{ m.label }}</td><td>{{ m.bed_days }}</td><td>{{ m.total_minutes }}</td>
-            <td>{{ m.rn_minutes }}</td><td>{{ m.en_minutes }}</td><td>{{ m.pca_minutes }}</td>
-            <td>{{ m.agency_minutes }}</td><td>{{ m.care_per_bed_day }}</td><td>{{ m.rn_per_bed_day }}</td>
-          </tr>
-        {% endfor %}
-        </tbody>
-      </table>
-    </div>
-  </div>
-</section>
-{% endif %}
-
-<section class="block">
-  <div class="section-card">
-    <div class="section-heading"><div><h2>Last 7 days by role</h2></div></div>
-    <div class="table-wrap">
-      <table>
-        <thead><tr><th>Date</th><th>Residents</th><th>Total</th><th>RN</th><th>EN</th><th>PCA/PCW</th><th>Other</th><th>Agency</th><th>Care/res</th><th>RN/res</th></tr></thead>
-        <tbody>
-        {% for r in week | reverse %}
-          <tr>
-            <td>{{ r.date.strftime('%d %b') }}</td><td>{{ r.residents }}</td><td>{{ r.total_minutes }}</td>
-            <td>{{ r.rn_minutes }}</td><td>{{ r.en_minutes }}</td><td>{{ r.pca_minutes }}</td>
-            <td>{{ r.other_minutes }}</td><td>{{ r.agency_minutes }}</td>
-            <td>{{ r.care_per_resident }}</td><td>{{ r.rn_per_resident }}</td>
-          </tr>
-        {% endfor %}
-        </tbody>
-      </table>
-    </div>
-  </div>
-</section>
+<section class="record-section" id="by-day-role" aria-labelledby="day-title"><div class="section-heading"><div><h2 id="day-title">Daily and role-level detail</h2><p class="muted">Latest seven included dates. Numeric columns use tabular alignment for review.</p></div></div><div class="table-wrap"><table><thead><tr><th>Date</th><th class="num">Residents</th><th class="num">Total</th><th class="num">RN</th><th class="num">EN</th><th class="num">PCW/AIN</th><th class="num">Other</th><th class="num">Agency</th><th class="num">Care / resident</th></tr></thead><tbody>{% for row in week | reverse %}<tr><td>{{ row.date.strftime('%d %b %Y') }}</td><td class="num">{{ row.residents }}</td><td class="num">{{ row.total_minutes }}</td><td class="num">{{ row.rn_minutes }}</td><td class="num">{{ row.en_minutes }}</td><td class="num">{{ row.pca_minutes }}</td><td class="num">{{ row.other_minutes }}</td><td class="num">{{ row.agency_minutes }}</td><td class="num">{{ row.care_per_resident }}</td></tr>{% endfor %}</tbody></table></div></section>
 {% else %}
-<section class="block"><div class="section-card"><p class="muted">Not enough data this quarter to forecast. Import at least one day of shifts.</p></div></section>
+<section class="empty-state"><h2>No care-minute result is available</h2><p>No eligible actual-worked data is available for the current quarter. Import worked-hours evidence to calculate a position; rostered time remains separate planning evidence.</p>{% if has_permission('import_data') %}<a class="primary-action" href="{{ url_for('universal_import') }}">Import worked-hours data</a>{% endif %}</section>
 {% endif %}
 {% endblock %}

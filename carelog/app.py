@@ -483,6 +483,78 @@ def create_app() -> Flask:
             evidence=evidence_summary(facility.id, q_start, today),
         )
 
+    @app.route("/rn-coverage")
+    @require("view_dashboard")
+    def rn_coverage_view():
+        """Operational RN continuity view using the existing coverage engine."""
+        facility = current_facility()
+        if not facility:
+            return redirect(url_for("universal_import"))
+        today = _latest_data_date(facility)
+        try:
+            selected_month = datetime.strptime(
+                request.args.get("month", today.strftime("%Y-%m")), "%Y-%m"
+            ).date().replace(day=1)
+        except ValueError:
+            selected_month = today.replace(day=1)
+        next_month = (
+            date(selected_month.year + 1, 1, 1)
+            if selected_month.month == 12
+            else date(selected_month.year, selected_month.month + 1, 1)
+        )
+        start = selected_month
+        end = next_month - timedelta(days=1)
+        source_dates = {
+            row[0] for row in db.session.query(Shift.date).filter(
+                Shift.facility_id == facility.id,
+                Shift.evidence_type == "worked",
+                Shift.date >= start,
+                Shift.date <= end,
+            ).distinct().all()
+        }
+        days = []
+        reportable_gaps = []
+        for offset in range((end - start).days + 1):
+            day = start + timedelta(days=offset)
+            available = day in source_dates
+            result = rn_coverage(facility.id, day)
+            result["date"] = day
+            result["available"] = available
+            days.append(result)
+            if available:
+                source_intervals = [
+                    f"{_clock_label(segment['start_minute'])} to "
+                    f"{_clock_label(segment['end_minute'])}"
+                    for segment in result["timeline"]
+                ]
+                for gap in result["gap_intervals"]:
+                    if gap["reportable"]:
+                        reportable_gaps.append({
+                            "date": day,
+                            "start": _clock_label(gap["start_minute"]),
+                            "end": _clock_label(gap["end_minute"]),
+                            "minutes": gap["minutes"],
+                            "source_intervals": source_intervals,
+                        })
+        available = [row for row in days if row["available"]]
+        period_pct = (
+            round(sum(row["covered_minutes"] for row in available) /
+                  (len(available) * 1440) * 100, 1)
+            if available else None
+        )
+        return render_template(
+            "rn_coverage.html",
+            facility=facility,
+            start=start,
+            end=end,
+            month_value=start.strftime("%Y-%m"),
+            days=days,
+            available_days=len(available),
+            period_pct=period_pct,
+            reportable_gaps=reportable_gaps,
+            calc_version=CALC_VERSION,
+        )
+
     @app.route("/scenarios", methods=["GET", "POST"])
     @require("run_scenarios")
     def scenarios():
@@ -548,6 +620,23 @@ def create_app() -> Flask:
         return Response(
             blob, mimetype="application/pdf",
             headers={"Content-Disposition": "attachment; filename=board-care-minutes-report.pdf"},
+        )
+
+    @app.route("/reports")
+    @require("export_data")
+    def reports_view():
+        facility = current_facility()
+        if not facility:
+            return redirect(url_for("universal_import"))
+        latest = _latest_data_date(facility)
+        q_start, _ = quarter_bounds(latest)
+        return render_template(
+            "reports.html",
+            facility=facility,
+            latest=latest,
+            quarters=available_quarters(facility.id),
+            calc_version=CALC_VERSION,
+            evidence=evidence_summary(facility.id, q_start, latest),
         )
 
     def _export_range(facility):
@@ -668,7 +757,7 @@ def create_app() -> Flask:
                 raise ValueError
         except (ValueError, AttributeError):
             flash("Pick a valid quarter to generate a report.")
-            return redirect(url_for("dashboard"))
+            return redirect(url_for("reports_view"))
 
         pdf_bytes = build_quarterly_pdf(facility, year, quarter)
         safe_name = "".join(c if c.isalnum() else "-" for c in facility.name).strip("-").lower()
@@ -706,11 +795,14 @@ def create_app() -> Flask:
         if not facility:
             return redirect(url_for("universal_import"))
 
-        latest_shift = Shift.query.filter_by(
+        latest_worked_shift = Shift.query.filter_by(
             facility_id=facility.id, evidence_type="worked"
         ).order_by(Shift.date.desc()).first()
+        latest_shift = latest_worked_shift
         if latest_shift is None:
-            latest_shift = Shift.query.filter_by(facility_id=facility.id).order_by(Shift.date.desc()).first()
+            latest_shift = Shift.query.filter_by(
+                facility_id=facility.id
+            ).order_by(Shift.date.desc()).first()
         today = latest_shift.date if latest_shift else date.today()
 
         today_stats = daily_stats(facility.id, today, facility.ancc_target, facility.rn_target)
@@ -726,8 +818,10 @@ def create_app() -> Flask:
 
         chart_data = {
             "labels": [r["date"].strftime("%d %b") for r in last_14],
-            "values": [r["care_per_resident"] for r in last_14],
-            "colors": [_color_for(r["status"]) for r in last_14],
+            "values": [
+                r["care_per_resident"] if r["active_residents"] and r["total_minutes"] else None
+                for r in last_14
+            ],
             "target": facility.ancc_target,
         }
 
@@ -736,6 +830,9 @@ def create_app() -> Flask:
         # Phase 6 additions
         pct = compliance_pct(facility, today)
         coverage = rn_coverage(facility.id, today)
+        coverage_available = Shift.query.filter_by(
+            facility_id=facility.id, evidence_type="worked", date=today
+        ).first() is not None
         alerts = detect_gaps(facility, today)
         last_receipt = _latest_receipt(facility)
         data_age_days = (
@@ -749,6 +846,7 @@ def create_app() -> Flask:
             "dashboard.html",
             compliance_pct=pct,
             coverage=coverage,
+            coverage_available=coverage_available,
             alerts=alerts,
             data_age_days=data_age_days,
             audit_readiness=audit_readiness,
@@ -761,10 +859,15 @@ def create_app() -> Flask:
             q_gap=q_gap,
             q_gap_pct=q_gap_pct,
             q_start=q_start,
+            q_end=q_end,
             resident_count=resident_count,
             last_receipt=_latest_receipt(facility),
-            quarters=available_quarters(facility.id),
             evidence=evidence_summary(facility.id, q_start, today),
+            tests=quarterly_tests(facility, q_start, today),
+            pending_eligibility=Staff.query.filter_by(
+                facility_id=facility.id, eligibility_status=el.PENDING
+            ).count(),
+            calc_version=CALC_VERSION,
         )
 
     @app.route("/facility", methods=["GET"])
@@ -999,14 +1102,24 @@ def create_app() -> Flask:
         summary = {}
         for f in facilities:
             latest = (
-                Shift.query.filter_by(facility_id=f.id)
+                Shift.query.filter_by(facility_id=f.id, evidence_type="worked")
                 .order_by(Shift.date.desc()).first()
             )
+            period_status = None
+            if latest:
+                period_start, _ = quarter_bounds(latest.date)
+                result = quarterly_tests(f, period_start, latest.date)
+                if result["totals"]["bed_days"]:
+                    period_status = result["passed"]
             summary[f.id] = {
                 "shifts": Shift.query.filter_by(facility_id=f.id).count(),
                 "residents": Resident.query.filter_by(
                     facility_id=f.id, discharged_date=None).count(),
                 "latest": latest.date if latest else None,
+                "period_status": period_status,
+                "open_issues": Staff.query.filter_by(
+                    facility_id=f.id, eligibility_status=el.PENDING
+                ).count(),
             }
         return render_template(
             "facilities.html",
@@ -1507,6 +1620,44 @@ def org_facilities():
         .order_by(Facility.name)
         .all()
     )
+
+
+def _clock_label(minute: int) -> str:
+    if minute >= 1440:
+        return "24:00"
+    return f"{minute // 60:02d}:{minute % 60:02d}"
+
+
+def workspace_context(facility: Facility | None) -> dict:
+    """Small, factual context record displayed above facility pages."""
+    if facility is None:
+        return {}
+    latest = Shift.query.filter_by(
+        facility_id=facility.id, evidence_type="worked"
+    ).order_by(Shift.date.desc()).first()
+    if latest is None:
+        latest = Shift.query.filter_by(facility_id=facility.id).order_by(Shift.date.desc()).first()
+    latest_day = latest.date if latest else None
+    receipt = ImportReceipt.query.filter_by(facility_id=facility.id).order_by(
+        ImportReceipt.imported_at.desc()
+    ).first()
+    if latest_day:
+        period_start, period_end = quarter_bounds(latest_day)
+        period = (
+            f"{period_start.strftime('%d %b')} to "
+            f"{period_end.strftime('%d %b %Y')}"
+        )
+    else:
+        period = "Not available"
+    return {
+        "period": period,
+        "latest_day": latest_day,
+        "last_import": receipt.imported_at if receipt else None,
+        "open_issues": Staff.query.filter_by(
+            facility_id=facility.id, eligibility_status=el.PENDING
+        ).count(),
+        "calc_version": CALC_VERSION,
+    }
 
 
 def current_facility():

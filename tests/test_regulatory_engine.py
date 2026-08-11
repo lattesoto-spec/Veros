@@ -134,6 +134,12 @@ def test_exact_30_minute_rn_gap_is_reportable_and_excluded_rn_does_not_fill_it(a
         coverage = rn_coverage(facility.id, day)
         assert coverage["covered_minutes"] == 1410
         assert coverage["full_coverage"] is False
+        assert coverage["gap_intervals"] == [{
+            "start_minute": 720,
+            "end_minute": 750,
+            "minutes": 30,
+            "reportable": True,
+        }]
 
 
 def test_nurse_registration_needs_a_current_expiry(app, facility):

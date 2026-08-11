@@ -1,10 +1,11 @@
 import importlib
+from datetime import date, time
 from pathlib import Path
 
 import pytest
 
 from carelog import auth
-from carelog.models import Facility, Organization, db
+from carelog.models import Facility, Organization, ResidentDay, Shift, Staff, db
 
 
 @pytest.fixture()
@@ -200,3 +201,86 @@ def test_import_classifies_evidence_without_asking_the_user(web_app):
     sample = client.get("/samples/worked_staffing_july_2026.xlsx")
     assert sample.status_code == 200
     assert sample.content_type.startswith("application/")
+
+
+def test_redesigned_provider_workspace_routes_render_with_sparse_data(web_app):
+    app, ids = web_app
+    client = app.test_client()
+    sign_in_as(client, ids["admin"])
+
+    for path in (
+        "/dashboard", "/compliance", "/rn-coverage", "/scenarios",
+        "/reports", "/audit", "/eligibility", "/facility",
+        "/facilities", "/integrations", "/admin/users", "/settings",
+    ):
+        response = client.get(path)
+        assert response.status_code == 200, path
+
+    dashboard = client.get("/dashboard")
+    assert b"Attention required" in dashboard.data
+    assert b"Care minutes" in dashboard.data
+    assert b"RN coverage" in dashboard.data
+    assert b"Reports" in dashboard.data
+    assert b"RN coverage has no actual-worked source" in dashboard.data
+
+    compliance = client.get("/compliance")
+    assert b"No occupied bed days are available" in compliance.data
+
+    coverage = client.get("/rn-coverage")
+    assert b"No actual-worked RN shift evidence is available" in coverage.data
+    assert b"Not available" in coverage.data
+    assert b'name="month"' in coverage.data
+    assert client.get("/rn-coverage?month=not-a-month").status_code == 200
+
+    reports = client.get("/reports")
+    assert b"Report register" in reports.data
+    assert b"Output qualification" in reports.data
+
+    facilities = client.get("/facilities")
+    assert b"On track" not in facilities.data
+
+
+def test_redesigned_reporting_routes_render_calculated_data(web_app):
+    app, ids = web_app
+    with app.app_context():
+        facility = Facility.query.filter_by(organization_id=ids["customer"]).one()
+        rn = Staff(
+            facility_id=facility.id, staff_id="RN-1", name="Registered Nurse",
+            role="RN", source_role="Registered Nurse", eligibility_status="approved",
+            registration_number="AHPRA-RN-1", registration_expiry=date(2027, 8, 1),
+        )
+        pcw = Staff(
+            facility_id=facility.id, staff_id="PCW-1", name="Care Worker",
+            role="PCW", source_role="Personal Care Worker",
+            eligibility_status="approved",
+        )
+        db.session.add_all([rn, pcw])
+        db.session.flush()
+        for day in (date(2026, 8, 1), date(2026, 8, 2)):
+            db.session.add(ResidentDay(
+                facility_id=facility.id, resident_id=f"R-{day}",
+                resident_name="Resident", date=day, occupied=True,
+                service_type="permanent",
+            ))
+            for start, end in ((time(0), time(12)), (time(12), time(0))):
+                db.session.add(Shift(
+                    facility_id=facility.id, staff_id=rn.id, date=day,
+                    start_time=start, end_time=end, break_minutes=0,
+                    is_direct_care=True, evidence_type="worked",
+                ))
+            db.session.add(Shift(
+                facility_id=facility.id, staff_id=pcw.id, date=day,
+                start_time=time(8), end_time=time(16), break_minutes=0,
+                is_direct_care=True, evidence_type="worked",
+            ))
+        db.session.commit()
+
+    client = app.test_client()
+    sign_in_as(client, ids["admin"])
+    for path in ("/dashboard", "/compliance", "/rn-coverage?month=2026-08", "/facilities"):
+        response = client.get(path)
+        assert response.status_code == 200, path
+
+    assert b"All defined tests pass" in client.get("/compliance").data
+    assert b"100.0%" in client.get("/rn-coverage?month=2026-08").data
+    assert b"On track" in client.get("/facilities").data

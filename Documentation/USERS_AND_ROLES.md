@@ -19,7 +19,8 @@ Two mechanisms enforce it, and both matter:
 
 Login is enforced by a `before_request` hook rather than per-route decorators,
 so a newly added route is protected by default. Only the login page, the
-stylesheet and the internal worker endpoint are exempt.
+forgot-password guidance, privacy information, stylesheet, health check and the
+internal worker endpoint are exempt.
 
 ## Roles
 
@@ -100,7 +101,22 @@ database that was previously single-tenant, otherwise the existing data is
 invisible after the upgrade.
 
 Administrators add further users from **Administration → Users**. New accounts
-get a temporary password and must change it at first sign-in.
+get a temporary password and must change it at first sign-in. From the same
+screen, an administrator can issue another user a confirmed temporary password;
+doing so revokes that user's existing sessions and trusted devices.
+
+Every user then enrolls an authenticator app and receives ten recovery codes.
+An organization administrator can reset another customer's two-step setup from
+**Administration → Users**, but cannot reset their own. A platform owner who
+has lost both the authenticator and all recovery codes is recovered from the
+deployment environment with:
+
+```bash
+flask --app app reset-mfa owner@example.com
+```
+
+The command is deliberately restricted to platform-owner accounts. It revokes
+their sessions and trusted devices and requires fresh enrollment at next login.
 
 ## Multiple facilities
 
@@ -117,11 +133,30 @@ shifts, staff, residents and receipts with it.
 ## Security posture today
 
 - Passwords hashed with Werkzeug's scrypt default; minimum 12 characters.
+- Authenticator-app two-step verification is mandatory for every user. TOTP
+  secrets are encrypted with `MFA_ENCRYPTION_KEY`; recovery codes and trusted
+  device tokens are stored only as hashes.
+- A correct password creates a ten-minute pre-authentication state, not an
+  application session. The session is established only after password change,
+  enrollment and verification requirements are satisfied.
+- A user may trust a device for 30 days. The trusted-device token skips only
+  the authenticator code; the password is still required after the normal
+  12-hour application session expires.
 - Session cookies are HttpOnly, SameSite=Lax, Secure in any deployed
   environment, and expire after 12 hours.
+- **Remember my email** is opt-in and stores only the email address in an
+  encrypted, HttpOnly, SameSite=Lax cookie for 90 days. It is not stored in
+  browser local storage and never remembers a password.
+- The login and recovery pages say that the connection is encrypted only when
+  the request uses HTTPS (or the deployment enforces secure cookies). Local
+  HTTP development is labelled as unencrypted, and `/privacy` explains the
+  account, security and compliance data CareMin processes.
 - Failed sign-ins are recorded with the IP address, and the response is
   identical for an unknown email, a wrong password and a deactivated account,
   so the form cannot be used to discover valid addresses.
+- Password attempts are throttled in Postgres across serverless workers. Every
+  state-changing browser form is protected with a CSRF token, and logout is
+  POST-only.
 - Sign-ins, role changes, deactivations, password resets, imports, facility
   edits and data deletion are written to an append-only `audit_logs` table.
   The cross-account activity view is restricted to platform owners; provider
@@ -139,12 +174,11 @@ shifts, staff, residents and receipts with it.
 These are on your roadmap and are **not** implemented. Listing them so nothing
 is assumed to be working:
 
-- **Multi-factor authentication, SSO, API keys** (Phase 12). Password auth only.
-- **Password reset by email.** An administrator sets a temporary password;
-  there is no self-service "forgot password" flow because there is no mail
-  transport yet.
-- **Rate limiting / lockout** on repeated failed sign-ins. Attempts are logged
-  but not throttled.
+- **SSO and API keys** (Phase 12).
+- **Password reset by email.** `/forgot-password` provides public recovery
+  guidance without confirming whether an account exists. An administrator sets
+  a temporary password from **Administration → Users**; there is no reset email
+  or self-service reset token because there is no mail transport yet.
 - **Notifications of any kind** (Phase 8) — no email, SMS, Teams, Slack or
   digests. There is no mail transport configured at all.
 - **Approval workflow.** Phase 5 asks for "modified values" and "who approved";

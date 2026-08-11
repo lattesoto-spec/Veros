@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Reports | CareMin{% endblock %}
+{% block content %}
+<section class="page-header"><div><p class="eyebrow">Planning and reporting / Reports</p><h1>Report register</h1><p class="page-purpose">Generate controlled outputs from the currently included facility record.</p><p class="page-meta">{{ facility.name }} · data through {{ latest.strftime('%d %b %Y') }} · calculation {{ calc_version }}</p></div></section>
+
+<section class="record-section" aria-labelledby="regulatory-title"><div class="section-heading"><div><p class="section-kicker">Regulatory preparation</p><h2 id="regulatory-title">Period statements</h2></div></div><div class="report-register">
+  <div class="report-row"><div><strong>Care Minutes Performance Statement-style PDF</strong><span>Facility scope · selected quarter · evidence and calculation record included</span></div>{% if quarters %}<form method="get" action="{{ url_for('quarterly_report') }}" class="inline-control"><label><span class="sr-only">Quarter</span><select name="q">{% for q in quarters %}<option value="{{ q.year }}-Q{{ q.quarter }}">{{ q.label }}</option>{% endfor %}</select></label><button type="submit">Generate PDF</button></form>{% else %}<span class="status-text status-na">Not available</span>{% endif %}</div>
+  <div class="report-row"><div><strong>RN coverage monthly summary</strong><span>Coverage continuity, gap register and approval record</span></div><span class="status-text status-na">Not available</span></div>
+  <div class="report-row"><div><strong>QFR reconciliation support</strong><span>Separate worked, rostered, unverified and resident-day evidence</span></div><span class="status-text status-na">Not available</span></div>
+</div></section>
+
+<section class="record-section" aria-labelledby="governance-title"><div class="section-heading"><div><p class="section-kicker">Governance</p><h2 id="governance-title">Management outputs</h2></div></div><div class="report-register">
+  <div class="report-row"><div><strong>Board care-minutes report</strong><span>{{ facility.name }} · current position through {{ latest.strftime('%d %b %Y') }}</span></div><a class="secondary-action" href="{{ url_for('board_report') }}">Download PDF</a></div>
+  <div class="report-row"><div><strong>Provider portfolio summary</strong><span>Cross-facility governance view</span></div><span class="status-text status-na">Not available</span></div>
+  <div class="report-row"><div><strong>Facility comparison</strong><span>Comparable period results across the provider</span></div><span class="status-text status-na">Not available</span></div>
+</div></section>
+
+<section class="record-section" aria-labelledby="working-title"><div class="section-heading"><div><p class="section-kicker">Working data</p><h2 id="working-title">Calculation records</h2></div></div><div class="report-register">
+  <div class="report-row"><div><strong>Daily breakdown CSV</strong><span>Default range: latest 90 days · numeric source for working review</span></div><a class="secondary-action" href="{{ url_for('export_daily_csv') }}">Download CSV</a></div>
+  <div class="report-row"><div><strong>90-day summary</strong><span>Excel workbook · included data through {{ latest.strftime('%d %b %Y') }}</span></div><a class="secondary-action" href="{{ url_for('export_summary_xlsx') }}">Download Excel</a></div>
+  <div class="report-row"><div><strong>Evidence index and calculation record</strong><span>{{ evidence.worked_minutes }} worked minutes · {{ evidence.worked_withheld_minutes }} withheld · calculation {{ calc_version }}</span></div><a class="secondary-action" href="{{ url_for('audit') }}">Open audit trail</a></div>
+</div></section>
+
+<p class="notice notice-neutral"><strong>Output qualification.</strong> Generated reports use data included through {{ latest.strftime('%d %b %Y') }}. Evidence limitations remain part of the controlled record and should be reviewed before external use.</p>
+{% endblock %}

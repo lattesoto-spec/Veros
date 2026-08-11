@@ -1,100 +1,16 @@
 {% extends "base.html" %}
 {% block title %}Facilities | CareMin{% endblock %}
 {% block content %}
-<section class="page-header">
-  <div>
-    <p class="eyebrow">Setup</p>
-    <h1>Facilities</h1>
-    <p class="muted">
-      The homes operated by {{ organization.name if organization else 'your organization' }}.
-      Care minutes, targets and evidence are tracked separately for each one.
-    </p>
-  </div>
-</section>
+<section class="page-header"><div><p class="eyebrow">Administration / Facilities</p><h1>Facility register</h1><p class="page-purpose">Review each home's targets, latest included data and open evidence issues.</p><p class="page-meta">{{ organization.name if organization else 'Provider organisation' }} · {{ facilities|length }} facilit{{ 'y' if facilities|length == 1 else 'ies' }}</p></div>{% if has_permission('manage_facility') %}<button type="button" data-dialog-open="add-facility">Add facility</button>{% endif %}</section>
 
-<section class="block">
-  <div class="section-card">
-    <div class="section-heading">
-      <div>
-        <h2>Your facilities</h2>
-        <p class="muted">{{ facilities|length }} facilit{{ 'y' if facilities|length == 1 else 'ies' }} · targets are per facility</p>
-      </div>
-    </div>
-
-    {% if not facilities %}
-      <p class="muted">No facilities yet. Add one below, or run your first import.</p>
-    {% endif %}
-
-    {% for f in facilities %}
-    <div class="section-card facility-row {{ 'facility-active' if active and f.id == active.id }}">
-      <div class="section-heading">
-        <div>
-          <h2>{{ f.name }}
-            {% if active and f.id == active.id %}<span class="pill pill-on_track">viewing</span>{% endif %}
-          </h2>
-          <p class="muted">
-            {{ summary[f.id].shifts }} shift{{ 's' if summary[f.id].shifts != 1 }} ·
-            {{ summary[f.id].residents }} current resident{{ 's' if summary[f.id].residents != 1 }} ·
-            {% if summary[f.id].latest %}latest data {{ summary[f.id].latest.strftime('%d %b %Y') }}
-            {% else %}no data imported yet{% endif %}
-          </p>
-        </div>
-        {% if not (active and f.id == active.id) %}
-        <form method="post" action="{{ url_for('facility_switch') }}" class="inline-form">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <input type="hidden" name="facility_id" value="{{ f.id }}">
-          <input type="hidden" name="next" value="{{ url_for('facilities_view') }}">
-          <button type="submit">Switch to this facility</button>
-        </form>
-        {% endif %}
-      </div>
-
-      {% if has_permission('manage_facility') %}
-      <form method="post" action="{{ url_for('facility_update', facility_id=f.id) }}" class="form row compact-form">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <label>Name <input type="text" name="name" value="{{ f.name }}"></label>
-        <label>Care minutes target <input type="number" step="0.1" name="ancc_target" value="{{ f.ancc_target }}"></label>
-        <label>RN minutes target <input type="number" step="0.1" name="rn_target" value="{{ f.rn_target }}"></label>
-        <button type="submit">Save</button>
-      </form>
-      <details class="muted helper-details">
-        <summary>Delete this facility</summary>
-        <p>Removes {{ f.name }} along with every shift, resident, staff record and
-           import receipt belonging to it. This cannot be undone.</p>
-        <form method="post" action="{{ url_for('facility_delete', facility_id=f.id) }}"
-              class="form confirm-form">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <label>Type <code>delete</code> to confirm
-            <input type="text" name="confirm" placeholder="delete" autocomplete="off" required>
-          </label>
-          <button type="submit" class="danger-button">Delete {{ f.name }}</button>
-        </form>
-      </details>
-      {% endif %}
-    </div>
-    {% endfor %}
-  </div>
+<section class="record-section" aria-labelledby="facility-list-title"><div class="section-heading"><div><h2 id="facility-list-title">Provider facilities</h2><p class="muted">Switching changes the active working context. Editing does not switch facilities.</p></div></div>
+  {% if facilities %}<div class="table-wrap"><table><thead><tr><th>Facility</th><th class="num">Care target</th><th class="num">RN target</th><th>Latest data</th><th class="num">Open issues</th><th>Status</th><th><span class="sr-only">Actions</span></th></tr></thead><tbody>
+  {% for facility in facilities %}<tr class="{{ 'row-selected' if active and facility.id == active.id }}"><td><strong>{{ facility.name }}</strong><span class="cell-note">{{ summary[facility.id].residents }} current residents · {{ summary[facility.id].shifts }} shifts</span></td><td class="num">{{ facility.ancc_target }}</td><td class="num">{{ facility.rn_target }}</td><td>{{ summary[facility.id].latest.strftime('%d %b %Y') if summary[facility.id].latest else 'Not available' }}</td><td class="num">{{ summary[facility.id].open_issues }}</td><td><span class="status-text {% if summary[facility.id].period_status is none %}status-na{% elif summary[facility.id].open_issues %}status-review{% elif summary[facility.id].period_status %}status-pass{% else %}status-fail{% endif %}">{% if summary[facility.id].period_status is none %}Not available{% elif summary[facility.id].open_issues %}Review required{% elif summary[facility.id].period_status %}On track{% else %}Below requirement{% endif %}</span></td><td><div class="row-actions">{% if active and facility.id == active.id %}<a href="{{ url_for('facility_view') }}">Open</a>{% else %}<form method="post" action="{{ url_for('facility_switch') }}" class="inline-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="facility_id" value="{{ facility.id }}"><input type="hidden" name="next" value="{{ url_for('facility_view') }}"><button type="submit" class="link-button">Switch and open</button></form>{% endif %}{% if has_permission('manage_facility') %}<button type="button" class="link-button" data-dialog-open="edit-facility-{{ facility.id }}">Edit</button>{% endif %}</div></td></tr>{% endfor %}
+  </tbody></table></div>{% else %}<section class="empty-state"><h2>No facilities are configured</h2><p>Add the first facility or create it during the first source import.</p></section>{% endif %}
 </section>
 
 {% if has_permission('manage_facility') %}
-<section class="block">
-  <div class="section-card">
-    <div class="section-heading">
-      <div>
-        <h2>Add a facility</h2>
-        <p class="muted">Targets default to the AN-ACC sector averages and can be changed later</p>
-      </div>
-    </div>
-    <form method="post" action="{{ url_for('facility_create') }}" class="form">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <label>Facility name <input type="text" name="name" placeholder="e.g. Riverside Lodge" required></label>
-      <div class="form row compact-form">
-        <label>Care minutes target <input type="number" step="0.1" name="ancc_target" value="215"></label>
-        <label>RN minutes target <input type="number" step="0.1" name="rn_target" value="44"></label>
-      </div>
-      <button type="submit">Add facility</button>
-    </form>
-  </div>
-</section>
+<dialog id="add-facility" aria-labelledby="add-facility-title"><div class="dialog-header"><div><p class="section-kicker">New record</p><h2 id="add-facility-title">Add facility</h2></div><button type="button" class="dialog-close" data-dialog-close>Close</button></div><div class="dialog-body"><form method="post" action="{{ url_for('facility_create') }}" class="form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><label>Facility name<input type="text" name="name" required></label><div class="row"><label>Care-minute target<input type="number" step="0.1" name="ancc_target" value="215"></label><label>RN-minute target<input type="number" step="0.1" name="rn_target" value="44"></label></div><button type="submit">Add facility</button></form></div></dialog>
+{% for facility in facilities %}<dialog class="drawer" id="edit-facility-{{ facility.id }}" aria-labelledby="edit-facility-title-{{ facility.id }}"><div class="dialog-header"><div><p class="section-kicker">Facility record</p><h2 id="edit-facility-title-{{ facility.id }}">{{ facility.name }}</h2></div><button type="button" class="dialog-close" data-dialog-close>Close</button></div><div class="dialog-body"><form method="post" action="{{ url_for('facility_update', facility_id=facility.id) }}" class="form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><label>Name<input type="text" name="name" value="{{ facility.name }}"></label><div class="row"><label>Care-minute target<input type="number" step="0.1" name="ancc_target" value="{{ facility.ancc_target }}"></label><label>RN-minute target<input type="number" step="0.1" name="rn_target" value="{{ facility.rn_target }}"></label></div><p class="notice notice-neutral">Targets affect new calculations. The prototype does not yet retain target effective periods, so historical target governance must be reviewed before changing these values.</p><button type="submit">Save facility</button></form><div class="dialog-section danger-zone"><h3>Danger zone</h3><p>Deleting a facility immediately removes its shifts, residents, staff, receipts and retained evidence.</p><form method="post" action="{{ url_for('facility_delete', facility_id=facility.id) }}" class="form confirm-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><label>Type <code>delete</code> to confirm<input type="text" name="confirm" autocomplete="off" required></label><button type="submit" class="danger-button">Delete {{ facility.name }}</button></form></div></div></dialog>{% endfor %}
 {% endif %}
 {% endblock %}

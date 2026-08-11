@@ -978,12 +978,14 @@ def init_app(app):
             user and (not user.is_superuser or session.get("acting_org_id"))
         )
         facilities = app_module.org_facilities() if in_customer_workspace else []
+        active_facility = app_module.current_facility() if in_customer_workspace else None
         return {
             "current_user": user,
             "has_permission": has_permission,
             "role_label": role_label,
             "org_facilities": facilities,
-            "active_facility": app_module.current_facility() if in_customer_workspace else None,
+            "active_facility": active_facility,
+            "workspace_context": app_module.workspace_context(active_facility),
             "is_platform_owner": is_platform_owner(),
             "acting_org": db.session.get(Organization, session["acting_org_id"])
             if user and user.is_superuser and session.get("acting_org_id") else None,
