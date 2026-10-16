@@ -9,8 +9,8 @@ an inspectable record rather than a vanished job.
 Two ways to run the work, chosen by environment:
 
   thread     a daemon thread in the same process — local dev and VM hosts
-             (Fly), where the process outlives the response.
-  invoke     an HTTP call to /import/run/<job_id> on this same deployment —
+             where the process outlives the response.
+  invoke     an HTTP call to /api/import/run/<job_id> on this same deployment —
              serverless hosts, where a thread would be frozen the moment the
              response is sent. The call is fired and abandoned; the receiving
              function does the work within its own duration budget.
@@ -23,6 +23,8 @@ import os
 import threading
 import uuid
 from datetime import datetime
+from sqlalchemy.orm import Session
+from sqlalchemy import update, select
 
 from flask import current_app
 
@@ -35,7 +37,7 @@ from .pipeline import ingest_file
 from .reader import FileReadError
 
 # Guards the shift-replacing import against a concurrent second import in the
-# same process. Cross-process safety comes from the job status check in _run.
+# same process. Cross-process safety comes from a job claim and a facility row lock.
 _RUN_LOCK = threading.Lock()
 
 
@@ -60,6 +62,11 @@ def _touch(job: ImportJob, **fields):
 def start_job(app, facility_id: int, payloads: list[tuple[str, bytes]], storage,
               organization_id: int | None = None, user_id: int | None = None) -> str:
     """Persist the uploads as audit evidence, record the job, dispatch it."""
+    names = [os.path.basename(name) for name, _ in payloads]
+    if not names or any(not name for name in names) or len(set(names)) != len(names):
+        raise FileReadError("Each uploaded file needs a distinct filename; no files were imported.")
+    if worker_mode() == "invoke" and not os.environ.get("WORKER_SECRET"):
+        raise FileReadError("The import worker is not configured. Contact platform support.")
     job_id = uuid.uuid4().hex[:12]
     prefix = f"imports/job-{job_id}"
     for fname, data in payloads:
@@ -98,19 +105,25 @@ def _dispatch_http(job_id: str):
 
     base = os.environ.get("IMPORT_WORKER_URL") or _self_url()
     secret = os.environ.get("WORKER_SECRET", "")
+    headers = {"x-worker-secret": secret}
+    bypass = os.environ.get("VERCEL_AUTOMATION_BYPASS_SECRET")
+    if bypass:
+        headers["x-vercel-protection-bypass"] = bypass
     try:
-        httpx.post(
-            f"{base}/import/run/{job_id}",
-            headers={"x-worker-secret": secret},
+        response = httpx.post(
+            f"{base.rstrip('/')}/api/import/run/{job_id}",
+            headers=headers,
             timeout=httpx.Timeout(5.0, connect=5.0),
         )
+        if response.status_code >= 400:
+            _fail(job_id, "The import worker could not be started. Contact platform support.")
     except httpx.HTTPError:
         # Expected: the worker keeps running server-side after we stop waiting.
         pass
 
 
 def _self_url() -> str:
-    host = os.environ.get("VERCEL_PROJECT_PRODUCTION_URL") or os.environ.get("VERCEL_URL")
+    host = os.environ.get("VERCEL_URL") or os.environ.get("VERCEL_PROJECT_PRODUCTION_URL")
     if host:
         return f"https://{host}"
     return os.environ.get("APP_BASE_URL", "http://127.0.0.1:8080")
@@ -124,16 +137,25 @@ def _run_in_app(app, job_id: str):
 def run_job(job_id: str):
     """Execute a queued job. Safe to call twice: the status check makes the
     second caller a no-op, so a retried dispatch cannot double-import."""
-    job = db.session.get(ImportJob, job_id)
-    if job is None or job.status != "queued":
-        return
-
-    if not _RUN_LOCK.acquire(timeout=600):
-        _touch(job, status="failed",
-               error="Another import is still running. Try again in a few minutes.")
+    if not _RUN_LOCK.acquire(timeout=60):
+        db.session.execute(update(ImportJob).where(
+            ImportJob.id == job_id, ImportJob.status == "queued"
+        ).values(status="failed", error="Another import is still running. Retry this upload shortly.",
+                 updated_at=datetime.utcnow()))
+        db.session.commit()
         return
     try:
-        _touch(job, status="running")
+        # Compare-and-set prevents a duplicate serverless invocation claiming
+        # the same job. Progress uses another session, never the care transaction.
+        claimed = db.session.execute(update(ImportJob).where(
+            ImportJob.id == job_id, ImportJob.status == "queued"
+        ).values(status="running", updated_at=datetime.utcnow()))
+        db.session.commit()
+        if claimed.rowcount != 1:
+            return
+        job = db.session.get(ImportJob, job_id)
+        # Serialize replacement imports for one facility across processes.
+        db.session.execute(select(Facility).where(Facility.id == job.facility_id).with_for_update())
         _process(job)
         _touch(job, status="done")
     except AnalyzerError as e:
@@ -190,7 +212,7 @@ def _process(job: ImportJob):
     for state in files:
         def progress(stage, state=state):
             state["stage"] = stage
-            _touch(job, files_json=json.dumps(files))
+            _progress(job.id, files)
 
         progress("reading file")
         data = storage.get(f"{job.storage_prefix}/{os.path.basename(state['filename'])}")
@@ -206,7 +228,7 @@ def _process(job: ImportJob):
             f"{outcome.care_episodes_imported} care episodes"
             + (f", {len(outcome.row_errors)} rows skipped" if outcome.row_errors else "")
         )
-        _touch(job, files_json=json.dumps(files))
+        _progress(job.id, files)
 
     receipt.residents_imported = sum(o.residents_imported for o in outcomes)
     receipt.residents_skipped = 0
@@ -228,8 +250,17 @@ def _process(job: ImportJob):
     receipt.source_path = job.storage_prefix
     receipt.mapping_ids = ",".join(str(o.mapping_id) for o in outcomes if o.mapping_id)
     receipt.summary_json = json.dumps(_summarize(outcomes))
-    db.session.commit()
     job.receipt_id = receipt.id
+    job.files_json = json.dumps(files)
+    # run_job commits receipt, care rows and done status together.
+
+
+def _progress(job_id, files):
+    # A separate connection keeps status visible without committing care rows.
+    with Session(db.engine) as progress_session:
+        progress_session.execute(update(ImportJob).where(ImportJob.id == job_id).values(
+            files_json=json.dumps(files), updated_at=datetime.utcnow()))
+        progress_session.commit()
 
 
 def _fail(job_id: str, message: str):
@@ -238,8 +269,8 @@ def _fail(job_id: str, message: str):
         return
     files = json.loads(job.files_json)
     for f in files:
-        if f["stage"] not in ("done", "waiting"):
-            f["stage"] = "failed"
+        if f["stage"] != "waiting":
+            f["stage"] = "rolled back"
     _touch(job, status="failed", error=message, files_json=json.dumps(files))
 
 
@@ -253,6 +284,7 @@ def _summarize(outcomes) -> list[dict]:
             "mapping_reused": o.mapping_reused,
             "ai_usage": o.ai_usage,
             "spec": o.spec,
+            "parsers": o.parsers,
             "warnings": o.warnings,
             "row_errors": o.row_errors,
             "results": [

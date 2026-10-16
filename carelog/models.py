@@ -139,6 +139,9 @@ class ResidentDay(db.Model):
     exclusion_reason = db.Column(db.Text)
     import_receipt_id = db.Column(db.Integer, db.ForeignKey("import_receipts.id"))
     source_row = db.Column(db.Integer)
+    source_file = db.Column(db.Text)
+    source_sheet = db.Column(db.Text)
+    source_page = db.Column(db.Integer)
 
 
 class CareEpisode(db.Model):
@@ -163,6 +166,9 @@ class CareEpisode(db.Model):
     minutes = db.Column(db.Integer, nullable=False, default=0)
     import_receipt_id = db.Column(db.Integer, db.ForeignKey("import_receipts.id"))
     source_row = db.Column(db.Integer)
+    source_file = db.Column(db.Text)
+    source_sheet = db.Column(db.Text)
+    source_page = db.Column(db.Integer)
 
 
 class Staff(db.Model):
@@ -211,6 +217,9 @@ class Shift(db.Model):
     # Audit lineage: which import produced this row, and where it came from.
     import_receipt_id = db.Column(db.Integer, db.ForeignKey("import_receipts.id"))
     source_row = db.Column(db.Integer)
+    source_file = db.Column(db.Text)
+    source_sheet = db.Column(db.Text)
+    source_page = db.Column(db.Integer)
 
 
 class FormatMapping(db.Model):

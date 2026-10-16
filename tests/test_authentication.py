@@ -1,5 +1,3 @@
-import re
-
 import pyotp
 import pytest
 from cryptography.fernet import Fernet
@@ -24,7 +22,7 @@ def auth_app(monkeypatch):
 
     from carelog.app import create_app
 
-    app = create_app()
+    app = create_app({"TESTING": True})
     app.config.update(TESTING=True, WTF_CSRF_ENABLED=True)
     with app.app_context():
         db.create_all()
@@ -65,17 +63,29 @@ def auth_app(monkeypatch):
 
 
 def csrf_token(response) -> str:
-    match = re.search(rb'name="csrf_token" value="([^"]+)"', response.data)
-    assert match, response.data[:500]
-    return match.group(1).decode("utf-8")
+    assert response.is_json
+    return response.json["csrf_token"]
+
+
+def test_expired_form_uses_the_recovery_page(auth_app):
+    app, _ = auth_app
+    client = app.test_client()
+    response = client.post("/api/login", data={"email": "user@example.com"})
+    assert response.status_code == 400
+    assert response.json == {"error": "invalid or expired request token"}
+
+    machine_response = client.post("/api/login", json={"email": "user@example.com"})
+    assert machine_response.status_code == 400
+    assert machine_response.is_json
+    assert machine_response.json == {"error": "invalid or expired request token"}
 
 
 def password_step(
     client, email="user@example.com", password="Password123!", next_path=None,
     remember_email=False,
 ):
-    page = client.get("/login")
-    path = "/login" + (f"?next={next_path}" if next_path else "")
+    page = client.get("/api/login")
+    path = "/api/login" + (f"?next={next_path}" if next_path else "")
     data = {"csrf_token": csrf_token(page), "email": email, "password": password}
     if remember_email:
         data["remember_email"] = "on"
@@ -101,27 +111,25 @@ def test_mandatory_enrollment_stages_session_and_hashes_recovery_codes(auth_app)
     app, ids = auth_app
     client = app.test_client()
 
-    response = password_step(client, next_path="/dashboard")
-    assert response.status_code == 302
-    assert response.headers["Location"].endswith("/mfa/setup")
+    response = password_step(client, next_path="/api/dashboard")
+    assert response.status_code == 200
+    assert response.json["navigate"].endswith("/mfa/setup")
     with client.session_transaction() as state:
         assert "user_id" not in state
         assert state["preauth_user_id"] == ids["user"]
-        assert state["preauth_next"] == "/dashboard"
+        assert state["preauth_next"] == "/api/dashboard"
 
-    setup = client.get("/mfa/setup")
+    setup = client.get("/api/mfa/setup")
     assert setup.status_code == 200
-    assert b'href="otpauth://totp/CareMin:' in setup.data
-    assert b"play.google.com/store/apps/details?id=com.google.android.apps.authenticator2" in setup.data
-    assert b"apps.apple.com/au/app/google-authenticator/id388497605" in setup.data
-    assert b'referrerpolicy="no-referrer"' in setup.data
+    assert setup.json["data"]["qr_data_uri"].startswith("data:image/")
+    assert setup.json["data"]["secret"]
     with app.app_context():
         user = db.session.get(User, ids["user"])
         secret = auth._decrypt_secret(user)
         assert secret not in user.mfa_secret_encrypted
 
     enrolled = client.post(
-        "/mfa/setup",
+        "/api/mfa/setup",
         data={
             "csrf_token": csrf_token(setup),
             "code": pyotp.TOTP(secret).now(),
@@ -129,18 +137,18 @@ def test_mandatory_enrollment_stages_session_and_hashes_recovery_codes(auth_app)
         },
     )
     assert enrolled.status_code == 200, enrolled.data.decode("utf-8")
-    codes = re.findall(rb"[0-9A-F]{5}(?:-[0-9A-F]{5}){3}", enrolled.data)
+    codes = enrolled.json["data"]["recovery_codes"]
     assert len(codes) == 10
     with app.app_context():
         rows = MfaRecoveryCode.query.filter_by(user_id=ids["user"]).all()
         assert len(rows) == 10
-        assert all(codes[0].decode().replace("-", "") not in row.code_hash for row in rows)
+        assert all(codes[0].replace("-", "") not in row.code_hash for row in rows)
 
     completed = client.post(
-        "/mfa/complete", data={"csrf_token": csrf_token(enrolled)}
+        "/api/mfa/complete", data={"csrf_token": csrf_token(enrolled)}
     )
-    assert completed.status_code == 302
-    assert completed.headers["Location"] == "/dashboard"
+    assert completed.status_code == 200
+    assert completed.json["navigate"] == "/dashboard"
     assert auth.TRUSTED_DEVICE_COOKIE in completed.headers.get("Set-Cookie", "")
     with client.session_transaction() as state:
         assert state["user_id"] == ids["user"]
@@ -151,19 +159,19 @@ def test_forced_password_change_never_grants_workspace_access(auth_app):
     app, ids = auth_app
     client = app.test_client()
     response = password_step(client, "new@example.com", "Temporary123!")
-    assert response.headers["Location"].endswith("/account/password")
-    assert client.get("/dashboard").headers["Location"].startswith("/login")
+    assert response.json["navigate"].endswith("/account/password")
+    assert client.get("/api/dashboard").json["navigate"].startswith("/login")
 
-    page = client.get("/account/password")
+    page = client.get("/api/account/password")
     changed = client.post(
-        "/account/password",
+        "/api/account/password",
         data={
             "csrf_token": csrf_token(page),
             "new_password": "A-New-Password-123!",
             "confirm_password": "A-New-Password-123!",
         },
     )
-    assert changed.headers["Location"].endswith("/mfa/setup")
+    assert changed.json["navigate"].endswith("/mfa/setup")
     with client.session_transaction() as state:
         assert "user_id" not in state
         assert state["preauth_auth_version"] == 2
@@ -178,17 +186,17 @@ def test_totp_login_can_trust_device_but_still_requires_password(auth_app):
     secret = enable_mfa(app, ids["user"])
     client = app.test_client()
 
-    assert password_step(client).headers["Location"].endswith("/mfa/challenge")
-    challenge = client.get("/mfa/challenge")
+    assert password_step(client).json["navigate"].endswith("/mfa/challenge")
+    challenge = client.get("/api/mfa/challenge")
     verified = client.post(
-        "/mfa/challenge",
+        "/api/mfa/challenge",
         data={
             "csrf_token": csrf_token(challenge),
             "code": pyotp.TOTP(secret).now(),
             "remember_device": "on",
         },
     )
-    assert verified.headers["Location"] == "/"
+    assert verified.json["navigate"] == "/"
     with app.app_context():
         assert TrustedDevice.query.filter_by(user_id=ids["user"], revoked_at=None).count() == 1
 
@@ -197,7 +205,7 @@ def test_totp_login_can_trust_device_but_still_requires_password(auth_app):
     with client.session_transaction() as state:
         state.clear()
     trusted_login = password_step(client)
-    assert trusted_login.headers["Location"] == "/"
+    assert trusted_login.json["navigate"] == "/"
     with client.session_transaction() as state:
         assert state["user_id"] == ids["user"]
 
@@ -212,19 +220,19 @@ def test_recovery_code_is_single_use(auth_app):
 
     client = app.test_client()
     password_step(client)
-    page = client.get("/mfa/recovery")
+    page = client.get("/api/mfa/recovery")
     accepted = client.post(
-        "/mfa/recovery",
+        "/api/mfa/recovery",
         data={"csrf_token": csrf_token(page), "recovery_code": recovery_code},
     )
-    assert accepted.headers["Location"] == "/"
+    assert accepted.json["navigate"] == "/"
 
     with client.session_transaction() as state:
         state.clear()
     password_step(client)
-    page = client.get("/mfa/recovery")
+    page = client.get("/api/mfa/recovery")
     rejected = client.post(
-        "/mfa/recovery",
+        "/api/mfa/recovery",
         data={"csrf_token": csrf_token(page), "recovery_code": recovery_code},
     )
     assert rejected.status_code == 400
@@ -235,18 +243,18 @@ def test_csrf_logout_method_and_legacy_session_are_rejected(auth_app):
     app, ids = auth_app
     client = app.test_client()
     assert client.post(
-        "/login", data={"email": "user@example.com", "password": "Password123!"}
+        "/api/login", data={"email": "user@example.com", "password": "Password123!"}
     ).status_code == 400
-    assert client.get("/logout").status_code == 405
+    assert client.get("/api/logout").status_code == 405
 
     with client.session_transaction() as state:
         state.clear()
         state["user_id"] = ids["user"]
-    response = client.get("/dashboard")
-    assert response.status_code == 302
-    assert response.headers["Location"].startswith("/login")
+    response = client.get("/api/dashboard")
+    assert response.status_code == 401
+    assert response.json["navigate"].startswith("/login")
 
-    login_page = client.get("/login")
+    login_page = client.get("/api/login")
     assert login_page.headers["X-Content-Type-Options"] == "nosniff"
     assert login_page.headers["X-Frame-Options"] == "DENY"
     assert "frame-ancestors 'none'" in login_page.headers["Content-Security-Policy"]
@@ -255,7 +263,7 @@ def test_csrf_logout_method_and_legacy_session_are_rejected(auth_app):
         state.clear()
         state["user_id"] = ids["user"]
         state["auth_version"] = 1
-    client.get("/mfa/challenge")
+    client.get("/api/mfa/challenge")
     with client.session_transaction() as state:
         assert state["user_id"] == ids["user"]
 
@@ -263,16 +271,16 @@ def test_csrf_logout_method_and_legacy_session_are_rejected(auth_app):
 def test_password_failures_are_database_throttled(auth_app):
     app, _ = auth_app
     client = app.test_client()
-    page = client.get("/login")
+    page = client.get("/api/login")
     token = csrf_token(page)
     for _ in range(5):
         response = client.post(
-            "/login",
+            "/api/login",
             data={"csrf_token": token, "email": "user@example.com", "password": "wrong"},
         )
         assert response.status_code == 401
     blocked = client.post(
-        "/login",
+        "/api/login",
         data={"csrf_token": token, "email": "user@example.com", "password": "wrong"},
     )
     assert blocked.status_code == 429
@@ -289,13 +297,13 @@ def test_admin_mfa_reset_is_tenant_scoped_and_revokes_target_sessions(auth_app):
         state["user_id"] = ids["user"]
         state["auth_version"] = 1
 
-    page = client.get("/admin/users")
+    page = client.get("/api/admin/users")
     token = csrf_token(page)
     reset = client.post(
-        f"/admin/users/{ids['forced']}/update",
+        f"/api/admin/users/{ids['forced']}/update",
         data={"csrf_token": token, "action": "reset_mfa"},
     )
-    assert reset.status_code == 302
+    assert reset.status_code == 200
     with app.app_context():
         target = db.session.get(User, ids["forced"])
         assert not target.mfa_enabled
@@ -303,7 +311,7 @@ def test_admin_mfa_reset_is_tenant_scoped_and_revokes_target_sessions(auth_app):
         assert target.auth_version == 2
 
     foreign = client.post(
-        f"/admin/users/{ids['outsider']}/update",
+        f"/api/admin/users/{ids['outsider']}/update",
         data={"csrf_token": token, "action": "reset_mfa"},
     )
     assert foreign.status_code == 404
@@ -322,12 +330,12 @@ def test_remembered_email_is_encrypted_opt_in_and_removable(auth_app):
 
     with client.session_transaction() as state:
         state.clear()
-    remembered = client.get("/login")
-    assert b'value="user@example.com"' in remembered.data
-    assert b'name="remember_email" checked' in remembered.data
+    remembered = client.get("/api/login")
+    assert remembered.json["data"]["email"] == "user@example.com"
+    assert remembered.json["data"]["remember_email"] is True
 
     cleared = client.post(
-        "/login",
+        "/api/login",
         data={
             "csrf_token": csrf_token(remembered),
             "email": "user@example.com",
@@ -337,26 +345,37 @@ def test_remembered_email_is_encrypted_opt_in_and_removable(auth_app):
     assert f"{auth.REMEMBERED_EMAIL_COOKIE}=;" in cleared.headers.get("Set-Cookie", "")
     with client.session_transaction() as state:
         state.clear()
-    assert b'value="user@example.com"' not in client.get("/login").data
+    assert client.get("/api/login").json["data"]["email"] == ""
 
 
 def test_forgot_password_privacy_and_https_copy_are_public(auth_app):
     app, _ = auth_app
     client = app.test_client()
 
-    forgot = client.get("/forgot-password")
+    forgot = client.get("/api/forgot-password")
     assert forgot.status_code == 200
-    assert b"CareMin does not send password-reset emails yet" in forgot.data
-    assert b"organisation administrator" in forgot.data
+    assert forgot.json["view"] == "forgot_password"
+    assert b"help@caremin.care" in forgot.data
 
-    privacy = client.get("/privacy")
+    privacy = client.get("/api/privacy")
     assert privacy.status_code == 200
-    assert b"Privacy information" in privacy.data
-    assert b"remembered-email cookie" in privacy.data
+    assert privacy.json["view"] == "privacy"
+    assert b"privacy@caremin.care" in privacy.data
+    assert b"security@caremin.care" in privacy.data
 
-    secure_login = client.get("/login", base_url="https://caremin.test")
-    assert b"Your connection is encrypted" in secure_login.data
-    assert b"Review our privacy information" in secure_login.data
+    contact = client.get("/api/contact")
+    assert contact.status_code == 200
+    for address in (
+        b"support@caremin.care", b"help@caremin.care",
+        b"security@caremin.care", b"privacy@caremin.care",
+        b"billing@caremin.care", b"compliance@caremin.care",
+        b"demo@caremin.care", b"admin@caremin.care",
+    ):
+        assert address in contact.data
+
+    secure_login = client.get("/api/login", base_url="https://caremin.test")
+    assert secure_login.json["context"]["connection_encrypted"] is True
+    assert b"help@caremin.care" in secure_login.data
 
 
 def test_admin_can_issue_confirmed_temporary_password(auth_app):
@@ -366,9 +385,9 @@ def test_admin_can_issue_confirmed_temporary_password(auth_app):
         state["user_id"] = ids["user"]
         state["auth_version"] = 1
 
-    page = client.get("/admin/users")
+    page = client.get("/api/admin/users")
     response = client.post(
-        f"/admin/users/{ids['forced']}/update",
+        f"/api/admin/users/{ids['forced']}/update",
         data={
             "csrf_token": csrf_token(page),
             "action": "reset_password",
@@ -376,9 +395,34 @@ def test_admin_can_issue_confirmed_temporary_password(auth_app):
             "confirm_password": "Replacement123!",
         },
     )
-    assert response.status_code == 302
+    assert response.status_code == 200
     with app.app_context():
         user = db.session.get(User, ids["forced"])
         assert auth.check_password_hash(user.password_hash, "Replacement123!")
         assert user.must_change_password
         assert user.auth_version == 2
+
+
+def test_https_proxy_accepts_only_configured_frontend_and_still_requires_token(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "sqlite://")
+    monkeypatch.setenv("AUTO_INIT_DB", "1")
+    monkeypatch.setenv("SECRET_KEY", "proxy-csrf-test")
+    monkeypatch.setenv("PUBLIC_APP_ORIGINS", "https://app.example")
+    from carelog.app import create_app
+    app = create_app({"TESTING": True, "SESSION_COOKIE_SECURE": True})
+    client = app.test_client()
+    base = "https://backend.example"
+    token = csrf_token(client.get("/api/login", base_url=base))
+    headers = {"Origin": "https://app.example", "Referer": "https://app.example/login"}
+    # Invalid credentials return 401, demonstrating CSRF accepted the request.
+    response = client.post("/api/login", base_url=base, headers=headers, data={"csrf_token": token})
+    assert response.status_code == 401
+    assert response.json["view"] == "login"
+    assert client.post("/api/login", base_url=base, headers=headers).status_code == 400
+    for bad in ("https://evil.example", "https://app.example.evil.test", "null"):
+        assert client.post("/api/login", base_url=base, data={"csrf_token": token}, headers={"Origin": bad, "Referer": bad}).status_code == 400
+    assert client.post("/api/login", base_url=base, data={"csrf_token": token}).status_code == 400
+    assert client.post("/api/import/run/missing", base_url=base).status_code == 403
+    with app.app_context():
+        db.session.remove()
+        db.drop_all()

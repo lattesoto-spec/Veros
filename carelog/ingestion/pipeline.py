@@ -52,6 +52,7 @@ class ImportOutcome:
     ai_usage: dict | None = None
     mapping_id: int | None = None
     receipt: object = None
+    parsers: list[str] = field(default_factory=list)
 
 
 def get_or_create_mapping(sheets, filename: str, progress=None,
@@ -66,17 +67,26 @@ def get_or_create_mapping(sheets, filename: str, progress=None,
     stored = FormatMapping.query.filter_by(
         fingerprint=fp, organization_id=organization_id
     ).first()
+    built_in = matching_spec(sheets)
     if stored:
         try:
             stored_spec = json.loads(stored.spec_json)
         except (TypeError, json.JSONDecodeError):
             stored_spec = {}
         if stored_spec.get("schema_version") == MAPPING_SPEC_VERSION:
-            return stored, True, None
+            # Built-in presets can gain stricter validation without making
+            # every customer's learned format call the analyzer again.
+            is_stale_preset = (
+                built_in is not None
+                and stored_spec.get("reasoning") == "exact built-in evidence layout"
+                and stored_spec.get("targets") != built_in["targets"]
+            )
+            if not is_stale_preset:
+                return stored, True, None
         if progress:
             progress("refreshing stored format")
 
-    spec = matching_spec(sheets)
+    spec = built_in
     if spec:
         usage = {"calls": 0, "input_tokens": 0, "output_tokens": 0,
                  "method": "built-in exact mapping"}
@@ -124,6 +134,7 @@ def ingest_file(facility, filename: str, data: bytes, receipt=None, progress=Non
     outcome = ImportOutcome(
         filename=filename, fingerprint=mapping.fingerprint, mapping_reused=reused,
         spec=spec, results=results, ai_usage=usage,
+        parsers=sorted({s.parser for s in sheets}),
     )
     outcome.mapping_id = mapping.id
     outcome.receipt = receipt
@@ -287,6 +298,9 @@ def _import_shifts(facility, records: list[dict], outcome: ImportOutcome,
                 rec.get("labour_cost"), (int, float)) else None),
             import_receipt_id=getattr(outcome.receipt, "id", None),
             source_row=rec.get("_source_row"),
+            source_file=rec.get("_source_file"),
+            source_sheet=rec.get("_source_sheet"),
+            source_page=rec.get("_source_page"),
         ))
         outcome.shifts_imported += 1
         if outcome.first_shift_date is None or d < outcome.first_shift_date:
@@ -332,6 +346,9 @@ def _import_resident_days(facility, records: list[dict], outcome: ImportOutcome)
             exclusion_reason=str(rec.get("exclusion_reason") or "").strip() or None,
             import_receipt_id=getattr(outcome.receipt, "id", None),
             source_row=rec.get("_source_row"),
+            source_file=rec.get("_source_file"),
+            source_sheet=rec.get("_source_sheet"),
+            source_page=rec.get("_source_page"),
         )
         if row:
             for key, value in values.items():
@@ -375,5 +392,8 @@ def _import_care_episodes(facility, records: list[dict], outcome: ImportOutcome)
             minutes=max(int(minutes or 0), 0),
             import_receipt_id=getattr(outcome.receipt, "id", None),
             source_row=rec.get("_source_row"),
+            source_file=rec.get("_source_file"),
+            source_sheet=rec.get("_source_sheet"),
+            source_page=rec.get("_source_page"),
         ))
         outcome.care_episodes_imported += 1

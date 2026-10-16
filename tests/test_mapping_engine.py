@@ -1,7 +1,7 @@
 """Offline regression test for the mapping engine (no API key needed).
 
 Runs hand-written mapping specs — the same language the AI analyzer emits —
-over the 5 heterogeneous fixtures and asserts all of them normalize to the
+over the 7 heterogeneous fixtures and asserts all of them normalize to the
 same direct-care and RN minutes. This pins down the deterministic engine;
 test_ingestion.py additionally exercises the AI spec generation.
 
@@ -101,6 +101,30 @@ SPECS = {
             },
         },
     }]},
+    "format6_api_extract.json": {"targets": [{
+        "kind": "shifts", "sheet": "shifts", "fields": {
+            "staff_id": {"column": "employee.code"},
+            "staff_name": {"column": "employee.displayName"},
+            "role": {"column": "classification.title", "normalize": "role"},
+            "date": {"column": "startsAt", "parse": "date"},
+            "start_time": {"column": "startsAt", "parse": "time"},
+            "end_time": {"column": "endsAt", "parse": "time"},
+            "is_direct_care": {"column": "serviceType", "value_map": {"direct_care": True, "administration": False}},
+        },
+    }]},
+    "format7_dbdump.sql": {"targets": [{
+        "kind": "shifts", "sheet": "roster_entries",
+        "row_filter": {"column": "entry_type", "include_values": ["care", "admin"]},
+        "fields": {
+            "staff_id": {"column": "emp_ref"},
+            "staff_name": {"column": "emp_name"},
+            "role": {"column": "grade", "normalize": "role"},
+            "date": {"column": "duty_date", "parse": "date"},
+            "start_time": {"column": "commenced", "parse": "time"},
+            "end_time": {"column": "ceased", "parse": "time"},
+            "is_direct_care": {"column": "entry_type", "value_map": {"care": True, "admin": False}},
+        },
+    }]},
     "residents_clients.xlsx": {"targets": [{
         "kind": "residents",
         "sheet": "Clients",
@@ -127,6 +151,9 @@ def shift_minutes(rec) -> int:
 
 def main():
     fixture_dir = os.path.join(HERE, "sample_data/test_data")
+    if not all(os.path.exists(os.path.join(fixture_dir, name)) for name in SPECS):
+        import runpy
+        runpy.run_path(os.path.join(fixture_dir, "make_fixtures.py"), run_name="__main__")
     totals = {}
     fingerprints = set()
 
@@ -164,7 +191,7 @@ def main():
     unique = {tuple(sorted(t.items())) for t in totals.values()}
     assert len(unique) == 1, f"formats disagree: {totals}"
     grand = sum(dm for t in list(totals.values())[:1] for dm, _ in t.values())
-    print(f"\nPASS — all 5 formats produced identical totals ({grand} direct-care minutes over 3 days).")
+    print(f"\nPASS — all 7 formats produced identical totals ({grand} direct-care minutes over 3 days).")
 
 
 if __name__ == "__main__":

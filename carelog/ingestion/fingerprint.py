@@ -17,7 +17,7 @@ def normalize_header(h: str) -> str:
 
 
 def sheet_signature(sheet: Sheet) -> str:
-    return "|".join(normalize_header(h) for h in sheet.headers)
+    return sheet.parser + "|" + "|".join(normalize_header(h) for h in sheet.headers)
 
 
 def fingerprint(sheets: list[Sheet]) -> str:

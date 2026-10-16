@@ -48,7 +48,7 @@ ROSTER = [
 ]
 
 
-def build_demo_organization(*, name="Demo", admin_email="demo@caremin.app",
+def build_demo_organization(*, name="Demo", admin_email="demo@caremin.care",
                             password="", days=60, residents=42) -> dict:
     rng = random.Random(20260803)  # fixed seed: the demo looks the same every time
 

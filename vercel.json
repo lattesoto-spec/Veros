@@ -1,12 +1,12 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "regions": [
-    "syd1"
-  ],
+  "framework": "flask",
+  "regions": ["syd1"],
+  "buildCommand": "python build.py",
   "functions": {
     "app.py": {
-      "maxDuration": 300
+      "maxDuration": 300,
+      "excludeFiles": "{tests/**,docs/**,sample_data/demo_video/**,sample_data/test_data/**}"
     }
-  },
-  "buildCommand": "python build.py"
+  }
 }

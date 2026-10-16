@@ -1,6 +1,5 @@
 import importlib
 from datetime import date, time
-from pathlib import Path
 
 import pytest
 
@@ -14,7 +13,7 @@ def web_app(monkeypatch):
     monkeypatch.setenv("AUTO_INIT_DB", "1")
     monkeypatch.setenv("SECRET_KEY", "ui-boundary-test")
     module = importlib.import_module("carelog.app")
-    app = module.create_app()
+    app = module.create_app({"TESTING": True})
     app.config["TESTING"] = True
     # This legacy boundary suite posts directly. Dedicated authentication tests
     # exercise the production CSRF middleware with real form tokens.
@@ -61,59 +60,31 @@ def sign_in_as(client, user_id):
         session["auth_version"] = 1
 
 
-def test_login_is_branded_accessible_and_keeps_context_on_error(web_app):
-    app, _ = web_app
+def test_api_errors_and_login_are_json(web_app):
+    app, ids = web_app
     client = app.test_client()
-
-    page = client.get("/login")
-    assert page.status_code == 200
-    assert b"Care-minute reporting in one controlled workspace" in page.data
-    assert b"Work email" in page.data
-    assert b'aria-controls="login-password"' in page.data
-    assert b">Sign in</button>" in page.data
-    assert b"Sign in securely" not in page.data
-    assert b'/brand/full.png' in page.data
-    assert b'/brand/favicon.png' in page.data
-
-    icon = client.get("/brand/favicon.png")
-    assert icon.status_code == 200
-    assert icon.content_type == "image/png"
-
-    failed = client.post(
-        "/login", data={"email": "admin@example.com", "password": "wrong"}
-    )
+    page = client.get("/api/login")
+    assert page.json["view"] == "login"
+    failed = client.post("/api/login", data={"email": "admin@example.com", "password": "wrong"})
     assert failed.status_code == 401
-    assert b'value="admin@example.com"' in failed.data
-    assert b'role="alert"' in failed.data
-
-
-def test_customer_facing_templates_avoid_rejected_copy():
-    templates = Path(__file__).parents[1] / "carelog" / "templates"
-    copy = "\n".join(path.read_text() for path in templates.glob("*.html"))
-    for rejected in (
-        "—", "–", "…", "What if", "Every number has evidence",
-        "Sign in securely", "Care-minute evidence you can stand behind",
-    ):
-        assert rejected not in copy
-
-
-def test_recovery_codes_use_a_non_clipping_layout():
-    stylesheet = (Path(__file__).parents[1] / "public" / "style.css").read_text()
-    assert "grid-template-columns: minmax(0, 1fr);" in stylesheet
-    assert "overflow-wrap: anywhere;" in stylesheet
+    assert failed.json["data"]["email"] == "admin@example.com"
+    sign_in_as(client, ids["admin"])
+    missing = client.get("/api/not-a-page")
+    assert missing.status_code == 404
+    assert missing.is_json
 
 
 def test_login_rejects_external_redirects(web_app):
     app, _ = web_app
     client = app.test_client()
     response = client.post(
-        "/login?next=https://example.net/steal",
+        "/api/login?next=https://example.net/steal",
         data={"email": "admin@example.com", "password": "Password123!"},
     )
-    assert response.status_code == 302
-    assert response.headers["Location"].endswith("/mfa/setup")
+    assert response.status_code == 200
+    assert response.json["navigate"].endswith("/mfa/setup")
     with client.session_transaction() as session:
-        assert session["preauth_next"] == "/"
+        assert session["preauth_next"] == "/api/"
 
 
 def test_platform_owner_defaults_to_platform_only_ui(web_app):
@@ -121,14 +92,14 @@ def test_platform_owner_defaults_to_platform_only_ui(web_app):
     client = app.test_client()
     sign_in_as(client, ids["owner"])
 
-    for path in ("/", "/dashboard", "/compliance", "/settings"):
+    for path in ("/api/", "/api/dashboard", "/api/compliance", "/api/settings"):
         response = client.get(path)
-        assert response.status_code == 302
-        assert response.headers["Location"].endswith("/platform")
+        assert response.status_code == 200
+        assert response.json["navigate"].endswith("/platform")
 
     for path in (
-        "/platform", f"/platform/organizations/{ids['customer']}",
-        "/platform/activity", "/platform/system",
+        "/api/platform", f"/api/platform/organizations/{ids['customer']}",
+        "/api/platform/activity", "/api/platform/system",
     ):
         response = client.get(path)
         assert response.status_code == 200
@@ -141,14 +112,14 @@ def test_support_workspace_requires_explicit_account_entry(web_app):
     client = app.test_client()
     sign_in_as(client, ids["owner"])
 
-    entered = client.post("/platform/act", data={"organization_id": ids["customer"]})
-    assert entered.status_code == 302
-    workspace = client.get("/import")
+    entered = client.post("/api/platform/act", data={"organization_id": ids["customer"]})
+    assert entered.status_code == 200
+    workspace = client.get("/api/import")
     assert workspace.status_code == 200
-    assert b"Back to platform" in workspace.data
+    assert workspace.json["context"]["acting_org_id"] == ids["customer"]
 
-    client.post("/platform/act/stop")
-    assert client.get("/import").headers["Location"].endswith("/platform")
+    client.post("/api/platform/act/stop")
+    assert client.get("/api/import").json["navigate"].endswith("/platform")
 
 
 def test_customer_ui_hides_platform_internals_and_cross_tenant_controls(web_app):
@@ -160,29 +131,29 @@ def test_customer_ui_hides_platform_internals_and_cross_tenant_controls(web_app)
         b"anthropic", b"claude", b"ai connection", b"learned parser",
         b"mapping spec", b"fingerprint",
     )
-    for path in ("/settings", "/import", "/audit"):
+    for path in ("/api/settings", "/api/import", "/api/audit"):
         response = client.get(path)
         assert response.status_code == 200
         for phrase in forbidden_copy:
             assert phrase not in response.data.lower()
 
-    assert client.get("/platform").status_code == 404
+    assert client.get("/api/platform").status_code == 404
     assert client.post(
-        f"/platform/organizations/{ids['other']}/update",
+        f"/api/platform/organizations/{ids['other']}/update",
         data={"name": "Changed by customer", "timezone": "Australia/Sydney"},
     ).status_code == 404
-    assert client.get("/admin/security-log").status_code == 404
+    assert client.get("/api/admin/security-log").status_code == 404
     assert client.post(
-        f"/admin/users/{ids['owner']}/update", data={"action": "deactivate"}
+        f"/api/admin/users/{ids['owner']}/update", data={"action": "deactivate"}
     ).status_code == 404
     assert client.post(
-        f"/admin/users/{ids['outsider']}/update", data={"action": "deactivate"}
+        f"/api/admin/users/{ids['outsider']}/update", data={"action": "deactivate"}
     ).status_code == 404
     assert client.post(
-        f"/facilities/{ids['other_facility']}/update", data={"name": "Changed"}
+        f"/api/facilities/{ids['other_facility']}/update", data={"name": "Changed"}
     ).status_code == 404
 
-    users_page = client.get("/admin/users")
+    users_page = client.get("/api/admin/users")
     assert users_page.status_code == 200
     assert b"owner@example.com" not in users_page.data
 
@@ -192,19 +163,13 @@ def test_import_classifies_evidence_without_asking_the_user(web_app):
     client = app.test_client()
     sign_in_as(client, ids["admin"])
 
-    page = client.get("/import")
+    page = client.get("/api/import")
     assert page.status_code == 200
-    assert b'name="evidence_type"' not in page.data
-    assert b"CareMin classifies shift evidence automatically" in page.data
-    assert b"platform edge" not in page.data
-    assert b"Automatic checks" in page.data
+    assert page.json["view"] == "universal_import"
+    assert "evidence_type" not in page.json["data"]
+    assert client.get("/api/import/guide").json["view"] == "import_guide"
 
-    guide = client.get("/import/guide")
-    assert guide.status_code == 200
-    assert b"Evidence treatment" in guide.data
-    assert b"worked_staffing_july_2026.xlsx" in guide.data
-
-    sample = client.get("/samples/worked_staffing_july_2026.xlsx")
+    sample = client.get("/api/samples/worked_staffing_july_2026.xlsx")
     assert sample.status_code == 200
     assert sample.content_type.startswith("application/")
 
@@ -215,36 +180,22 @@ def test_redesigned_provider_workspace_routes_render_with_sparse_data(web_app):
     sign_in_as(client, ids["admin"])
 
     for path in (
-        "/dashboard", "/compliance", "/rn-coverage", "/scenarios",
-        "/reports", "/audit", "/eligibility", "/facility",
-        "/facilities", "/integrations", "/admin/users", "/settings",
-        "/import/guide",
+        "/api/dashboard", "/api/compliance", "/api/rn-coverage", "/api/scenarios",
+        "/api/reports", "/api/audit", "/api/eligibility", "/api/facility",
+        "/api/facilities", "/api/integrations", "/api/admin/users", "/api/settings",
+        "/api/import/guide",
     ):
         response = client.get(path)
         assert response.status_code == 200, path
 
-    dashboard = client.get("/dashboard")
-    assert b"Attention required" in dashboard.data
-    assert b"Care minutes" in dashboard.data
-    assert b"RN coverage" in dashboard.data
-    assert b"Reports" in dashboard.data
-    assert b"RN coverage has no actual-worked source" in dashboard.data
-
-    compliance = client.get("/compliance")
-    assert b"No occupied bed days are available" in compliance.data
-
-    coverage = client.get("/rn-coverage")
-    assert b"No actual-worked RN shift evidence is available" in coverage.data
-    assert b"Not available" in coverage.data
-    assert b'name="month"' in coverage.data
-    assert client.get("/rn-coverage?month=not-a-month").status_code == 200
-
-    reports = client.get("/reports")
-    assert b"Report register" in reports.data
-    assert b"Output qualification" in reports.data
-
-    facilities = client.get("/facilities")
-    assert b"On track" not in facilities.data
+    dashboard = client.get("/api/dashboard").json["data"]
+    assert dashboard["coverage_available"] is False
+    assert dashboard["tests"]["totals"]["bed_days"] == 0
+    coverage = client.get("/api/rn-coverage").json["data"]
+    assert coverage["available_days"] == 0
+    assert coverage["period_pct"] is None
+    assert client.get("/api/rn-coverage?month=not-a-month").status_code == 200
+    assert client.get("/api/facilities").json["data"]["summary"]
 
 
 def test_redesigned_reporting_routes_render_calculated_data(web_app):
@@ -284,10 +235,11 @@ def test_redesigned_reporting_routes_render_calculated_data(web_app):
 
     client = app.test_client()
     sign_in_as(client, ids["admin"])
-    for path in ("/dashboard", "/compliance", "/rn-coverage?month=2026-08", "/facilities"):
+    for path in ("/api/dashboard", "/api/compliance", "/api/rn-coverage?month=2026-08", "/api/facilities"):
         response = client.get(path)
         assert response.status_code == 200, path
 
-    assert b"All defined tests pass" in client.get("/compliance").data
-    assert b"100.0%" in client.get("/rn-coverage?month=2026-08").data
-    assert b"On track" in client.get("/facilities").data
+    assert client.get("/api/dashboard").json["data"]["tests"]["passed"] is True
+    assert client.get("/api/rn-coverage?month=2026-08").json["data"]["available_days"] == 2
+    summaries = client.get("/api/facilities").json["data"]["summary"]
+    assert next(iter(summaries.values()))["period_status"] is True

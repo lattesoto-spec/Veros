@@ -19,6 +19,7 @@ import os
 import secrets
 import time
 from datetime import datetime, timedelta
+from urllib.parse import urlsplit
 
 from flask import (
     Blueprint,
@@ -26,8 +27,6 @@ from flask import (
     current_app,
     flash,
     make_response,
-    redirect,
-    render_template,
     request,
     session,
     url_for,
@@ -38,6 +37,8 @@ import pyotp
 import qrcode
 import qrcode.image.svg
 from werkzeug.security import check_password_hash, generate_password_hash
+
+from carelog.api.responses import resource, navigate, form_data
 
 from carelog.models import (
     AuditLog,
@@ -106,9 +107,10 @@ ROLES: dict[str, dict] = {
 PUBLIC_ENDPOINTS = {
     "auth.login", "auth.logout", "auth.change_password", "auth.mfa_setup",
     "auth.mfa_challenge", "auth.mfa_recovery", "auth.mfa_complete",
-    "auth.forgot_password", "auth.privacy",
-    "stylesheet", "brand_asset", "static", "import_run", "healthz",
+    "auth.forgot_password", "auth.privacy", "auth.contact",
+    "api.session_info", "api.import_run", "healthz",
 }
+
 
 PREAUTH_LIFETIME = timedelta(minutes=10)
 TRUSTED_DEVICE_LIFETIME = timedelta(days=30)
@@ -321,7 +323,7 @@ def _decrypt_secret(user: User) -> str:
 
 def _safe_next(value: str | None) -> str:
     value = (value or "").strip()
-    return value if value.startswith("/") and not value.startswith("//") else url_for("index")
+    return value if value.startswith("/") and not value.startswith("//") else url_for("api.index")
 
 
 def _remembered_email_fernet() -> Fernet:
@@ -356,10 +358,10 @@ def _apply_remembered_email(response, email: str, remember: bool):
             httponly=True,
             secure=current_app.config["SESSION_COOKIE_SECURE"],
             samesite="Lax",
-            path="/login",
+            path="/api/login",
         )
     else:
-        response.delete_cookie(REMEMBERED_EMAIL_COOKIE, path="/login")
+        response.delete_cookie(REMEMBERED_EMAIL_COOKIE, path="/api/login")
     return response
 
 
@@ -585,7 +587,7 @@ def _finalize_login(user: User, method: str, remember_device: bool = False):
     session.permanent = True
     user.last_login_at = datetime.utcnow()
     record_auth("login", user, f"second_step={method}")
-    response = make_response(redirect(destination))
+    response = make_response(navigate(destination))
     if remember_device:
         _issue_trusted_device(response, user)
     db.session.commit()
@@ -594,38 +596,43 @@ def _finalize_login(user: User, method: str, remember_device: bool = False):
 
 # ------------------------------------------------------------------ routes
 
-bp = Blueprint("auth", __name__)
+bp = Blueprint("auth", __name__, url_prefix="/api")
 
 
 @bp.route("/forgot-password")
 def forgot_password():
-    return render_template("forgot_password.html")
+    return resource("forgot_password")
 
 
 @bp.route("/privacy")
 def privacy():
-    return render_template("privacy.html")
+    return resource("privacy")
+
+
+@bp.route("/contact")
+def contact():
+    return resource("contact")
 
 
 @bp.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "GET":
         if current_user():
-            return redirect(url_for("index"))
+            return navigate(url_for("api.index"))
         remembered = _remembered_email()
-        return render_template(
-            "login.html", email=remembered, remember_email=bool(remembered)
+        return resource(
+            "login", email=remembered, remember_email=bool(remembered)
         )
 
-    email = (request.form.get("email") or "").strip().lower()
-    password = request.form.get("password") or ""
-    remember_email = request.form.get("remember_email") == "on"
+    email = (form_data().get("email") or "").strip().lower()
+    password = form_data().get("password") or ""
+    remember_email = form_data().get("remember_email") == "on"
     buckets = _rate_buckets(email)
     if _blocked(buckets):
         record_auth("login_throttled", detail=f"email={email}")
         db.session.commit()
-        return render_template(
-            "login.html",
+        return resource(
+            "login",
             error="Too many sign-in attempts. Wait 15 minutes and try again.",
             email=email,
             remember_email=remember_email,
@@ -641,8 +648,8 @@ def login():
             ip_address=client_ip(),
         ))
         db.session.commit()
-        return render_template(
-            "login.html", error="Email or password is incorrect.", email=email,
+        return resource(
+            "login", error="Email or password is incorrect.", email=email,
             remember_email=remember_email,
         ), 401
 
@@ -654,19 +661,19 @@ def login():
     if user.must_change_password:
         flash("Please choose a new password.")
         return _apply_remembered_email(
-            redirect(url_for("auth.change_password")), email, remember_email
+            navigate(url_for("auth.change_password")), email, remember_email
         )
     if not user.mfa_enabled:
         _prepare_mfa_enrollment(user)
         return _apply_remembered_email(
-            redirect(url_for("auth.mfa_setup")), email, remember_email
+            navigate(url_for("auth.mfa_setup")), email, remember_email
         )
     if _trusted_device(user):
         return _apply_remembered_email(
             _finalize_login(user, "trusted_device"), email, remember_email
         )
     return _apply_remembered_email(
-        redirect(url_for("auth.mfa_challenge")), email, remember_email
+        navigate(url_for("auth.mfa_challenge")), email, remember_email
     )
 
 
@@ -680,7 +687,7 @@ def logout():
         record("logout")
         db.session.commit()
     session.clear()
-    response = make_response(redirect(url_for("auth.login")))
+    response = make_response(navigate(url_for("auth.login")))
     response.delete_cookie(TRUSTED_DEVICE_COOKIE, path="/")
     return response
 
@@ -692,20 +699,20 @@ def change_password():
     user = authenticated or preauth
     forced = bool(preauth and preauth.must_change_password and authenticated is None)
     if user is None or (authenticated is None and not forced):
-        return redirect(url_for("auth.login"))
+        return navigate(url_for("auth.login"))
     if request.method == "GET":
-        return render_template("change_password.html", forced=forced)
+        return resource("change_password", forced=forced)
 
-    current = request.form.get("current_password") or ""
-    new = request.form.get("new_password") or ""
-    confirm = request.form.get("confirm_password") or ""
+    current = form_data().get("current_password") or ""
+    new = form_data().get("new_password") or ""
+    confirm = form_data().get("confirm_password") or ""
     if not forced and not check_password_hash(user.password_hash, current):
-        return render_template(
-            "change_password.html", error="Current password is incorrect.", forced=forced
+        return resource(
+            "change_password", error="Current password is incorrect.", forced=forced
         ), 400
     problem = password_problem(new, confirm)
     if problem:
-        return render_template("change_password.html", error=problem, forced=forced), 400
+        return resource("change_password", error=problem, forced=forced), 400
 
     user.password_hash = generate_password_hash(new)
     user.must_change_password = False
@@ -719,12 +726,12 @@ def change_password():
         if not user.mfa_enabled:
             _prepare_mfa_enrollment(user)
             flash("Password updated. Set up two-step verification to continue.")
-            return redirect(url_for("auth.mfa_setup"))
+            return navigate(url_for("auth.mfa_setup"))
         flash("Password updated. Enter your verification code to continue.")
-        return redirect(url_for("auth.mfa_challenge"))
+        return navigate(url_for("auth.mfa_challenge"))
 
     session.clear()
-    response = make_response(redirect(url_for("auth.login")))
+    response = make_response(navigate(url_for("auth.login")))
     response.delete_cookie(TRUSTED_DEVICE_COOKIE, path="/")
     flash("Password updated. Sign in again on each device.")
     return response
@@ -734,9 +741,9 @@ def change_password():
 def mfa_setup():
     user = _preauth_user()
     if user is None:
-        return redirect(url_for("auth.login"))
+        return navigate(url_for("auth.login"))
     if user.mfa_enabled:
-        return redirect(url_for("auth.mfa_challenge"))
+        return navigate(url_for("auth.mfa_challenge"))
     try:
         secret = _decrypt_secret(user)
     except (InvalidToken, ValueError):
@@ -745,12 +752,12 @@ def mfa_setup():
 
     error = None
     if request.method == "POST":
-        counter = _totp_counter(user, request.form.get("code") or "")
+        counter = _totp_counter(user, form_data().get("code") or "")
         if counter is None:
             exhausted = _increment_preauth_failure(user, "mfa_enrollment_failed")
             if exhausted:
                 flash("Too many incorrect codes. Sign in and start again.")
-                return redirect(url_for("auth.login"))
+                return navigate(url_for("auth.login"))
             error = "That verification code is incorrect. Check the time on your device and try again."
         else:
             user.mfa_enabled = True
@@ -758,13 +765,13 @@ def mfa_setup():
             user.mfa_last_totp_counter = counter
             codes = _new_recovery_codes(user)
             session["mfa_enrollment_verified"] = True
-            session["preauth_remember_device"] = request.form.get("remember_device") == "on"
+            session["preauth_remember_device"] = form_data().get("remember_device") == "on"
             record_auth("mfa_enrolled", user)
             db.session.commit()
-            return render_template("mfa_recovery_codes.html", recovery_codes=codes)
+            return resource("mfa_recovery_codes", recovery_codes=codes)
 
-    return render_template(
-        "mfa_setup.html",
+    return resource(
+        "mfa_setup",
         error=error,
         secret=secret,
         authenticator_uri=provisioning_uri,
@@ -776,7 +783,7 @@ def mfa_setup():
 def mfa_complete():
     user = _preauth_user()
     if user is None or not user.mfa_enabled or not session.get("mfa_enrollment_verified"):
-        return redirect(url_for("auth.login"))
+        return navigate(url_for("auth.login"))
     return _finalize_login(
         user, "totp_enrollment", bool(session.get("preauth_remember_device"))
     )
@@ -786,54 +793,54 @@ def mfa_complete():
 def mfa_challenge():
     user = _preauth_user()
     if user is None:
-        return redirect(url_for("auth.login"))
+        return navigate(url_for("auth.login"))
     if not user.mfa_enabled:
-        return redirect(url_for("auth.mfa_setup"))
+        return navigate(url_for("auth.mfa_setup"))
     error = None
     if request.method == "POST":
-        counter = _totp_counter(user, request.form.get("code") or "")
+        counter = _totp_counter(user, form_data().get("code") or "")
         if counter is None:
             exhausted = _increment_preauth_failure(user, "mfa_challenge_failed")
             if exhausted:
                 flash("Too many incorrect codes. Sign in and try again.")
-                return redirect(url_for("auth.login"))
+                return navigate(url_for("auth.login"))
             error = "That verification code is incorrect or has already been used."
         else:
             user.mfa_last_totp_counter = counter
             return _finalize_login(
-                user, "totp", request.form.get("remember_device") == "on"
+                user, "totp", form_data().get("remember_device") == "on"
             )
-    return render_template("mfa_challenge.html", error=error), (400 if error else 200)
+    return resource("mfa_challenge", error=error), (400 if error else 200)
 
 
 @bp.route("/mfa/recovery", methods=["GET", "POST"])
 def mfa_recovery():
     user = _preauth_user()
     if user is None or not user.mfa_enabled:
-        return redirect(url_for("auth.login"))
+        return navigate(url_for("auth.login"))
     error = None
     if request.method == "POST":
-        if not _use_recovery_code(user, request.form.get("recovery_code") or ""):
+        if not _use_recovery_code(user, form_data().get("recovery_code") or ""):
             exhausted = _increment_preauth_failure(user, "mfa_recovery_failed")
             if exhausted:
                 flash("Too many incorrect codes. Sign in and try again.")
-                return redirect(url_for("auth.login"))
+                return navigate(url_for("auth.login"))
             error = "That recovery code is incorrect or has already been used."
         else:
             record_auth("mfa_recovery_code_used", user)
             return _finalize_login(
-                user, "recovery_code", request.form.get("remember_device") == "on"
+                user, "recovery_code", form_data().get("remember_device") == "on"
             )
-    return render_template("mfa_recovery.html", error=error), (400 if error else 200)
+    return resource("mfa_recovery", error=error), (400 if error else 200)
 
 
 @bp.route("/account/security")
 def account_security():
     user = current_user()
     if user is None:
-        return redirect(url_for("auth.login"))
-    return render_template(
-        "account_security.html",
+        return navigate(url_for("auth.login"))
+    return resource(
+        "account_security",
         recovery_codes_remaining=MfaRecoveryCode.query.filter_by(
             user_id=user.id, used_at=None
         ).count(),
@@ -849,12 +856,12 @@ def account_security():
 def regenerate_recovery_codes():
     user = current_user()
     if user is None:
-        return redirect(url_for("auth.login"))
-    password = request.form.get("current_password") or ""
-    counter = _totp_counter(user, request.form.get("code") or "")
+        return navigate(url_for("auth.login"))
+    password = form_data().get("current_password") or ""
+    counter = _totp_counter(user, form_data().get("code") or "")
     if not check_password_hash(user.password_hash, password) or counter is None:
-        return render_template(
-            "account_security.html",
+        return resource(
+            "account_security",
             error="Your password or verification code is incorrect.",
             recovery_codes_remaining=MfaRecoveryCode.query.filter_by(
                 user_id=user.id, used_at=None
@@ -865,8 +872,8 @@ def regenerate_recovery_codes():
     codes = _new_recovery_codes(user)
     record("mfa_recovery_codes_regenerated", "user", user.id)
     db.session.commit()
-    return render_template(
-        "mfa_recovery_codes.html", recovery_codes=codes, account_action=True
+    return resource(
+        "mfa_recovery_codes", recovery_codes=codes, account_action=True
     )
 
 
@@ -874,11 +881,11 @@ def regenerate_recovery_codes():
 def revoke_devices():
     user = current_user()
     if user is None:
-        return redirect(url_for("auth.login"))
+        return navigate(url_for("auth.login"))
     revoke_trusted_devices(user)
     record("trusted_devices_revoked", "user", user.id)
     db.session.commit()
-    response = make_response(redirect(url_for("auth.account_security")))
+    response = make_response(navigate(url_for("auth.account_security")))
     response.delete_cookie(TRUSTED_DEVICE_COOKIE, path="/")
     flash("Trusted devices revoked.")
     return response
@@ -888,17 +895,17 @@ def revoke_devices():
 def reset_own_mfa():
     user = current_user()
     if user is None:
-        return redirect(url_for("auth.login"))
-    password = request.form.get("current_password") or ""
-    counter = _totp_counter(user, request.form.get("code") or "")
+        return navigate(url_for("auth.login"))
+    password = form_data().get("current_password") or ""
+    counter = _totp_counter(user, form_data().get("code") or "")
     if not check_password_hash(user.password_hash, password) or counter is None:
         flash("Your password or verification code is incorrect.")
-        return redirect(url_for("auth.account_security"))
+        return navigate(url_for("auth.account_security"))
     reset_mfa(user)
     record_auth("mfa_reset_by_user", user)
     db.session.commit()
     session.clear()
-    response = make_response(redirect(url_for("auth.login")))
+    response = make_response(navigate(url_for("auth.login")))
     response.delete_cookie(TRUSTED_DEVICE_COOKIE, path="/")
     flash("Two-step verification was reset. Sign in to set it up again.")
     return response
@@ -916,21 +923,56 @@ def password_problem(new: str, confirm: str) -> str | None:
 
 
 def init_app(app):
-    """Attach the login gate and expose auth helpers to templates."""
+    """Attach session, CSRF and authorization middleware to the API."""
     app.config.setdefault(
         "DUMMY_PASSWORD_HASH", generate_password_hash(secrets.token_urlsafe(32))
     )
+    # A same-origin frontend proxy reaches this API on a different Host. Keep
+    # token validation, but validate HTTPS referrers against explicit public
+    # origins rather than Flask-WTF's backend-host-only comparison.
+    app.config["WTF_CSRF_SSL_STRICT"] = False
+
+    def origin(value):
+        try:
+            parsed = urlsplit(value)
+            if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
+                return None
+            port = parsed.port or (443 if parsed.scheme == "https" else 80)
+            return parsed.scheme, parsed.hostname.lower(), port
+        except ValueError:
+            return None
+
+    configured = app.config.get("PUBLIC_APP_ORIGINS", ())
+    allowed = set()
+    for value in configured:
+        parsed = urlsplit(value)
+        key = origin(value)
+        if not key or key[0] != "https" or parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
+            raise ValueError("PUBLIC_APP_ORIGINS must contain exact HTTPS origins without paths.")
+        allowed.add(key)
+
+    @app.before_request
+    def _browser_request_origin():
+        if not app.config.get("WTF_CSRF_ENABLED", True) or request.method not in {"POST", "PUT", "PATCH", "DELETE"}:
+            return None
+        # The machine worker has its own mandatory shared-secret authentication.
+        if request.endpoint == "api.import_run":
+            return None
+        trusted = allowed | {origin(request.host_url)}
+        # Reject explicit cross-site Origins even on a local HTTP server.
+        if request.headers.get("Origin") and origin(request.headers["Origin"]) not in trusted:
+            raise CSRFError("Untrusted request origin.")
+        if request.is_secure or app.config.get("SESSION_COOKIE_SECURE"):
+            if not request.referrer or origin(request.referrer) not in trusted:
+                raise CSRFError("Untrusted request referrer.")
+        return None
+
     csrf.init_app(app)
     app.register_blueprint(bp)
 
     @app.errorhandler(CSRFError)
     def _csrf_error(error):
-        if request.accept_mimetypes.best == "application/json":
-            return {"error": "invalid or expired request token"}, 400
-        return render_template(
-            "csrf_error.html",
-            message="This form expired or came from another site. Go back, reload the page and try again.",
-        ), 400
+        return {"error": "invalid or expired request token"}, 400
 
     @app.after_request
     def _security_headers(response):
@@ -946,54 +988,28 @@ def init_app(app):
     @app.before_request
     def _require_login():
         endpoint = request.endpoint or ""
-        if endpoint in PUBLIC_ENDPOINTS or endpoint.startswith("debug_") or \
+        if endpoint in PUBLIC_ENDPOINTS or endpoint.startswith("api.debug_") or \
                 request.path == url_for("auth.logout"):
             return None
         user = current_user()
         if user is None:
-            if request.accept_mimetypes.best == "application/json" or endpoint.endswith("_json"):
-                return {"error": "authentication required"}, 401
-            return redirect(url_for("auth.login", next=request.full_path.rstrip("?")))
+            from carelog.api.responses import frontend_path
+            from urllib.parse import quote
+            return {"error": "authentication required", "navigate": "/login?next=" + quote(frontend_path(request.full_path.rstrip("?")), safe="")}, 401
         if user.is_superuser and not session.get("acting_org_id"):
-            platform_endpoint = endpoint.startswith("platform_") or endpoint in {
+            platform_endpoint = endpoint.startswith("api.platform_") or endpoint in {
                 "auth.change_password", "auth.account_security",
                 "auth.regenerate_recovery_codes", "auth.revoke_devices",
-                "auth.reset_own_mfa", "auth.logout", "healthz", "stylesheet", "brand_asset",
-            } or endpoint.startswith("debug_")
+                "auth.reset_own_mfa", "auth.logout", "healthz",
+            } or endpoint.startswith("api.debug_")
             if not platform_endpoint:
                 # Never execute a provider mutation without an explicitly
                 # selected customer account. GETs return to the console;
                 # writes fail closed.
                 if request.method in ("GET", "HEAD"):
-                    return redirect(url_for("platform_console"))
+                    return navigate(url_for("api.platform_console"))
                 abort(403)
         return None
-
-    @app.context_processor
-    def _expose():
-        from carelog import app as app_module
-
-        user = current_user()
-        in_customer_workspace = bool(
-            user and (not user.is_superuser or session.get("acting_org_id"))
-        )
-        facilities = app_module.org_facilities() if in_customer_workspace else []
-        active_facility = app_module.current_facility() if in_customer_workspace else None
-        return {
-            "current_user": user,
-            "has_permission": has_permission,
-            "role_label": role_label,
-            "org_facilities": facilities,
-            "active_facility": active_facility,
-            "workspace_context": app_module.workspace_context(active_facility),
-            "is_platform_owner": is_platform_owner(),
-            "acting_org": db.session.get(Organization, session["acting_org_id"])
-            if user and user.is_superuser and session.get("acting_org_id") else None,
-            "home_org": db.session.get(Organization, user.organization_id) if user else None,
-            "connection_encrypted": bool(
-                request.is_secure or current_app.config.get("SESSION_COOKIE_SECURE")
-            ),
-        }
 
 
 def create_user(*, organization_id, email, name, role, password,

@@ -177,6 +177,8 @@ def _extract_field(fs: dict, row: dict, headers: list[str]):
             return vm[key]
 
     if raw == "":
+        if fs.get("required"):
+            raise ValueError("required value is blank")
         return fs.get("default")
 
     parse = fs.get("parse", "text")
@@ -193,6 +195,8 @@ def _extract_field(fs: dict, row: dict, headers: list[str]):
         return n * fs.get("multiply", 1)
     if parse == "boolean":
         b = parse_bool(raw)
+        if b is None and fs.get("required"):
+            raise ValueError(f"unrecognised boolean value: {raw!r}")
         return fs.get("default", True) if b is None else b
 
     if fs.get("normalize") == "role":
@@ -245,7 +249,8 @@ def run_target(target: dict, sheets: list[Sheet]) -> TargetResult:
     }[kind]
 
     result = TargetResult(kind=kind, sheet=sheet.name, records=[])
-    for idx, row in enumerate(sheet.rows, start=sheet.header_row_index + 2):
+    for offset, row in enumerate(sheet.rows):
+        idx = sheet.source_rows[offset] if sheet.source_rows else sheet.header_row_index + 2 + offset
         result.rows_seen += 1
         if not _passes_filter(target, row, sheet.headers):
             result.rows_filtered += 1
@@ -264,12 +269,19 @@ def run_target(target: dict, sheets: list[Sheet]) -> TargetResult:
                 err = f"Row {idx}: {name}: {e}"
                 break
         if err:
+            if target.get("fail_on_row_error"):
+                raise MappingError(f"{sheet.name}: {err}")
             result.row_errors.append(err)
             continue
         problem = _check_record(kind, record)
         if problem:
+            if target.get("fail_on_row_error"):
+                raise MappingError(f"{sheet.name}: Row {idx}: {problem}")
             result.row_errors.append(f"Row {idx}: {problem}")
             continue
+        record["_source_file"] = sheet.source_file
+        record["_source_sheet"] = sheet.name
+        record["_source_page"] = sheet.source_page
         record["_source_row"] = idx  # audit lineage back to the file
         result.records.append(record)
     return result

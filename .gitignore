@@ -1,62 +1,35 @@
-# macOS
+# Local configuration and secrets
+.env*
+!.env.example
+.vercel/
+.claude/
+.idea/
+.vscode/
 .DS_Store
-.env.example
-.env
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
+
+# Python environment and generated artifacts
 .venv/
 venv/
-.env
-.env.local
+__pycache__/
+*.py[cod]
 *.egg-info/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
 .coverage
 htmlcov/
-
-# Node
-node_modules/
-dist/
-.vite/
-*.tsbuildinfo
 *.log
-npm-debug.log*
 
-# Local data
-backend/uploads/
+# Local evidence and databases
 uploads/
-backend/data/
 *.db
 *.sqlite
 *.sqlite3
+output/
+to_solve/
+vero/
+government_template/
 
-# IDE
-.idea/
-.vscode/
-*.swp
-/government_template/care-minutes-performance-statement-template.xlsx
-/Documentation/DATABASE_SETUP.md
-/sample_data/test_data/format1_simple.csv
-/sample_data/test_data/format2_humanforce.csv
-/sample_data/test_data/format3_alayacare.xlsx
-/sample_data/test_data/format4_payroll_hours.csv
-/sample_data/test_data/format5_roster.txt
-/sample_data/test_data/format6_api_extract.json
-/sample_data/test_data/format7_dbdump.sql
-/sample_data/test_data/residents_clients.xlsx
-/Documentation/ROADMAP.md
-/Documentation/SETUP.md
-
-# packaged layout
-carelog/**/__pycache__/
-.pytest_cache/
-.DS_Store
-
-# Vercel CLI state and pulled secrets — never commit
-.vercel/
-.env*.local
-.env.production.local
+# Reproducible test fixtures
+/sample_data/test_data/*
+!/sample_data/test_data/make_fixtures.py
