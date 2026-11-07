@@ -150,7 +150,9 @@ def bulk_eligibility():
     for member in members:
         member.eligibility_status, member.eligibility_reason = decision, reason
         member.eligible_from, member.eligible_to = start, end
-        member.approved_at, member.approved_by_user_id = datetime.utcnow(), actor.id
+        member.reviewed_at, member.reviewed_by_user_id = datetime.utcnow(), actor.id
+        member.approved_at = member.reviewed_at if decision == el.APPROVED else None
+        member.approved_by_user_id = actor.id if decision == el.APPROVED else None
         auth.record(
             "eligibility_decided",
             "staff",
@@ -200,6 +202,8 @@ def eligibility_decide(staff_id):
         }, 400
 
     def optional_date(field):
+        if field not in form_data():
+            return getattr(member, field)
         value = (form_data().get(field) or "").strip()
         if not value:
             return None
@@ -216,12 +220,11 @@ def eligibility_decide(staff_id):
         return {"error": "Eligible-to must be on or after eligible-from."}, 400
     if decision == el.APPROVED and eligible_from is None:
         return {"error": "Approval requires an explicit eligible-from date."}, 400
-    member.eligibility_status = decision
-    member.role = mapped_role
     reason = (form_data().get("reason") or "").strip()
     if decision in (el.APPROVED, el.EXCLUDED) and not reason:
-        flash("Record a basis for an approval or exclusion.")
-        return navigate(url_for("api.eligibility_queue"))
+        return {"error": "Record a basis for an approval or exclusion."}, 400
+    member.eligibility_status = decision
+    member.role = mapped_role
     member.eligibility_reason = reason or f"left {decision} by an administrator"
     member.registration_number = (
         form_data().get("registration_number") or ""
@@ -229,9 +232,10 @@ def eligibility_decide(staff_id):
     new_expiry = optional_date("registration_expiry")
     if new_expiry:
         record_credential_gap(member, new_expiry, facility_today(facility))
-    member.registration_expiry = new_expiry
+        member.registration_expiry = new_expiry
     continuity = (form_data().get("registration_continuous") or "") == "1"
     if continuity and not reason:
+        db.session.rollback()
         return {"error": "Record the basis for confirming continuous registration."}, 400
     if continuity and member.credential_gaps:
         auth.record(
@@ -247,11 +251,13 @@ def eligibility_decide(staff_id):
 
     problem = el.registration_problem(member, member.eligible_from or facility_today(facility))
     if decision == el.APPROVED and problem:
-        flash(f"Cannot approve: {problem}.")
-        return navigate(url_for("api.eligibility_queue"))
+        db.session.rollback()
+        return {"error": f"Cannot approve: {problem}."}, 400
     actor = current_user()
-    member.approved_by_user_id = actor.id if actor else None
-    member.approved_at = datetime.utcnow()
+    member.reviewed_by_user_id = actor.id if actor else None
+    member.reviewed_at = datetime.utcnow()
+    member.approved_by_user_id = member.reviewed_by_user_id if decision == el.APPROVED else None
+    member.approved_at = member.reviewed_at if decision == el.APPROVED else None
     auth.record(
         "eligibility_decided",
         "staff",

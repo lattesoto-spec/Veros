@@ -18,7 +18,7 @@ from carelog.domain.care_minutes import (
 from carelog.domain import eligibility
 from carelog.models import CareEpisode, Resident, ResidentDay, Shift, Staff, db
 
-CALC_VERSION = "2026.11.9"
+CALC_VERSION = "2026.11.10"
 
 # Canonical reporting buckets. The mapping engine normalizes to PCW; the
 # government statement calls the bucket PCA — they are the same bucket.
@@ -718,11 +718,16 @@ def quarterly_tests(facility, start: date, end: date) -> dict:
     if missing_dates:
         limitations.append("No worked-time evidence on: " + ", ".join(d.isoformat() for d in missing_dates) + ". Verify source completeness; absence is not proof of zero time.")
     complete_quarter = start == quarter_bounds(start)[0] and end == _calendar_quarter_end(start)
+    from carelog.domain.clock import facility_today
+    ended_quarter = _calendar_quarter_end(start) < facility_today(facility)
     # Threshold comparisons remain useful during a quarter, but are not a
     # completed quarterly verdict. Evidence limitations withhold both.
     evidence_clear = not limitations
     if not complete_quarter:
-        limitations.append("Quarter to date / partial period: a definitive quarterly verdict requires a complete calendar quarter.")
+        limitations.append(
+            "Ended quarter has incomplete evidence: a definitive verdict requires the full calendar quarter."
+            if ended_quarter else "Quarter to date / partial period: a definitive quarterly verdict requires a complete calendar quarter."
+        )
 
     def result(key, label, minutes, target, basis):
         target = Decimal(str(target))
@@ -774,7 +779,8 @@ def quarterly_tests(facility, start: date, end: date) -> dict:
         "failed": [x for x in decided if not x["passed"]],
         "calc_version": CALC_VERSION,
         "complete_quarter": complete_quarter,
-        "period_label": "Quarter" if complete_quarter else "Quarter to date / partial period",
+        "period_label": "Quarter" if complete_quarter else "Incomplete ended quarter" if ended_quarter else "Quarter to date / partial period",
+        "ended_quarter": ended_quarter,
         "on_track": all(x["on_track"] for x in tests) if all(x["on_track"] is not None for x in tests) else None,
         "missing_worked_dates": [d.isoformat() for d in missing_dates],
         "limitations": limitations,

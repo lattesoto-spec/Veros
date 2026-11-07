@@ -35,7 +35,7 @@ def spec_without_pay_column(name, data):
             "staff_id": {"column": "Staff ID"},
             "role": {"column": "Role", "normalize": "role"},
             "date": {"column": "Work Date", "parse": "date"},
-            "minutes": {"column": "Paid Hours", "parse": "number", "multiply": 60},
+            "minutes": {"column": "Paid Hours", "parse": "number", "multiply": 60, "unit": "hours"},
         },
     }], "reasoning": "test"}}
 
@@ -296,7 +296,7 @@ def test_a_remembered_layout_survives_a_new_file_name(prepared):
         "staff_id": {"column": "Staff ID"}, "role": {"column": "Role", "normalize": "role"},
         "date": {"column": "Day", "parse": "date"}, "start_time": {"column": "Start", "parse": "time"},
         "end_time": {"column": "Finish", "parse": "time"},
-        "break_minutes": {"column": "Unpaid", "parse": "number"}}}], "reasoning": "test"}
+        "break_minutes": {"column": "Unpaid", "parse": "number", "unit": "minutes"}}}], "reasoning": "test"}
     confirmed(client, prepare_file(app, ids, home, "july.csv", july, spec))
 
     august = july.replace(b"2026-07-01", b"2026-08-01")
@@ -366,7 +366,7 @@ def test_a_multi_site_export_cannot_load_into_one_home(prepared):
         "staff_id": {"column": "Staff ID"}, "role": {"column": "Role", "normalize": "role"},
         "date": {"column": "Day", "parse": "date"}, "start_time": {"column": "Start", "parse": "time"},
         "end_time": {"column": "Finish", "parse": "time"},
-        "break_minutes": {"column": "Unpaid", "parse": "number"}}}], "reasoning": "test"}
+        "break_minutes": {"column": "Unpaid", "parse": "number", "unit": "minutes"}}}], "reasoning": "test"}
     job_id = prepare_file(app, ids, home, "all.csv", data, spec)
     review = json.loads(db.session.get(ImportJob, job_id).review_json)
     hold = review["impact"]["holds"][0]

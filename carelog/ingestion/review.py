@@ -37,6 +37,7 @@ def public_review(review, include_samples=False):
                 columns.append({"sheet": target.get("sheet"), "kind": target.get("kind"),
                                 "field": field, "source": rule.get("column") or ", ".join(rule.get("columns", []))
                                 or f"Fixed value: {rule.get('value', '')}", "format": rule.get("format"),
+                                "unit": rule.get("unit") or ("hours" if rule.get("multiply") == 60 else "minutes" if field in ("minutes", "break_minutes") else None),
                                 "sample": ", ".join(shown.get(field, [])) or None})
         files.append({"filename": outcome["filename"], "columns": columns,
                       "results": outcome["results"], "warnings": outcome.get("warnings", []),

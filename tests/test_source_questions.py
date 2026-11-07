@@ -37,6 +37,7 @@ def answer(job, client, kind, value):
     hold = next(h for h in json.loads(job.review_json)["impact"]["holds"] if h["kind"] == kind)
     return client.post(f"/api/import/{job.id}/resolve-hold", data={
         "kind": kind, "file": hold["file"], "sheet": hold["sheet"],
+        "field": hold.get("field", ""),
         "value": value, "basis": "Checked the synthetic source's meaning",
     })
 

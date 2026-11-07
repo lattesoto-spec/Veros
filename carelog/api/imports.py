@@ -333,7 +333,8 @@ def import_resolve_hold(job_id):
     review = json.loads(job.review_json or "{}")
     hold = next(
         (h for h in review.get("impact", {}).get("holds", [])
-         if (h["kind"], h["file"], h["sheet"]) == (kind, name, sheet)),
+         if (h["kind"], h["file"], h["sheet"]) == (kind, name, sheet)
+         and (not h.get("field") or h["field"] == data.get("field"))),
         None,
     )
     outcome = next((o for o in review.get("outcomes", []) if o["filename"] == name), None)
@@ -341,8 +342,15 @@ def import_resolve_hold(job_id):
         return {"error": "That question is no longer open. Reload this review."}, 409
     spec = outcome["spec"]
     target = next(t for t in spec["targets"] if t.get("sheet") == sheet
-                  and (kind == "site" or t.get("kind") == "shifts"))
-    if kind == "pay_column":
+                  and (kind == "site" or t.get("kind") == hold.get("target_kind", "shifts")))
+    if kind == "time_units":
+        if value not in hold["options"]:
+            return {"error": "Choose minutes, hours or h:mm."}, 400
+        rule = target["fields"][hold["field"]]
+        rule.update(parse="duration", unit=value)
+        rule.pop("multiply", None)
+        target.setdefault("unit_basis", {})[hold["field"]] = basis
+    elif kind == "pay_column":
         if value == "none":
             target["all_lines_worked"] = basis
         elif value in {option["column"] for option in hold["options"]}:
@@ -354,7 +362,10 @@ def import_resolve_hold(job_id):
             target["fields"]["break_minutes"] = {"source": "constant", "value": 0, "parse": "number"}
             target["break_basis"] = basis
         elif value in {option["column"] for option in hold["options"]}:
-            target["fields"]["break_minutes"] = {"column": value, "parse": "number"}
+            unit = data.get("unit")
+            if unit not in ("minutes", "hours", "h:mm"):
+                return {"error": "Choose the unit used by the break column."}, 400
+            target["fields"]["break_minutes"] = {"column": value, "parse": "duration", "unit": unit}
         else:
             return {"error": "Choose the break column or confirm these times already exclude breaks."}, 400
     elif kind == "status":

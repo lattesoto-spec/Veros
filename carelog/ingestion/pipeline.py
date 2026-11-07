@@ -40,6 +40,7 @@ from .presets import matching_spec
 from .quality import _minutes as record_minutes, check_shifts, daylight_saving_warnings
 from .reader import read_upload, rebuild_with_header
 from .statuses import disallowed, prepare_status_filters, status_columns
+from .durations import needs_unit_review
 
 
 MAPPING_SPEC_VERSION = 2
@@ -439,7 +440,7 @@ def _import_staff(facility, records: list[dict], outcome: ImportOutcome):
         else:
             if rec.get("staff_name"):
                 member.name = name
-            if member.approved_at is None and raw_role:
+            if member.approved_at is None and member.reviewed_at is None and raw_role:
                 member.role = role
                 member.source_role = raw_role
                 member.eligibility_status = status
@@ -503,11 +504,20 @@ def _review_holds(spec, sheets, filename) -> list[dict]:
     """Questions only a person can answer before these rows may count."""
     holds = []
     for target in spec.get("targets", []):
-        if target.get("kind") not in ("shifts", "resident_days"):
+        if target.get("kind") not in ("shifts", "resident_days", "care_episodes"):
             continue
         sheet = next(s for s in sheets if s.name == target.get("sheet"))
         mapped = _target_columns(target)
         fields = target.get("fields", {})
+        for field_name in ("minutes", "break_minutes"):
+            rule = fields.get(field_name)
+            if rule and needs_unit_review(rule):
+                holds.append({
+                    "kind": "time_units", "file": filename, "sheet": sheet.name,
+                    "field": field_name, "column": rule.get("column"),
+                    "target_kind": target["kind"],
+                    "options": ["minutes", "hours", "h:mm"],
+                })
         if target["kind"] == "shifts":
             break_rule = fields.get("break_minutes", {})
             if {"start_time", "end_time"} <= set(fields) and (
@@ -732,7 +742,7 @@ def _import_shifts(
             # Any human decision is permanent until a human changes it. An
             # excluded worker must not become approved merely because a file
             # was imported again.
-            if staff.approved_at is None and raw_role:
+            if staff.approved_at is None and staff.reviewed_at is None and raw_role:
                 staff.role = role
                 staff.source_role = raw_role or staff.source_role
                 staff.eligibility_status = status

@@ -19,6 +19,15 @@ The complete UI-ordered feature inventory lives in `FEATURES.md` in the independ
 
 `CALC_VERSION` is `2026.11.9`. Original numerical golden fixtures remain unchanged. Verification uses synthetic evidence and a dedicated local PostgreSQL database; provider usability and deployed behavior remain separately unverified.
 
+## Explicit time units and current-quarter context (UI order)
+
+1. **Dashboard / Care minutes:** the last quarter with data is labelled as ended when no current-quarter worked evidence exists. An open review item identifies the current quarter's missing worked evidence. Incomplete ended-quarter calculations no longer say “quarter to date”. Latest import timestamps use the organisation's timezone, with an explicit zone label.
+2. **Imports / Column mapping:** choose minutes, hours or h:mm for an unpaid-break column, and use the matching duration field for minutes, hours or h:mm. `0:30` always means 30 elapsed minutes, including when mapped to a field stored in minutes. `h:mm:ss` is also supported. Invalid clock components and non-finite or negative durations are rejected.
+3. **Imports / Review:** every duration column in a legacy/analyzer mapping without declared units raises a blocking unit question, including whole-number columns. Clock-like values no longer become decimal minutes. Break-column questions also require a source unit; review lists the source unit beside the normalised example values. A changed break column clears the old unit selection. Blank mapped duration/break cells are rejected rather than assumed to be zero; correct the source or explicitly map times already excluding breaks.
+4. **Eligibility:** omitted or blank registration expiry does not erase existing credential evidence. Partial requests preserve omitted effective dates. Decisions record separate review metadata; only approvals receive an approval timestamp. Importing a title cannot override a pending/excluded human review. Invalid approvals return 400 and save no decision. New nullable staff-review metadata has additive PostgreSQL migration coverage.
+
+`CALC_VERSION` is `2026.11.10`. Existing stored evidence is not rewritten automatically; providers should review earlier fractional or clock-like break imports against their originals and use a corrected reviewed import or row correction where needed.
+
 ## 2026-11-07
 
 1. **Imports / Facilities / Settings:** explicitly validate both verified facility targets before any mutation. Non-finite, missing, non-positive or inconsistent targets are rejected. Synthetic two-file demo sources generate in temporary test directories.

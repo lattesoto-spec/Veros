@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, time
 
 from .reader import Sheet
+from .durations import duration_minutes
 
 SHIFT_FIELDS = [
     "staff_id",
@@ -236,7 +237,7 @@ def _raw_field(fs: dict, row: dict, headers: list[str]) -> str:
     return (raw or "").strip()
 
 
-def _extract_field(fs: dict, row: dict, headers: list[str]):
+def _extract_field(fs: dict, row: dict, headers: list[str], *, minute_field=False):
     raw = _raw_field(fs, row, headers)
 
     vm = fs.get("value_map")
@@ -246,6 +247,8 @@ def _extract_field(fs: dict, row: dict, headers: list[str]):
             return vm[key]
 
     if raw == "":
+        if minute_field:
+            raise ValueError("duration or break evidence is blank; record an explicit zero or correct the source")
         if fs.get("parse") == "boolean":
             raise ValueError("boolean evidence is blank; an explicit value is required")
         if fs.get("required"):
@@ -262,8 +265,18 @@ def _extract_field(fs: dict, row: dict, headers: list[str]):
     if parse == "datetime_time":
         return parse_time_value(raw, fs.get("format"))
     if parse == "number":
+        if minute_field and (":" in raw or fs.get("unit")):
+            if fs.get("unit") and fs.get("multiply", 1) not in (
+                (1,) if fs["unit"] == "minutes" else (1, 60)
+            ):
+                raise ValueError("Duration unit conflicts with its numeric multiplier; choose one source unit")
+            return duration_minutes(raw, fs.get("unit") or "h:mm")
         n = parse_number(raw)
         return n * fs.get("multiply", 1)
+    if parse == "duration":
+        if fs.get("multiply", 1) != 1:
+            raise ValueError("Duration units already convert to minutes; remove the extra multiplier")
+        return duration_minutes(raw, fs.get("unit"))
     if parse == "boolean":
         b = parse_bool(raw)
         if b is None:
@@ -365,7 +378,7 @@ def run_target(target: dict, sheets: list[Sheet]) -> TargetResult:
             if name not in allowed:
                 continue
             try:
-                record[name] = _extract_field(fs, row, sheet.headers)
+                record[name] = _extract_field(fs, row, sheet.headers, minute_field=name in ("minutes", "break_minutes"))
                 # Normalisation must never destroy the evidence used by the
                 # eligibility classifier. Preserve the exact source title.
                 if name == "role":

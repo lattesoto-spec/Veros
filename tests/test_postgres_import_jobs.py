@@ -378,3 +378,24 @@ def test_period_queries_stay_bounded_as_more_dates_are_added(pg_app):
     assert "ix_resident_day_facility_date" in {
         i["name"] for i in inspect(db.engine).get_indexes("resident_days")
     }
+
+
+def test_additive_staff_review_metadata_preserves_credentials(pg_app):
+    from sqlalchemy import text
+    from carelog.models import Staff
+
+    app, facility, storage = pg_app
+    member = Staff(facility_id=facility.id, staff_id="RN1", name="Synthetic Nurse", role="RN",
+                   eligibility_status="pending", registration_number="NMW1", registration_expiry=date(2027, 5, 31))
+    db.session.add(member)
+    db.session.commit()
+    member_id = member.id
+    for column in ("reviewed_at", "reviewed_by_user_id"):
+        db.session.execute(text(f'ALTER TABLE staff DROP COLUMN "{column}"'))
+    db.session.commit()
+    assert set(init_db()) == {"staff.reviewed_at", "staff.reviewed_by_user_id"}
+    db.session.expire_all()
+    retained = db.session.get(Staff, member_id)
+    assert retained.registration_expiry == date(2027, 5, 31)
+    assert retained.registration_number == "NMW1" and retained.eligibility_status == "pending"
+    assert retained.reviewed_at is None

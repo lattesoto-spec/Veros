@@ -91,9 +91,13 @@ Field spec language (per normalized field):
 - source: "column" (default) with "column"; "combine" with "columns" + optional "separator";
   or "constant" with "value".
 - parse: "date", "time", "datetime_date" (date part of a datetime column),
-  "datetime_time" (time part), "number", "boolean", or omit for text.
+  "datetime_time" (time part), "number", "duration", "boolean", or omit for text.
 - format: optional strptime format for date/time parsing (the engine also tries common formats).
-- multiply: for parse "number" — e.g. a column of decimal hours needs multiply 60 to become minutes.
+- duration: returns minutes. Declare the SOURCE unit as "minutes", "hours" or "h:mm"
+  only when the header establishes it; never guess a unit from masked values.
+  Without a clear unit use parse "number" and omit unit so a reviewer must choose it.
+  h:mm values always mean elapsed hours:minutes, not decimal minutes.
+- multiply: for ordinary numeric fields. Do not combine a duration unit with a multiplier.
 - value_map: list of {"from": raw_value_lowercase, "to": mapped_value} pairs applied before parsing.
 - normalize: "role" applies built-in role normalization (Registered Nurse->RN, Enrolled->EN,
   care assistants->PCW). Prefer normalize "role" for role columns; add value_map only for
@@ -122,8 +126,8 @@ Rules:
 - is_direct_care: if a column distinguishes direct care from admin/leave, map it; otherwise
   use a constant true. Rows for leave, sick leave, training, unfilled shifts, and totals
   should be excluded via row_filter where possible.
-- break_minutes: map a break/meal-break column when present (use multiply 60 if it is in
-  hours). Omit the field when there is no break column.
+- break_minutes: map a break/meal-break column when present with its explicit source
+  duration unit when known. Omit the field when there is no break column.
 - is_agency: map a column that flags agency/contractor workers (value_map to booleans);
   omit when there is no such signal.
 - Data values are masked to their shape: letters become a/A and digits become 9, so

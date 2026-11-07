@@ -14,6 +14,7 @@ _DATE = {"parse": "date"}
 _TIME = {"parse": "time"}
 _BOOLEAN = {"parse": "boolean", "required": True}
 _NUMBER = {"parse": "number"}
+_MINUTES = {"parse": "duration", "unit": "minutes"}
 
 KINDS = {
     "shifts": {
@@ -25,9 +26,10 @@ KINDS = {
             {"name": "date", "label": "Work date", "required": True, "rule": _DATE},
             {"name": "start_time", "label": "Start time", "rule": _TIME, "help": "Use the actual start, not the rostered one."},
             {"name": "end_time", "label": "Finish time", "rule": _TIME},
-            {"name": "hours", "label": "Duration in hours", "rule": {**_NUMBER, "multiply": 60}, "stores": "minutes"},
-            {"name": "minutes", "label": "Duration in minutes", "rule": _NUMBER},
-            {"name": "break_minutes", "label": "Unpaid break in minutes", "rule": _NUMBER,
+            {"name": "hours", "label": "Duration in hours", "rule": {"parse": "duration", "unit": "hours"}, "stores": "minutes"},
+            {"name": "minutes", "label": "Duration in minutes", "rule": _MINUTES},
+            {"name": "duration_hhmm", "label": "Duration as h:mm", "rule": {"parse": "duration", "unit": "h:mm"}, "stores": "minutes"},
+            {"name": "break_minutes", "label": "Unpaid break", "rule": _MINUTES,
              "always": "These times already exclude unpaid breaks", "always_value": "0"},
             {"name": "is_direct_care", "label": "Direct care", "required": True, "rule": _BOOLEAN,
              "always": "Every row in this sheet is direct care"},
@@ -89,7 +91,9 @@ KINDS = {
             {"name": "role", "label": "Role", "rule": {"normalize": "role"}},
             {"name": "start_time", "label": "Start time", "rule": _TIME},
             {"name": "end_time", "label": "End time", "rule": _TIME},
-            {"name": "minutes", "label": "Duration in minutes", "rule": _NUMBER},
+            {"name": "minutes", "label": "Duration in minutes", "rule": _MINUTES},
+            {"name": "hours", "label": "Duration in hours", "rule": {"parse": "duration", "unit": "hours"}, "stores": "minutes"},
+            {"name": "duration_hhmm", "label": "Duration as h:mm", "rule": {"parse": "duration", "unit": "h:mm"}, "stores": "minutes"},
         ],
     },
 }
@@ -119,6 +123,7 @@ def public_catalogue() -> dict:
         },
         "date_formats": DATE_FORMATS,
         "always_true": ALWAYS_TRUE,
+        "duration_units": [["minutes", "Minutes: 30"], ["hours", "Hours: 0.5"], ["h:mm", "Hours:minutes: 0:30"]],
     }
 
 
@@ -168,8 +173,11 @@ def target_to_mapping(target, sheet) -> dict:
         if rule.get("source") == "constant":
             fields[name] = ALWAYS_TRUE
             continue
-        if name == "minutes" and rule.get("multiply") == 60:
-            name = "hours"
+        if name == "minutes":
+            if rule.get("unit") == "h:mm":
+                name = "duration_hhmm"
+            elif rule.get("unit") == "hours" or rule.get("multiply") == 60:
+                name = "hours"
         if rule.get("column"):
             fields[name] = rule["column"]
         if rule.get("parse") == "date" and rule.get("format"):
@@ -182,18 +190,20 @@ def target_to_mapping(target, sheet) -> dict:
         "date_format": date_format,
         "filter_column": row_filter.get("column", ""),
         "filter_values": ", ".join(row_filter.get("include_values") or []),
+        "units": {name: rule.get("unit") or ("hours" if rule.get("multiply") == 60 else "")
+                  for name, rule in target.get("fields", {}).items() if name in ("minutes", "break_minutes")},
     }
 
 
 def _shift_problems(chosen, label) -> list[str]:
     start, end = bool(chosen.get("start_time")), bool(chosen.get("end_time"))
-    duration = [key for key in ("hours", "minutes") if chosen.get(key)]
+    duration = [key for key in ("hours", "minutes", "duration_hhmm") if chosen.get(key)]
     if start != end:
         return [f"{label}: choose both the start and finish time columns."]
     if not start and not duration:
         return [f"{label}: choose start and finish times, or a duration column."]
-    if len(duration) == 2:
-        return [f"{label}: choose either hours or minutes, not both."]
+    if len(duration) > 1:
+        return [f"{label}: choose one duration column and unit, not several."]
     if start and not chosen.get("break_minutes"):
         return [f"{label}: choose the unpaid break column, or confirm the times already exclude breaks."]
     return []
@@ -213,6 +223,10 @@ def _build_target(mapping, sheet, problems):
         return None
     columns = rebuild_with_header(sheet, header_row).headers if sheet.raw_rows else sheet.headers
     chosen = {name: value for name, value in (mapping.get("fields") or {}).items() if value}
+    units = mapping.get("units") or {}
+    if not isinstance(units, dict):
+        problems.append(f"{label}: duration units must be selected by field.")
+        units = {}
     allowed = {field["name"]: field for field in definition["fields"]}
     fields = {}
     for name, column in chosen.items():
@@ -223,10 +237,18 @@ def _build_target(mapping, sheet, problems):
             fields[name] = {"source": "constant", "value": field.get("always_value", "true")}
             if field.get("rule", {}).get("parse"):
                 fields[name]["parse"] = field["rule"]["parse"]
+            if field.get("rule", {}).get("unit"):
+                fields[name]["unit"] = field["rule"]["unit"]
         elif column not in columns:
             problems.append(f"{label}: column {column!r} is not in the chosen header row.")
         else:
             rule = {"column": column, **field.get("rule", {})}
+            if name == "break_minutes":
+                from .durations import UNITS
+                unit = units.get(name)
+                if unit not in UNITS:
+                    problems.append(f"{label}: choose minutes, hours or h:mm for the unpaid break column.")
+                rule["unit"] = unit
             if rule.get("parse") == "date" and mapping.get("date_format"):
                 rule["format"] = mapping["date_format"]
             fields[field.get("stores", name)] = rule
@@ -235,6 +257,8 @@ def _build_target(mapping, sheet, problems):
             problems.append(f"{label}: choose a column for {field['label'].lower()}.")
     if kind == "shifts":
         problems.extend(_shift_problems(chosen, label))
+    elif kind == "care_episodes" and sum(bool(chosen.get(name)) for name in ("minutes", "hours", "duration_hhmm")) > 1:
+        problems.append(f"{label}: choose one duration column and unit, not several.")
     target = {"kind": kind, "sheet": sheet.name, "fields": fields}
     if kind == "shifts" and chosen.get("break_minutes") == ALWAYS_TRUE:
         target["break_basis"] = "Reviewer confirmed these times already exclude unpaid breaks."

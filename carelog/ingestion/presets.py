@@ -78,7 +78,7 @@ def matching_spec(sheets) -> dict | None:
                     "date": {"column": "Work Date", "parse": "date"},
                     "start_time": {"column": "Actual Start", "parse": "time"},
                     "end_time": {"column": "Actual Finish", "parse": "time"},
-                    "break_minutes": {"column": "Unpaid Break (min)", "parse": "number"},
+                    "break_minutes": {"column": "Unpaid Break (min)", "parse": "number", "unit": "minutes"},
                     "is_direct_care": {"column": "Direct Care", "parse": "boolean", "required": True},
                     "is_agency": {"column": "Agency", "parse": "boolean", "required": True},
                     "labour_cost": {"column": "Labour Cost", "parse": "number"},
@@ -98,7 +98,7 @@ def matching_spec(sheets) -> dict | None:
                     "date": {"column": "Date", "parse": "date"},
                     "start_time": {"column": "Shift Start", "parse": "time"},
                     "end_time": {"column": "Shift End", "parse": "time"},
-                    "break_minutes": {"column": "Unpaid Break (min)", "parse": "number"},
+                    "break_minutes": {"column": "Unpaid Break (min)", "parse": "number", "unit": "minutes"},
                     "is_direct_care": {"column": "Counts Toward Care Minutes", "parse": "boolean"},
                 },
             })
@@ -117,7 +117,7 @@ def matching_spec(sheets) -> dict | None:
                     "staff_name": {"column": "Staff Name"},
                     "start_time": {"column": "Start Time", "parse": "time"},
                     "end_time": {"column": "End Time", "parse": "time"},
-                    "minutes": {"column": "Duration (min)", "parse": "number"},
+                    "minutes": {"column": "Duration (min)", "parse": "number", "unit": "minutes"},
                 },
             })
     if not targets:

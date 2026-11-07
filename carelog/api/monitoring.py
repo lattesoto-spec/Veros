@@ -89,6 +89,8 @@ def compliance_view():
         week=range_breakdown(facility.id, today - timedelta(days=6), today),
         calc_version=CALC_VERSION,
         evidence=evidence_summary(facility.id, q_start, today),
+        historical_period=q_start < quarter_bounds(facility_today(facility))[0],
+        current_q_start=quarter_bounds(facility_today(facility))[0],
     )
 
 
@@ -350,6 +352,8 @@ def dashboard():
         facility=facility_for_period(facility, today),
         today=today,
         has_worked_data=latest_worked_shift is not None,
+        historical_period=q_start < quarter_bounds(facility_today(facility))[0],
+        current_q_start=quarter_bounds(facility_today(facility))[0],
         worked_data_age_days=(facility_today(facility) - today).days
         if latest_worked_shift
         else None,
