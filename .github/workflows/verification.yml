@@ -1,0 +1,38 @@
+name: Backend verification
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: caremin_test
+          POSTGRES_PASSWORD: ci-test-only
+          POSTGRES_DB: caremin_ci_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U caremin_test -d caremin_ci_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql+psycopg://caremin_test:ci-test-only@127.0.0.1:5432/caremin_ci_test
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: python -m pip install -r requirements.txt -r requirements-dev.txt
+      - run: python -m pytest -q --disable-warnings
+      - run: python tests/test_mapping_engine.py
+      - run: python -m pyflakes app.py build.py carelog

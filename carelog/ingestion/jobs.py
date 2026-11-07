@@ -81,10 +81,6 @@ def start_job(
             "Each uploaded file needs a distinct filename; no files were imported."
         )
     payloads = [(name, data) for name, (_, data) in zip(names, payloads)]
-    if worker_mode() == "invoke" and not os.environ.get("WORKER_SECRET"):
-        raise FileReadError(
-            "The import worker is not configured. Contact platform support."
-        )
     job_id = uuid.uuid4().hex[:12]
     prefix = f"imports/job-{job_id}"
     job = ImportJob(
@@ -112,6 +108,12 @@ def start_job(
         )
         raise
     _touch(job, status="queued")
+    if worker_mode() == "invoke" and not os.environ.get("WORKER_SECRET"):
+        _fail(
+            job_id,
+            "The import worker is not configured. Your originals are retained. Contact platform support, then retry from history.",
+        )
+        return job_id
     dispatch_job(app, job_id)
     return job_id
 

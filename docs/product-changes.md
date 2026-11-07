@@ -43,3 +43,11 @@ Original source files remain retained on failure. Changes to care data and recei
 - Period calculations use bounded batched reads rather than daily database loops; new non-destructive facility/date indexes support them. A PostgreSQL regression measures stable query counts as the period doubles.
 - Reports include target quarter/source, exact-comparison wording and overnight attribution. PDF text and spreadsheet references remain literal provider text. RN screens show the actual calculation basis rather than unsupported approval/export placeholders.
 - Blank counting flags, malformed facility IDs and invalid reporting months are visibly rejected.
+
+## Browser and release verification
+
+- A guarded synthetic browser-test API runs only against a local PostgreSQL database named `caremin_browser_test`; startup resets that fixture and serves the real session/MFA/CSRF/import/report stack. The frontend's Chromium journey covers confirmation before commit, eligibility, source tracing, PDF download and mobile keyboard behavior, with axe checks on key screens.
+- CI runs PostgreSQL integration/migration tests. The separate frontend workflow has independent build and browser-integration jobs; production builds have no sibling source dependency.
+- Report coverage does not convert unknown/missing clock dates to zero. Percentages use observed clock dates and identify unavailable dates; readiness remains blocked. `CALC_VERSION` is `2026.11.4`.
+- `/healthz` reports an unconfigured HTTP worker or missing Vercel retained-source storage as not ready. If the HTTP worker is unconfigured, uploaded originals are retained on a failed job for later recovery.
+- Local copied upload trees migrated isolated PostgreSQL and returned `/healthz` 200; the copied frontend built independently and passed protected-backend route validation. Generated recordings, QA output and test-only sources are excluded from uploads. Linux cloud behavior, live proxy behavior, manual screen-reader testing and provider usability research remain separately unverified until exercised.

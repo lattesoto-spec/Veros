@@ -38,6 +38,14 @@ python -m pyflakes app.py build.py carelog
 
 Unit tests use disposable SQLite fixtures only. PostgreSQL integration tests require `TEST_DATABASE_URL` pointing to a dedicated empty local database ending in `_test`; they never read production credentials. Production supports PostgreSQL only.
 
+GitHub Actions runs the full suite with PostgreSQL, mapping fixtures and static checks. For the separate frontend's real-browser journey, create a disposable local PostgreSQL database named **caremin_browser_test**, then run:
+
+```sh
+CAREMIN_E2E_DATABASE_URL='postgresql+psycopg://caremin:caremin@127.0.0.1:5433/caremin_browser_test' python tests/e2e_server.py
+```
+
+This test-only server **resets that database on every start** and refuses other database names or non-local hosts. It serves the real Flask API on port 8088 with synthetic accounts, MFA and CSRF enabled. It is excluded from deployment. See the frontend README for its browser test command. Production builds remain independent of the sibling repository.
+
 ## Structure
 
 - `app.py`, `build.py`: API entrypoint and additive deployment migrations.

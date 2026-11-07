@@ -233,6 +233,12 @@ def test_duration_only_time_never_proves_rn_coverage(app, facility):
         db.session.commit()
         assert rn_coverage(facility.id, day)["covered_minutes"] == 0
         assert rn_coverage(facility.id, day)["coverage_known"] is False
+        from carelog.domain.reports import compute_quarter_stats
+
+        report = compute_quarter_stats(facility.id, 2026, 1)
+        august = next(row for row in report["monthly_rn_coverage"] if row["month"] == 8)
+        assert august["coverage_pct"] is None
+        assert "unavailable" in august["basis"]
 
 
 def test_ambiguous_dates_and_non_direct_titles_need_review():

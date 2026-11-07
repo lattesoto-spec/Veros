@@ -183,6 +183,17 @@ def compute_quarter_stats(facility_id: int, year: int, quarter: int) -> dict:
         "PCA": totals["pca_minutes"],
     }
     obd = totals["bed_days"]
+    worked_dates = {
+        row[0]
+        for row in db.session.query(Shift.date)
+        .filter(
+            Shift.facility_id == facility_id,
+            Shift.evidence_type == "worked",
+            Shift.date >= start,
+            Shift.date <= end,
+        )
+        .distinct()
+    }
     # Monthly 24/7 RN coverage %.
     monthly_rn = []
     for y, m in _months_in_range(start, end):
@@ -195,10 +206,15 @@ def compute_quarter_stats(facility_id: int, year: int, quarter: int) -> dict:
         )
         covered = 0
         days_count = 0
+        unknown_clock_dates = 0
         d = month_first
         while data_last and d <= data_last:
-            covered += rn_coverage(facility_id, d)["covered_minutes"]
-            days_count += 1
+            coverage = rn_coverage(facility_id, d)
+            if d in worked_dates and coverage["coverage_known"]:
+                covered += coverage["covered_minutes"]
+                days_count += 1
+            else:
+                unknown_clock_dates += 1
             d += timedelta(days=1)
         pct = covered / (days_count * 1440) * 100 if days_count else None
         basis = (
@@ -208,6 +224,8 @@ def compute_quarter_stats(facility_id: int, year: int, quarter: int) -> dict:
             if data_last
             else "No actual-worked data"
         )
+        if unknown_clock_dates:
+            basis = f"{days_count} observed dates; {unknown_clock_dates} unavailable"
         monthly_rn.append(
             {
                 "year": y,
@@ -226,6 +244,10 @@ def compute_quarter_stats(facility_id: int, year: int, quarter: int) -> dict:
 
     worked_hours = {role: round(m / 60, 1) for role, m in worked_minutes.items()}
     blockers = []
+    if any(row["basis"].endswith("unavailable") for row in monthly_rn):
+        blockers.append(
+            "Some worked dates lack verifiable clock intervals for RN continuity; review the monthly coverage basis."
+        )
     if latest_worked is None or latest_worked < end:
         blockers.append(
             f"Actual-worked data ends {latest_worked.isoformat() if latest_worked else 'before the period'}; "
@@ -569,7 +591,7 @@ def _rn_coverage_table(stats: dict) -> Table:
         pct = (
             f"{row['coverage_pct']:.2f}%"
             if row["coverage_pct"] is not None
-            else "No worked data"
+            else "Not available"
         )
         data.append([row["label"], pct, row["basis"]])
     t = Table(data, colWidths=[60 * mm, 45 * mm, 65 * mm])

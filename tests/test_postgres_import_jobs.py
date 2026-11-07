@@ -111,6 +111,24 @@ def test_duplicate_names_rejected_before_storage(pg_app):
     assert ImportJob.query.count() == 0
 
 
+def test_missing_worker_fails_readiness_and_retains_the_source(pg_app, monkeypatch):
+    app, facility, storage = pg_app
+    monkeypatch.delenv("WORKER_SECRET")
+    job_id = jobs.start_job(
+        app,
+        facility.id,
+        [("source.csv", b"retained original")],
+        storage,
+        organization_id=facility.organization_id,
+    )
+    job = db.session.get(ImportJob, job_id)
+    assert job.status == "failed"
+    assert storage.get(f"{job.storage_prefix}/source.csv") == b"retained original"
+    response = app.test_client().get("/healthz")
+    assert response.status_code == 503
+    assert response.json["worker_configured"] is False
+
+
 def test_additive_provenance_migration_keeps_rows(pg_app):
     from sqlalchemy import text, inspect
 

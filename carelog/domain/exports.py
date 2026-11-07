@@ -266,7 +266,13 @@ def board_pdf(facility, today: date) -> bytes:
                 f"{fc['projected_avg']:.1f}",
                 "On track" if fc["on_track"] else "AT RISK",
             ],
-            ["RN 24/7 coverage (today)", f"{cov['coverage_pct']:.1f}%", ""],
+            [
+                "RN coverage, included date",
+                f"{cov['coverage_pct']:.1f}%"
+                if cov["coverage_known"]
+                else "Clock intervals unavailable",
+                "",
+            ],
         ]
         t = Table(kpi_rows, colWidths=[70 * mm, 55 * mm, 40 * mm])
         t.setStyle(

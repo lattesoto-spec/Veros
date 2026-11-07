@@ -87,14 +87,25 @@ def create_app(test_config=None):
 
         drift = _schema_drift() if uri and not problems else None
         parser = parser_status()
-        ready = not problems and not drift and parser["ready"]
+        readiness_problems = list(problems)
+        worker_configured = worker_mode() != "invoke" or bool(
+            os.environ.get("WORKER_SECRET")
+        )
+        if not worker_configured:
+            readiness_problems.append("The import worker is not configured.")
+        if os.environ.get("VERCEL") and not find_blob_token()[0]:
+            readiness_problems.append(
+                "Retained source storage is not configured for this Vercel deployment."
+            )
+        ready = not readiness_problems and not drift and parser["ready"]
         return jsonify(
             ok=ready,
-            problems=problems,
+            problems=readiness_problems,
             schema_drift=drift,
             database="configured" if uri else "missing",
             storage="vercel_blob" if find_blob_token()[0] else "local",
             worker=worker_mode(),
+            worker_configured=worker_configured,
             parser=parser,
         ), 200 if ready else 503
 
