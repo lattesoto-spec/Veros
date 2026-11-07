@@ -87,3 +87,15 @@ Original source files remain retained on failure. Changes to care data and recei
 - An unfamiliar layout, or an analyzer failure, puts the job in `mapping` rather than `failed`. `GET/POST /api/import/<id>/mapping` shows the raw grid and accepts the reviewer's header row, record type, columns, date format and row filter. `ingestion/manual.py` validates the choices and builds an ordinary mapping spec, which is then reviewed and confirmed like any other import.
 - Direct-care and occupied-bed-day fields are required in a manual mapping. "Every row" is an explicit reviewer choice, shown as a fixed value at review.
 - The built-in daily care layout now records occupancy as a real boolean; it would otherwise have been rejected by census validation.
+
+## Paid is not worked, and evidence stays honest
+
+- `ingestion/paycodes.py` treats a shift line as worked only if its category is an exact known worked name or a provider decision says so. Leave, training and allowances stay out, and unknown categories block confirmation. `PayCategoryRule` records each decision per organisation, with a basis. A pay column on a shift sheet is read even when unmapped, so leaving it out cannot count every line. `CALC_VERSION` is `2026.11.7`.
+- The daily care summary preset is removed because it asserted occupancy. Analyzer specs cannot fix occupancy or service type to a constant. Census updates ignore blanks, keep earlier versions in `ResidentDay.revisions_json`, list changes at review and are undone with their import.
+- Ambiguous day/month dates are refused for slash, dash, dot and datetime forms.
+- Restoring a voided row applies the import's duration rule. A re-import matching a void leaves the row out and lists it. A role change opens a new `Staff` record with the same source ID rather than blocking the batch. `/import/<id>/verify-source` records a provider's verification in the mapping spec, so a corrected export runs a normal replacement. A planned signal still wins.
+- `quarterly_tests` is provisional while unverified time exists, and counts a date as evidenced only by care-role direct-care rows. `rn_coverage` reports `withheld_minutes` for RN shifts awaiting review, leaving that time unassessed rather than a gap. A missing target raises a review alert.
+- Facility and import deletion need `delete_organization_data` and a reason. `POST /import/<id>/purge` erases an uncommitted upload. Review samples are cleared on completion, cancellation and deletion. Provider decision history includes support access.
+- Sign-out advances `User.session_epoch`, so a copied cookie stops working without revoking trusted devices. Sessions have a 12-hour absolute limit.
+- `QuarterClosure` keeps figures, the statement PDF with its SHA-256, source hashes and calculation version for a finished quarter. Reports shows when live figures have moved.
+- Shifts spanning a daylight-saving change are flagged at import. Their minutes still use clock-face arithmetic.

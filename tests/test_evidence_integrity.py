@@ -309,17 +309,16 @@ def test_source_role_changes_cannot_reclassify_old_worked_time(app, facility):
         }
         _import_shifts(facility, [record], outcome, "worked")
         db.session.commit()
-        with pytest.raises(MappingError, match="source role changed"):
-            _import_shifts(
-                facility,
-                [
-                    {
-                        **record,
-                        "role": "RN",
-                        "source_role": "Registered Nurse",
-                        "date": date(2026, 9, 1),
-                    }
-                ],
-                outcome,
-                "worked",
-            )
+        _import_shifts(
+            facility,
+            [{**record, "role": "RN", "source_role": "Registered Nurse", "date": date(2026, 9, 1)}],
+            outcome,
+            "worked",
+        )
+        db.session.commit()
+        versions = Staff.query.filter_by(staff_id="W1").order_by(Staff.id).all()
+        assert [member.source_role for member in versions] == ["Personal Care Worker", "Registered Nurse"]
+        assert "Role changed from Personal Care Worker" in versions[1].eligibility_reason
+        august = Shift.query.filter_by(date=date(2026, 8, 1)).one()
+        september = Shift.query.filter_by(date=date(2026, 9, 1)).one()
+        assert august.staff_id == versions[0].id and september.staff_id == versions[1].id

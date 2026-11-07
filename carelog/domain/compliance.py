@@ -18,7 +18,7 @@ from carelog.domain.care_minutes import (
 from carelog.domain import eligibility
 from carelog.models import CareEpisode, Resident, ResidentDay, Shift, Staff, db
 
-CALC_VERSION = "2026.11.6"
+CALC_VERSION = "2026.11.7"
 
 # Canonical reporting buckets. The mapping engine normalizes to PCW; the
 # government statement calls the bucket PCA — they are the same bucket.
@@ -204,7 +204,7 @@ def rn_coverage(
         )
         .all()
     )
-    intervals, unknown = [], False
+    intervals, withheld, unknown = [], [], False
     for shift, staff in shifts:
         if eligibility.bucket_for(staff.role) != "RN":
             continue
@@ -222,8 +222,11 @@ def rn_coverage(
             boundary = min(
                 end, datetime.combine(cursor.date() + timedelta(days=1), time(0))
             )
+            portion = (max(cursor, window_start), min(boundary, window_end))
             if eligibility.counts_toward_care(staff, cursor.date()):
-                intervals.append((max(cursor, window_start), min(boundary, window_end)))
+                intervals.append(portion)
+            elif staff.eligibility_status != eligibility.EXCLUDED:
+                withheld.append(portion)
             cursor = boundary
     merged = []
     for start, end in sorted(intervals):
@@ -266,7 +269,20 @@ def rn_coverage(
                 }
             )
         cursor = max(cursor, end)
+    # An RN shift awaiting review is not an RN gap. It is not coverage either,
+    # so the part of a gap it could fill stays unassessed until someone decides.
+    withheld_minutes = 0
+    for start, end in withheld:
+        left, right = max(start, day_start), min(end, day_end)
+        for gap in gaps:
+            gap_left = day_start + timedelta(minutes=gap["start_minute"])
+            gap_right = day_start + timedelta(minutes=gap["end_minute"])
+            overlap = (min(right, gap_right) - max(left, gap_left)).total_seconds()
+            if overlap > 0:
+                withheld_minutes += int(overlap / 60)
+    unknown = unknown or withheld_minutes > 0
     return {
+        "withheld_minutes": withheld_minutes,
         "covered_minutes": covered,
         "coverage_pct": round(covered / 1440 * 100, 1),
         "full_coverage": not unknown and not any(g["reportable"] for g in gaps),
@@ -392,7 +408,18 @@ def detect_gaps(facility, today: date) -> list[dict]:
 
     # 24/7 RN coverage today
     cov = rn_coverage(fid, today)
-    if not cov["full_coverage"] and cov["covered_minutes"] > 0:
+    if cov["withheld_minutes"]:
+        alerts.append(
+            {
+                "severity": "medium",
+                "message": (
+                    f"RN coverage on {today.isoformat()} cannot be assessed: "
+                    f"{cov['withheld_minutes']} RN minutes await eligibility or "
+                    "credential review. This is not a confirmed gap."
+                ),
+            }
+        )
+    elif not cov["full_coverage"] and cov["covered_minutes"] > 0:
         alerts.append(
             {
                 "severity": "medium",
@@ -410,6 +437,16 @@ def detect_gaps(facility, today: date) -> list[dict]:
             }
         )
 
+    if not approved:
+        alerts.append(
+            {
+                "severity": "medium",
+                "message": (
+                    "No approved target is recorded for this quarter, so care minutes "
+                    "cannot be compared. Record it in Settings."
+                ),
+            }
+        )
     if not alerts:
         alerts.append(
             {
@@ -628,10 +665,32 @@ def quarterly_tests(facility, start: date, end: date) -> dict:
         limitations.append(f"{t['excluded_minutes']} worked minutes are withheld pending eligibility, effective-date or registration review.")
     if t["zero_bed_day_worked_dates"]:
         limitations.append("Eligible worked minutes occur on zero-occupied-bed-day dates: " + ", ".join(t["zero_bed_day_worked_dates"]) + ". Reconcile their allocation before a verdict.")
-    worked_dates = {row[0] for row in db.session.query(Shift.date).filter(
-        Shift.facility_id == facility.id, Shift.evidence_type == "worked",
-        Shift.date >= start, Shift.date <= end,
-    ).distinct().all()}
+    # A date is only evidenced by care staff. One cleaner's shift does not show
+    # that the day's care time is complete.
+    worked_dates = {
+        day
+        for day, role in db.session.query(Shift.date, Staff.role)
+        .join(Staff, Shift.staff_id == Staff.id)
+        .filter(
+            Shift.facility_id == facility.id, Shift.evidence_type == "worked",
+            Shift.is_direct_care.is_(True), Shift.date >= start, Shift.date <= end,
+        )
+        .distinct()
+        .all()
+        if eligibility.bucket_for(role) in eligibility.ELIGIBLE_BUCKETS
+    }
+    unverified = sum(
+        worked_minutes(shift)
+        for shift in Shift.query.filter(
+            Shift.facility_id == facility.id, Shift.evidence_type == "unverified",
+            Shift.is_direct_care.is_(True), Shift.date >= start, Shift.date <= end,
+        )
+    )
+    if unverified:
+        limitations.append(
+            f"{unverified} minutes of unverified time are outside this result. "
+            "Verify or remove that source before relying on a verdict."
+        )
     missing_dates = [start + timedelta(days=i) for i in range((end - start).days + 1)
                      if start + timedelta(days=i) not in worked_dates]
     if missing_dates:

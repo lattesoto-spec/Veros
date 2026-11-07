@@ -120,20 +120,6 @@ def matching_spec(sheets) -> dict | None:
                     "minutes": {"column": "Duration (min)", "parse": "number"},
                 },
             })
-        elif {
-            "Date", "Resident ID", "Resident Name", "RN Minutes Delivered",
-            "Total Care Minutes Delivered",
-        }.issubset(headers):
-            targets.append({
-                "kind": "resident_days", "sheet": sheet.name,
-                "fields": {
-                    "date": {"column": "Date", "parse": "date"},
-                    "resident_id": {"column": "Resident ID"},
-                    "resident_name": {"column": "Resident Name"},
-                    "occupied": {"source": "constant", "value": "true", "parse": "boolean"},
-                    "service_type": {"source": "constant", "value": "an_acc"},
-                },
-            })
     if not targets:
         return None
     return {"targets": targets, "reasoning": "exact built-in evidence layout"}

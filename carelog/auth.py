@@ -149,7 +149,13 @@ def current_user() -> User | None:
         return None
     now = time.time()
     last_activity = session.get("last_activity_at")
-    if not isinstance(last_activity, (int, float)) or now - last_activity > current_app.config.get("SESSION_IDLE_SECONDS", 1800):
+    started = session.get("signed_in_at", now)
+    if (
+        session.get("session_epoch", 0) != (user.session_epoch or 0)
+        or now - started > current_app.config.get("SESSION_ABSOLUTE_SECONDS", 12 * 3600)
+        or not isinstance(last_activity, (int, float))
+        or now - last_activity > current_app.config.get("SESSION_IDLE_SECONDS", 1800)
+    ):
         session.clear()
         return None
     session["last_activity_at"] = now
@@ -597,7 +603,8 @@ def _finalize_login(user: User, method: str, remember_device: bool = False):
     session.clear()
     session["user_id"] = user.id
     session["auth_version"] = user.auth_version
-    session["last_activity_at"] = time.time()
+    session["last_activity_at"] = session["signed_in_at"] = time.time()
+    session["session_epoch"] = user.session_epoch or 0
     session.permanent = True
     user.last_login_at = datetime.utcnow()
     record_auth("login", user, f"second_step={method}")
@@ -699,6 +706,8 @@ def logout():
         if device:
             device.revoked_at = datetime.utcnow()
         record("logout")
+        # Signed cookies live in the browser, so a copy would outlive session.clear().
+        user.session_epoch = (user.session_epoch or 0) + 1
         db.session.commit()
     session.clear()
     response = make_response(navigate(url_for("auth.login")))

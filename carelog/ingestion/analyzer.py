@@ -241,6 +241,12 @@ def _clean_spec(spec: dict) -> dict:
                 continue
             if not isinstance(fs, dict):
                 raise ValueError(f"field {name!r} must contain an object")
+            if (
+                ct["kind"] == "resident_days"
+                and name in ("occupied", "service_type")
+                and fs.get("source") == "constant"
+            ):
+                raise ValueError(f"{name} must come from the file, never a fixed value")
             cf = {k: v for k, v in fs.items() if v is not None}
             if not cf:
                 continue

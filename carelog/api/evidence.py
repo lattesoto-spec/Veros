@@ -133,6 +133,16 @@ def restore_shift(shift_id):
                         evidence_type=stream, today=facility_today(facility))
     except MappingError as error:
         return {"error": str(error).replace("Correct the source and upload again.", "Void the other row first.")}, 409
+    # Same rule as import: a duration has no interval, so it cannot be shown
+    # not to overlap, unless payroll categories mark them as separate lines.
+    for other in active:
+        separate_lines = (
+            not row.coverage_known and not other.coverage_known
+            and row.pay_category and other.pay_category
+            and row.pay_category != other.pay_category
+        )
+        if other.date == row.date and not separate_lines and not (row.coverage_known and other.coverage_known):
+            return {"error": "Another active row covers this person and date, so restoring would double count. Void the other row first."}, 409
     row.evidence_type, row.prior_evidence_type = stream, None
     row.void_reason = row.voided_at = row.voided_by_user_id = None
     auth.record("shift_restored", "shift", row.id, f"{_shift_label(row)}; basis: {reason}")

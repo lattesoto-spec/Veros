@@ -1,6 +1,6 @@
 """Correction workflow: nothing a provider fixes may hide or double count time."""
 import json
-from datetime import date, datetime
+from datetime import date, datetime, time
 
 import pytest
 
@@ -162,7 +162,7 @@ def test_deleting_an_import_restores_what_it_replaced(home):
 
     client = app.test_client()
     sign_in_as(client, ids["admin"])
-    assert client.post(f"/api/audit/receipt/{job.receipt_id}/delete", data={"confirm": "delete"}).status_code == 200
+    assert client.post(f"/api/audit/receipt/{job.receipt_id}/delete", data={"confirm": "delete", "reason": "Wrong file"}).status_code == 200
     assert worked_total(facility) == 3 * 480
     assert Shift.query.filter_by(evidence_type="superseded").count() == 0
 
@@ -177,7 +177,7 @@ def test_delete_does_not_restore_rows_newer_evidence_already_covers(home):
 
     client = app.test_client()
     sign_in_as(client, ids["admin"])
-    assert client.post(f"/api/audit/receipt/{middle.receipt_id}/delete", data={"confirm": "delete"}).status_code == 200
+    assert client.post(f"/api/audit/receipt/{middle.receipt_id}/delete", data={"confirm": "delete", "reason": "Wrong file"}).status_code == 200
     assert worked_total(facility) == 480
 
 
@@ -215,10 +215,125 @@ def test_restore_refuses_to_double_count_a_replacement_row(home):
     row = Shift.query.filter_by(evidence_type="worked").one()
     client = app.test_client()
     sign_in_as(client, ids["admin"])
-    client.post(f"/api/audit/shift/{row.id}/void", data={"reason": "Wrong file"})
-    run_import(app, ids, facility, timesheet(("A", "2026-08-01")), name="right.csv")
+    client.post(f"/api/audit/shift/{row.id}/void", data={"reason": "Wrong times"})
+    later = timesheet(("A", "2026-08-01")).replace(b"08:00,16:00", b"09:00,15:00")
+    run_import(app, ids, facility, later, name="right.csv")
     assert client.post(f"/api/audit/shift/{row.id}/restore", data={"reason": "oops"}).status_code == 409
+    assert worked_total(facility) == 360
+
+
+def test_restore_applies_the_import_rule_to_duration_rows(home):
+    app, ids, facility = home
+    member = Staff(facility_id=facility.id, staff_id="D1", name="Dur", role="RN", source_role="Registered Nurse")
+    db.session.add(member)
+    db.session.flush()
+    common = dict(facility_id=facility.id, staff_id=member.id, date=date(2026, 8, 1), start_time=time(0),
+                  end_time=time(0), coverage_known=False)
+    voided = Shift(**common, duration_minutes=480, evidence_type="voided", prior_evidence_type="worked")
+    active = Shift(**common, duration_minutes=420, evidence_type="worked")
+    db.session.add_all([voided, active])
+    db.session.commit()
+    client = app.test_client()
+    sign_in_as(client, ids["admin"])
+    assert client.post(f"/api/audit/shift/{voided.id}/restore", data={"reason": "oops"}).status_code == 409
+    assert voided.evidence_type == "voided"
+
+    voided.pay_category, active.pay_category = "Overtime", "Ordinary"
+    db.session.commit()
+    assert client.post(f"/api/audit/shift/{voided.id}/restore", data={"reason": "Second line"}).status_code == 200
+
+
+def test_a_cumulative_export_cannot_undo_a_void(home):
+    app, ids, facility = home
+    run_import(app, ids, facility, timesheet(("A", "2026-08-01"), ("B", "2026-08-02")))
+    approve_everyone(facility)
+    row = Shift.query.filter_by(date=date(2026, 8, 2)).one()
+    client = app.test_client()
+    sign_in_as(client, ids["admin"])
+    client.post(f"/api/audit/shift/{row.id}/void", data={"reason": "No-show"})
+    _, review = run_import(app, ids, facility, timesheet(("A", "2026-08-01"), ("B", "2026-08-02")), name="cumulative.csv")
+    assert review["impact"]["void_matches"][0]["reason"] == "No-show"
+    assert review["impact"]["shifts_imported"] == 1
     assert worked_total(facility) == 480
+
+
+def test_role_change_opens_a_new_record_and_never_blocks_the_batch(home):
+    app, ids, facility = home
+    run_import(app, ids, facility, timesheet(("A", "2026-08-01"), ("B", "2026-08-01")))
+    approve_everyone(facility)
+    changed = timesheet(("A", "2026-08-02"), ("B", "2026-08-02")).replace(
+        b"A,A Name,Registered Nurse", b"A,A Name,RN Level 2 Educator")
+    run_import(app, ids, facility, changed, name="later.csv")
+    records = Staff.query.filter_by(staff_id="A").order_by(Staff.id).all()
+    assert [m.source_role for m in records] == ["Registered Nurse", "RN Level 2 Educator"]
+    assert records[1].registration_number == "NMW0001"
+    assert records[0].eligibility_status == "approved"
+    assert worked_total(facility) == 3 * 480
+    assert Shift.query.filter_by(staff_id=records[1].id).count() == 1
+
+
+def test_verified_source_runs_a_reviewed_replacement_and_is_remembered(home):
+    app, ids, facility = home
+    plain = b"Staff ID,Staff Name,Role,Day,Start,Finish\nA,A Name,Registered Nurse,2026-08-01,08:00,16:00\n"
+    spec = {"targets": [{"kind": "shifts", "sheet": sheet_name("f.csv", plain), "fields": {
+        "staff_id": {"column": "Staff ID"}, "role": {"column": "Role", "normalize": "role"},
+        "date": {"column": "Day", "parse": "date"}, "start_time": {"column": "Start", "parse": "time"},
+        "end_time": {"column": "Finish", "parse": "time"}}}], "reasoning": "test"}
+    storage = LocalStorage(app.config["UPLOADS_DIR"])
+
+    def prepare(name, data):
+        job_id = jobs.start_job(app, facility.id, [(name, data)], storage,
+                                organization_id=ids["customer"], user_id=ids["admin"])
+        job = db.session.get(ImportJob, job_id)
+        job.manual_specs_json = json.dumps({name: spec})
+        db.session.commit()
+        jobs.run_job(job_id)
+        return job_id
+
+    job_id = prepare("f.csv", plain)
+    client = app.test_client()
+    sign_in_as(client, ids["admin"])
+    assert json.loads(db.session.get(ImportJob, job_id).review_json)["outcomes"][0]["results"][0]["evidence_type"] == "unverified"
+    assert client.post(f"/api/import/{job_id}/verify-source", data={}).status_code == 400
+    assert client.post(f"/api/import/{job_id}/verify-source", data={"basis": "Checked against Kronos clock data"}).status_code == 200
+    jobs.run_job(job_id)
+    review = json.loads(db.session.get(ImportJob, job_id).review_json)
+    result = review["outcomes"][0]["results"][0]
+    assert result["evidence_type"] == "worked" and "Kronos" in result["evidence_basis"]
+    assert AuditLog.query.filter_by(action="source_verified").count() == 1
+
+
+def test_verify_source_refuses_a_roster(home):
+    app, ids, facility = home
+    roster = b"Staff ID,Role,Date,Scheduled Start,Scheduled Finish\nA,Registered Nurse,2026-08-01,08:00,16:00\n"
+    name = "roster.csv"
+    job_id = jobs.start_job(app, facility.id, [(name, roster)], LocalStorage(app.config["UPLOADS_DIR"]),
+                            organization_id=ids["customer"], user_id=ids["admin"])
+    job = db.session.get(ImportJob, job_id)
+    job.manual_specs_json = json.dumps({name: {"targets": [{"kind": "shifts", "sheet": sheet_name(name, roster), "fields": {
+        "staff_id": {"column": "Staff ID"}, "role": {"column": "Role", "normalize": "role"},
+        "date": {"column": "Date", "parse": "date"}, "start_time": {"column": "Scheduled Start", "parse": "time"},
+        "end_time": {"column": "Scheduled Finish", "parse": "time"}}}], "reasoning": "t"}})
+    db.session.commit()
+    jobs.run_job(job_id)
+    client = app.test_client()
+    sign_in_as(client, ids["admin"])
+    assert client.post(f"/api/import/{job_id}/verify-source", data={"basis": "x"}).status_code == 400
+
+
+def test_retry_keeps_the_reviewers_mapping(home):
+    app, ids, facility = home
+    data = timesheet(("A", "2026-08-01"))
+    storage = LocalStorage(app.config["UPLOADS_DIR"])
+    job_id = jobs.start_job(app, facility.id, [("t.csv", data)], storage, organization_id=ids["customer"], user_id=ids["admin"])
+    job = db.session.get(ImportJob, job_id)
+    job.manual_specs_json = json.dumps({"t.csv": SPEC})
+    job.status = "failed"
+    db.session.commit()
+    client = app.test_client()
+    sign_in_as(client, ids["admin"])
+    new_id = client.post(f"/api/import/{job_id}/retry").json["navigate"].rsplit("/", 1)[-1]
+    assert json.loads(db.session.get(ImportJob, new_id).manual_specs_json) == {"t.csv": SPEC}
 
 
 def test_reviewers_only_can_void(home):

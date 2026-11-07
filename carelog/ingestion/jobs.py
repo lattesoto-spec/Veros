@@ -79,6 +79,7 @@ def start_job(
     storage,
     organization_id: int | None = None,
     user_id: int | None = None,
+    manual_specs_json: str | None = None,
 ) -> str:
     """Persist the uploads as audit evidence, record the job, dispatch it."""
     names = [os.path.basename(name) for name, _ in payloads]
@@ -102,6 +103,7 @@ def start_job(
         started_by_user_id=user_id,
         status="retaining",
         evidence_type="auto",
+        manual_specs_json=manual_specs_json,
         storage_prefix=prefix,
         files_json=json.dumps(
             [
@@ -282,7 +284,7 @@ def run_job(job_id: str):
                         detail=f"{retired} shift rows in the file's date range were absent from the corrected export and retained as superseded",
                     )
                 )
-            _touch(job, status="done")
+            _touch(job, status="done", review_json=without_personal_samples(job.review_json))
     except MappingRequired:
         db.session.rollback()
         _await_mapping(job_id)
@@ -432,6 +434,18 @@ def _process(job: ImportJob, review=None):
             "resident_days_imported": receipt.resident_days_imported,
             "care_episodes_imported": receipt.care_episodes_imported,
             "care_episodes_replaced": sum(o.care_episodes_replaced for o in outcomes),
+            "census_changed": sum(o.census_changed for o in outcomes),
+            "census_changes": [c for o in outcomes for c in o.census_changes][:10],
+            "void_matches": [m for o in outcomes for m in o.void_matches][:20],
+            "pay_unknown": sorted(
+                {
+                    item["category"]
+                    for o in outcomes
+                    for r in o.results
+                    for item in r.pay_categories
+                    if item["treatment"] == "unknown"
+                }
+            ),
             "period_rows": leftovers.count(),
             "period_sample": _period_sample(leftovers),
             "first_date": receipt.first_shift_date.isoformat()
@@ -442,6 +456,17 @@ def _process(job: ImportJob, review=None):
             else None,
         },
     }
+
+
+def without_personal_samples(review_json):
+    """Example values serve the review. They do not outlive it."""
+    if not review_json:
+        return review_json
+    review = json.loads(review_json)
+    review.pop("samples", None)
+    for name in ("period_sample", "census_changes", "void_matches"):
+        review.get("impact", {}).pop(name, None)
+    return json.dumps(review)
 
 
 def _shift_scopes(outcomes) -> list[dict]:
@@ -626,6 +651,7 @@ def _summarize(outcomes) -> list[dict]:
                     "rows_filtered": r.rows_filtered,
                     "evidence_type": r.evidence_type,
                     "evidence_basis": r.evidence_basis,
+                    "pay_categories": r.pay_categories,
                 }
                 for r in o.results
             ],

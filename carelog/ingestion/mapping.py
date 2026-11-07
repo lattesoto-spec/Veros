@@ -124,6 +124,7 @@ class TargetResult:
     rows_filtered: int = 0
     evidence_type: str | None = None
     evidence_basis: str | None = None
+    pay_categories: list[dict] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------- parsing
@@ -131,9 +132,11 @@ class TargetResult:
 
 def parse_date_value(s: str, fmt: str | None = None) -> date:
     s = s.strip()
-    if not fmt and re.fullmatch(r"\d{1,2}/\d{1,2}/\d{2,4}", s):
-        first, second, _ = s.split("/")
-        if int(first) <= 12 and int(second) <= 12 and first != second:
+    # Every separator, with or without a time: 03-04-2026 is as unclear as 03/04/2026.
+    numeric = re.match(r"(\d{1,2})[/.-](\d{1,2})[/.-]\d{2,4}(?:[ T]|$)", s)
+    if not fmt and numeric:
+        first, second = int(numeric.group(1)), int(numeric.group(2))
+        if first <= 12 and second <= 12 and first != second:
             raise ValueError(
                 "ambiguous date: specify the source date format or use YYYY-MM-DD"
             )

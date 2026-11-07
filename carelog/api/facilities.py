@@ -336,7 +336,7 @@ def facility_update(facility_id):
 
 
 @bp.route("/facilities/<int:facility_id>/delete", methods=["POST"])
-@require("manage_facility")
+@require("delete_organization_data")
 def facility_delete(facility_id):
     facility = (
         Facility.query.filter_by(
@@ -347,8 +347,9 @@ def facility_delete(facility_id):
     )
     if facility is None:
         abort(404)
-    if not _confirmed(request):
-        flash('Type "delete" to confirm. Nothing was deleted.')
+    reason = (form_data().get("reason") or "").strip()
+    if not _confirmed(request) or not reason:
+        flash('Type "delete" and record a reason. Nothing was deleted.')
         return navigate(url_for("api.facilities_view"))
 
     name = facility.name
@@ -362,7 +363,10 @@ def facility_delete(facility_id):
     _delete_facility_data([facility.id])
     db.session.delete(facility)
     auth.record(
-        "facility_deleted", "facility", facility_id, f"{name}, {files} evidence file(s)"
+        "facility_deleted",
+        "facility",
+        facility_id,
+        f"{name}, {files} evidence file(s); reason: {reason}",
     )
     db.session.commit()
     session.pop("facility_id", None)

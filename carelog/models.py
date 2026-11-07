@@ -45,6 +45,9 @@ class User(db.Model):
     # Credential, MFA and account-state changes increment it to revoke every
     # signed cookie immediately without needing server-side Flask sessions.
     auth_version = db.Column(db.Integer, nullable=False, default=1)
+    # Advances at sign-out. Kept apart from auth_version, which also binds
+    # trusted devices that a normal sign-out should not revoke.
+    session_epoch = db.Column(db.Integer, nullable=False, default=0)
     mfa_enabled = db.Column(db.Boolean, nullable=False, default=False)
     mfa_secret_encrypted = db.Column(db.Text)
     mfa_enrolled_at = db.Column(db.DateTime)
@@ -195,6 +198,8 @@ class ResidentDay(db.Model):
     source_file = db.Column(db.Text)
     source_sheet = db.Column(db.Text)
     source_page = db.Column(db.Integer)
+    # Earlier versions of this row, newest last, restored if an import is deleted.
+    revisions_json = db.Column(db.Text)
 
 
 class CareEpisode(db.Model):
@@ -303,6 +308,44 @@ class Shift(db.Model):
     source_file = db.Column(db.Text)
     source_sheet = db.Column(db.Text)
     source_page = db.Column(db.Integer)
+
+
+class PayCategoryRule(db.Model):
+    """A provider's recorded decision on whether a pay category is worked time."""
+
+    __tablename__ = "pay_category_rules"
+    __table_args__ = (
+        db.UniqueConstraint("organization_id", "category", name="uq_pay_rule_org_category"),
+    )
+    id = db.Column(db.Integer, primary_key=True)
+    organization_id = db.Column(db.Integer, db.ForeignKey("organizations.id"), nullable=False)
+    category = db.Column(db.Text, nullable=False)  # normalised
+    treatment = db.Column(db.Text, nullable=False)  # worked | excluded
+    basis = db.Column(db.Text, nullable=False)
+    decided_by_user_id = db.Column(db.Integer, db.ForeignKey("users.id"))
+    decided_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+
+class QuarterClosure(db.Model):
+    """Figures and the statement as issued. Reclosing adds a row; none is altered."""
+
+    __tablename__ = "quarter_closures"
+    __table_args__ = (db.Index("ix_quarter_closure_facility", "facility_id", "year", "quarter"),)
+    id = db.Column(db.Integer, primary_key=True)
+    organization_id = db.Column(db.Integer, db.ForeignKey("organizations.id"))
+    facility_id = db.Column(db.Integer, db.ForeignKey("facilities.id"), nullable=False)
+    year = db.Column(db.Integer, nullable=False)
+    quarter = db.Column(db.Integer, nullable=False)
+    closed_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    closed_by_user_id = db.Column(db.Integer, db.ForeignKey("users.id"))
+    closed_by = db.Column(db.Text)
+    basis = db.Column(db.Text, nullable=False)
+    calc_version = db.Column(db.Text, nullable=False)
+    provisional = db.Column(db.Boolean, nullable=False, default=False)
+    figures_json = db.Column(db.Text, nullable=False)
+    sources_json = db.Column(db.Text, nullable=False, default="[]")
+    pdf_key = db.Column(db.Text, nullable=False)
+    pdf_sha256 = db.Column(db.Text, nullable=False)
 
 
 class FormatMapping(db.Model):

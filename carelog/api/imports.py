@@ -32,6 +32,8 @@ from carelog.domain.compliance import (
 from carelog.ingestion import jobs as import_jobs
 from carelog.ingestion.fingerprint import fingerprint
 from carelog.ingestion.manual import build_spec, describe_file, public_catalogue
+from carelog.ingestion.paycodes import BLANK, EXCLUDED, WORKED, key as pay_key
+from carelog.ingestion.pipeline import restore_census_rows
 from carelog.ingestion.presets import matching_spec
 from carelog.ingestion.reader import FileReadError, read_upload
 from carelog.models import (
@@ -39,10 +41,10 @@ from carelog.models import (
     Facility,
     ImportJob,
     ImportReceipt,
-    ResidentDay,
     Shift,
     AuditLog,
     FormatMapping,
+    PayCategoryRule,
     db,
 )
 from carelog.services.targets import target_details, save_target
@@ -208,6 +210,11 @@ def import_status(job_id):
 def import_confirm(job_id):
     job = owned_or_404(import_jobs.get_job(job_id))
     replace_period = form_data().get("replace_period") == "1"
+    review = json.loads(job.review_json or "{}")
+    if review.get("impact", {}).get("pay_unknown"):
+        return {
+            "error": "Decide whether each pay category is worked time before importing."
+        }, 409
     changed = db.session.execute(
         update(ImportJob)
         .where(ImportJob.id == job.id, ImportJob.status == "review")
@@ -231,6 +238,104 @@ def import_confirm(job_id):
         "Reviewed column mapping, evidence class, dates and replacement scope"
         + ("; complete corrected export replaces the date range" if replace_period else ""),
     )
+    db.session.commit()
+    import_jobs.dispatch_job(current_app._get_current_object(), job.id)
+    return navigate(url_for("api.import_status", job_id=job.id))
+
+
+def _requeue_for_review(job, updates=None) -> bool:
+    """Prepare again with the interpretation reviewed so far, plus any changes.
+
+    A mapping is only stored on confirmation, so it travels with the job.
+    """
+    review = json.loads(job.review_json or "{}")
+    specs = {outcome["filename"]: outcome["spec"] for outcome in review.get("outcomes", [])}
+    specs.update(json.loads(job.manual_specs_json or "{}"))
+    specs.update(updates or {})
+    changed = db.session.execute(
+        update(ImportJob)
+        .where(ImportJob.id == job.id, ImportJob.status.in_(["mapping", "review"]))
+        .values(
+            status="queued",
+            error=None,
+            review_json=None,
+            approved_at=None,
+            receipt_id=None,
+            manual_specs_json=json.dumps(specs),
+            updated_at=datetime.utcnow(),
+        )
+    )
+    return changed.rowcount == 1
+
+
+@bp.post("/import/<job_id>/pay-categories")
+@require("review_eligibility")
+def import_pay_categories(job_id):
+    """Record which pay categories are worked time, for this and later imports."""
+    job = owned_or_404(import_jobs.get_job(job_id))
+    if job.status != "review":
+        return {"error": "This import is no longer awaiting review. Reload its status."}, 409
+    basis = (form_data().get("basis") or "").strip()
+    try:
+        decisions = json.loads(form_data().get("decisions") or "{}")
+    except json.JSONDecodeError:
+        decisions = None
+    if not isinstance(decisions, dict) or not decisions:
+        return {"error": "Choose a treatment for each pay category."}, 400
+    if not basis:
+        return {"error": "Record the basis for these pay category decisions."}, 400
+    if any(value not in (WORKED, EXCLUDED) for value in decisions.values()):
+        return {"error": "Each pay category must be worked or not worked."}, 400
+    for category, value in decisions.items():
+        name = pay_key("" if category == BLANK else category)
+        rule = PayCategoryRule.query.filter_by(
+            organization_id=job.organization_id, category=name
+        ).first() or PayCategoryRule(organization_id=job.organization_id, category=name)
+        rule.treatment, rule.basis = value, basis
+        rule.decided_by_user_id, rule.decided_at = current_user().id, datetime.utcnow()
+        db.session.add(rule)
+    if not _requeue_for_review(job):
+        db.session.rollback()
+        return {"error": "This import has moved on. Reload its status."}, 409
+    auth.record(
+        "pay_categories_decided", "import_job", job.id,
+        f"{json.dumps(decisions)}; basis: {basis}",
+    )
+    db.session.commit()
+    import_jobs.dispatch_job(current_app._get_current_object(), job.id)
+    return navigate(url_for("api.import_status", job_id=job.id))
+
+
+@bp.post("/import/<job_id>/verify-source")
+@require("manage_facility")
+def import_verify_source(job_id):
+    """Confirm this layout is actual time-and-attendance evidence, before import.
+
+    Unlike reclassifying a receipt afterwards, this runs a normal reviewed
+    replacement, and the same layout is recognised next time.
+    """
+    job = owned_or_404(import_jobs.get_job(job_id))
+    if job.status != "review":
+        return {"error": "This import is no longer awaiting review. Reload its status."}, 409
+    basis = (form_data().get("basis") or "").strip()
+    if not basis:
+        return {"error": "Record how you verified this source."}, 400
+    updates = {}
+    for outcome in json.loads(job.review_json or "{}").get("outcomes", []):
+        spec = outcome["spec"]
+        evidence = {r["sheet"]: r.get("evidence_type") for r in outcome["results"] if r["kind"] == "shifts"}
+        if "rostered" in evidence.values():
+            return {"error": "Planned roster evidence cannot be confirmed as actual worked. Upload actual time-and-attendance evidence."}, 400
+        for target in spec.get("targets", []):
+            if evidence.get(target.get("sheet")) == "unverified":
+                target["verified_source"] = basis
+                updates[outcome["filename"]] = spec
+    if not updates:
+        return {"error": "This import has no unverified shift evidence."}, 400
+    if not _requeue_for_review(job, updates):
+        db.session.rollback()
+        return {"error": "This import has moved on. Reload its status."}, 409
+    auth.record("source_verified", "import_job", job.id, f"Actual worked time; basis: {basis}")
     db.session.commit()
     import_jobs.dispatch_job(current_app._get_current_object(), job.id)
     return navigate(url_for("api.import_status", job_id=job.id))
@@ -298,22 +403,7 @@ def import_mapping(job_id):
             problems.append(f"{name}: choose what this file contains.")
     if problems:
         return {"error": " ".join(problems[:6])}, 400
-    changed = db.session.execute(
-        update(ImportJob)
-        .where(ImportJob.id == job.id, ImportJob.status.in_(["mapping", "review"]))
-        .values(
-            status="queued",
-            error=None,
-            review_json=None,
-            approved_at=None,
-            receipt_id=None,
-            manual_specs_json=json.dumps(
-                {**json.loads(job.manual_specs_json or "{}"), **specs}
-            ),
-            updated_at=datetime.utcnow(),
-        )
-    )
-    if changed.rowcount != 1:
+    if not _requeue_for_review(job, specs):
         db.session.rollback()
         return {"error": "This import has moved on. Reload its status."}, 409
     auth.record(
@@ -334,7 +424,11 @@ def import_cancel(job_id):
     changed = db.session.execute(
         update(ImportJob)
         .where(ImportJob.id == job.id, ImportJob.status.in_(["review", "mapping"]))
-        .values(status="cancelled", updated_at=datetime.utcnow())
+        .values(
+            status="cancelled",
+            review_json=import_jobs.without_personal_samples(job.review_json),
+            updated_at=datetime.utcnow(),
+        )
     )
     if changed.rowcount != 1:
         db.session.rollback()
@@ -347,6 +441,31 @@ def import_cancel(job_id):
     )
     db.session.commit()
     return navigate(url_for("api.import_status", job_id=job.id))
+
+
+@bp.post("/import/<job_id>/purge")
+@require("delete_organization_data")
+def import_purge(job_id):
+    """Erase an upload that never became care data, such as a wrong file."""
+    job = owned_or_404(import_jobs.get_job(job_id))
+    if job.status not in {"failed", "cancelled", "mapping", "review"} or job.receipt_id:
+        return {"error": "Only an import that was never committed can be erased here."}, 409
+    if not _confirmed(request):
+        return {"error": 'Type "delete" to confirm. Nothing was erased.'}, 400
+    reason = (form_data().get("reason") or "").strip()
+    if not reason:
+        return {"error": "Record why this upload is being erased."}, 400
+    store = _storage()
+    try:
+        removed = store.delete([item.key for item in store.list(job.storage_prefix)])
+    except StorageError:
+        return {"error": "Evidence storage could not confirm deletion. Nothing was erased; retry."}, 502
+    names = ", ".join(f["filename"] for f in json.loads(job.files_json))
+    auth.record("import_purged", "import_job", job.id, f"{names}; {removed} file(s); reason: {reason}")
+    db.session.delete(job)
+    db.session.commit()
+    flash(f"Upload erased: {removed} retained file(s) removed.")
+    return navigate(url_for("api.universal_import"))
 
 
 @bp.route("/import/<job_id>/retry", methods=["POST"])
@@ -394,6 +513,7 @@ def import_retry(job_id):
             _storage(),
             organization_id=current_organization_id(),
             user_id=current_user().id,
+            manual_specs_json=job.manual_specs_json,
         )
     except (FileReadError, StorageError) as error:
         return {"error": str(error)}, 400
@@ -498,6 +618,12 @@ def audit():
                     "import_retried",
                     "evidence_classified",
                     "import_mapping_saved",
+                    "pay_categories_decided",
+                    "import_purged",
+                    "quarter_closed",
+                    "platform_acting_as",
+                    "import_deleted",
+                    "source_verified",
                     "ai_mapping_changed",
                     "external_disclosure",
                     "shift_voided",
@@ -578,15 +704,16 @@ def _verify_retained(expected, data, entity, entity_id, filename):
 
 
 @bp.route("/audit/receipt/<int:receipt_id>/delete", methods=["POST"])
-@require("manage_facility")
+@require("delete_organization_data")
 def delete_receipt(receipt_id):
     """Delete one import: its rows, its receipt and its retained files."""
     receipt = owned_or_404(db.session.get(ImportReceipt, receipt_id))
     Facility.query.filter_by(
         id=receipt.facility_id, organization_id=current_organization_id()
     ).with_for_update().first()
-    if not _confirmed(request):
-        flash('Type "delete" to confirm. Nothing was deleted.')
+    reason = (form_data().get("reason") or "").strip()
+    if not _confirmed(request) or not reason:
+        flash('Type "delete" and record a reason. Nothing was deleted.')
         return navigate(url_for("api.audit"))
 
     try:
@@ -599,14 +726,12 @@ def delete_receipt(receipt_id):
     shifts = Shift.query.filter_by(import_receipt_id=receipt.id).delete(
         synchronize_session=False
     )
-    resident_days = ResidentDay.query.filter_by(import_receipt_id=receipt.id).delete(
-        synchronize_session=False
-    )
+    census_restored, resident_days = restore_census_rows(receipt.id)
     episodes = CareEpisode.query.filter_by(import_receipt_id=receipt.id).delete(
         synchronize_session=False
     )
     ImportJob.query.filter_by(receipt_id=receipt.id).update(
-        {"receipt_id": None}, synchronize_session=False
+        {"receipt_id": None, "review_json": None}, synchronize_session=False
     )
     db.session.delete(receipt)
     auth.record(
@@ -614,7 +739,7 @@ def delete_receipt(receipt_id):
         "import_receipt",
         receipt_id,
         f"{shifts} shifts, {resident_days} resident days, {episodes} care episodes, "
-        f"{files} evidence file(s); {restored} earlier shifts restored",
+        f"{files} evidence file(s); {restored} earlier shifts and {census_restored} earlier census rows restored; reason: {reason}",
     )
     db.session.commit()
     flash(

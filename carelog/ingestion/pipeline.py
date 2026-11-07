@@ -17,10 +17,12 @@ from carelog.domain.clock import facility_today
 from carelog.domain.eligibility import classify
 from carelog.models import (
     SUPERSEDED,
+    VOIDED,
     AuditLog,
     CareEpisode,
     FormatMapping,
     Organization,
+    PayCategoryRule,
     Resident,
     ResidentDay,
     Shift,
@@ -32,8 +34,9 @@ from .analyzer import ai_ready, generate_mapping_spec
 from .evidence import classify_shift_evidence
 from .fingerprint import fingerprint
 from .mapping import MappingError, TargetResult, apply_header_overrides, run_spec
+from .paycodes import pay_column, split_records
 from .presets import matching_spec
-from .quality import check_shifts
+from .quality import _minutes as record_minutes, check_shifts, daylight_saving_warnings
 from .reader import read_upload
 
 
@@ -99,6 +102,9 @@ class ImportOutcome:
     receipt: object = None
     parsers: list[str] = field(default_factory=list)
     sha256: str | None = None
+    census_changed: int = 0
+    census_changes: list[dict] = field(default_factory=list)
+    void_matches: list[dict] = field(default_factory=list)
 
 
 def get_or_create_mapping(
@@ -198,6 +204,7 @@ def ingest_file(
     if progress:
         progress("extracting rows")
     mapped_sheets = apply_header_overrides(spec, sheets)
+    _read_pay_columns(spec, mapped_sheets)
     results = run_spec(spec, mapped_sheets)
     for result in results:
         if not result.records:
@@ -227,13 +234,28 @@ def ingest_file(
     for r in results:
         if r.kind == "staff":
             _import_staff(facility, r.records, outcome)
+    rules = {
+        rule.category: rule.treatment
+        for rule in PayCategoryRule.query.filter_by(
+            organization_id=getattr(facility, "organization_id", None)
+        )
+    }
     for r in results:
         if r.kind == "shifts":
+            r.records, r.pay_categories = split_records(r.records, rules, record_minutes)
+            r.rows_filtered += sum(
+                item["rows"] for item in r.pay_categories if item["treatment"] != "worked"
+            )
             sheet = next(s for s in mapped_sheets if s.name == r.sheet)
             target = next(t for t in spec["targets"] if t["kind"] == "shifts" and t["sheet"] == r.sheet)
             auto_type, basis = classify_shift_evidence(filename, sheet, target)
             if evidence_type in ("worked", "rostered", "unverified"):
                 auto_type, basis = evidence_type, "server-side evidence override"
+            elif auto_type == "unverified" and target.get("verified_source"):
+                # A provider verified this layout as actual worked time. A
+                # planned or forecast signal in the file still takes precedence.
+                auto_type = "worked"
+                basis = f"Provider verification: {target['verified_source']}"
             r.evidence_type = auto_type
             r.evidence_basis = basis
             from .quality import validate_shifts
@@ -241,6 +263,10 @@ def ingest_file(
             local_today = facility_today(facility)
             validate_shifts(r.records, evidence_type=auto_type, today=local_today)
             outcome.warnings.extend(check_shifts(r.records, today=local_today))
+            organization = db.session.get(Organization, facility.organization_id)
+            outcome.warnings.extend(daylight_saving_warnings(
+                r.records, organization.timezone if organization else "Australia/Sydney"
+            ))
             _import_shifts(facility, r.records, outcome, evidence_type=auto_type)
         elif r.kind == "staff":
             continue
@@ -269,22 +295,61 @@ def _normalise_employment_type(value: str | None) -> str | None:
     return raw
 
 
-def _guard_role_history(member, raw_role):
-    if not raw_role or not member.source_role:
-        return
-    previous = classify(member.source_role)[:2]
+def _staff_directory(facility) -> dict[str, list]:
+    """Each person's records, one per role they have held at this facility."""
+    directory = {}
+    for member in Staff.query.filter_by(facility_id=facility.id).order_by(Staff.id):
+        directory.setdefault(member.staff_id, []).append(member)
+    return directory
+
+
+def _record_for_role(versions, raw_role):
+    """The record this title belongs to, or None when the role has changed."""
+    if not versions or not raw_role:
+        return versions[-1] if versions else None
     incoming = classify(raw_role)[:2]
-    if (
-        previous != incoming
-        and Shift.query.filter_by(
-            staff_id=member.id, facility_id=member.facility_id
-        ).first()
-    ):
-        raise MappingError(
-            f"Staff {member.staff_id}: the source role changed from {member.source_role!r} to {raw_role!r}. "
-            "Past worked records must not be reclassified silently. Review eligibility with explicit effective dates, "
-            "or export separate employment-role identifiers for a genuine role change. Nothing was imported."
+    return next(
+        (m for m in reversed(versions) if m.source_role == raw_role),
+        next(
+            (
+                m
+                for m in reversed(versions)
+                if not m.source_role or classify(m.source_role)[:2] == incoming
+            ),
+            None,
+        ),
+    )
+
+
+def _add_staff_record(facility, directory, sid, name, role, raw_role, status, reason):
+    """A role change opens a new record, so past minutes keep their old role.
+
+    Only the new record awaits review, and the rest of the batch can proceed.
+    """
+    previous = (directory.get(sid) or [None])[-1]
+    member = Staff(
+        facility_id=facility.id,
+        staff_id=sid,
+        name=name,
+        role=role,
+        source_role=raw_role,
+        eligibility_status=status,
+        eligibility_reason=reason,
+    )
+    if previous:
+        member.eligibility_reason = (
+            f"Role changed from {previous.source_role or previous.role} to "
+            f"{raw_role}. {reason or ''}".strip()
         )
+        for inherited in (
+            "registration_number", "registration_expiry", "employment_type",
+            "classification", "credential_gaps_json",
+        ):
+            setattr(member, inherited, getattr(previous, inherited))
+    db.session.add(member)
+    db.session.flush()
+    directory.setdefault(sid, []).append(member)
+    return member
 
 
 def record_credential_gap(member, new_expiry: date, today: date):
@@ -306,9 +371,7 @@ def record_credential_gap(member, new_expiry: date, today: date):
 
 
 def _import_staff(facility, records: list[dict], outcome: ImportOutcome):
-    cache = {
-        s.staff_id: s for s in Staff.query.filter_by(facility_id=facility.id).all()
-    }
+    directory = _staff_directory(facility)
     for rec in records:
         sid = str(rec["staff_id"]).strip()
         name = str(rec.get("staff_name") or "").strip() or sid
@@ -318,22 +381,12 @@ def _import_staff(facility, records: list[dict], outcome: ImportOutcome):
         if status == "approved" and bucket in ("RN", "EN", "PCA"):
             role = "PCW" if bucket == "PCA" else bucket
 
-        member = cache.get(sid)
+        member = _record_for_role(directory.get(sid), raw_role)
         if member is None:
-            member = Staff(
-                facility_id=facility.id,
-                staff_id=sid,
-                name=name,
-                role=role,
-                source_role=raw_role,
-                eligibility_status=status,
-                eligibility_reason=reason,
+            member = _add_staff_record(
+                facility, directory, sid, name, role, raw_role, status, reason
             )
-            db.session.add(member)
-            db.session.flush()
-            cache[sid] = member
         else:
-            _guard_role_history(member, raw_role)
             if rec.get("staff_name"):
                 member.name = name
             if member.approved_at is None and raw_role:
@@ -358,6 +411,22 @@ def _import_staff(facility, records: list[dict], outcome: ImportOutcome):
         outcome.staff_imported += 1
 
 
+def _read_pay_columns(spec, sheets):
+    """A pay column on a shift sheet is always read, mapped or not.
+
+    Otherwise leaving it unmapped would silently count every line as worked.
+    Keeping only chosen values with an include filter is an explicit decision.
+    """
+    for target in spec.get("targets", []):
+        if target.get("kind") != "shifts" or "pay_category" in target.get("fields", {}):
+            continue
+        sheet = next((s for s in sheets if s.name == target.get("sheet")), sheets[0])
+        column = pay_column(sheet.headers)
+        row_filter = target.get("row_filter") or {}
+        if column and not (row_filter.get("column") == column and row_filter.get("include_values")):
+            target.setdefault("fields", {})["pay_category"] = {"column": column}
+
+
 def retire_shifts(query, receipt_id) -> int:
     """Keep replaced rows on record, restorable if the replacing import goes."""
     if not receipt_id:
@@ -370,6 +439,34 @@ def retire_shifts(query, receipt_id) -> int:
         },
         synchronize_session=False,
     )
+
+
+def _shift_key(sid, day, start, end, duration, coverage_known):
+    return (sid, day, start, end) if coverage_known else (sid, day, duration)
+
+
+def _voided_keys(facility, records, evidence_type) -> dict:
+    if not records:
+        return {}
+    days = [rec["date"] for rec in records]
+    rows = (
+        db.session.query(Shift, Staff)
+        .join(Staff, Shift.staff_id == Staff.id)
+        .filter(
+            Shift.facility_id == facility.id,
+            Shift.evidence_type == VOIDED,
+            Shift.prior_evidence_type == evidence_type,
+            Shift.date >= min(days),
+            Shift.date <= max(days),
+        )
+    )
+    return {
+        _shift_key(
+            staff.staff_id, shift.date, shift.start_time, shift.end_time,
+            shift.duration_minutes, shift.coverage_known,
+        ): shift.void_reason or "Voided"
+        for shift, staff in rows
+    }
 
 
 def _import_shifts(
@@ -386,12 +483,14 @@ def _import_shifts(
     dates_by_staff = {}
     for rec in records:
         dates_by_staff.setdefault(str(rec["staff_id"]).strip(), set()).add(rec["date"])
+    directory = _staff_directory(facility)
+    person_of = {m.id: sid for sid, versions in directory.items() for m in versions}
     for sid, days in dates_by_staff.items():
-        member = Staff.query.filter_by(facility_id=facility.id, staff_id=sid).first()
-        if member:
+        members = [member.id for member in directory.get(sid, [])]
+        if members:
             query = Shift.query.filter(
                 Shift.facility_id == facility.id,
-                Shift.staff_id == member.id,
+                Shift.staff_id.in_(members),
                 Shift.evidence_type == evidence_type,
                 Shift.date.in_(days),
             )
@@ -408,9 +507,6 @@ def _import_shifts(
             outcome.shifts_replaced += retire_shifts(query, receipt_id)
     db.session.flush()
 
-    staff_cache = {
-        s.staff_id: s for s in Staff.query.filter_by(facility_id=facility.id).all()
-    }
     existing_by_staff = {}
     if records:
         earliest, latest = (
@@ -423,7 +519,8 @@ def _import_shifts(
             Shift.date >= earliest - timedelta(days=1),
             Shift.date <= latest + timedelta(days=1),
         ).all():
-            existing_by_staff.setdefault(existing.staff_id, []).append(existing)
+            existing_by_staff.setdefault(person_of[existing.staff_id], []).append(existing)
+    voided = _voided_keys(facility, records, evidence_type)
     for rec in records:
         sid = str(rec["staff_id"]).strip()
         role = (rec.get("role") or "OTHER").strip().upper() or "OTHER"
@@ -434,9 +531,12 @@ def _import_shifts(
         if status == "approved" and bucket in ("RN", "EN", "PCA"):
             role = "PCW" if bucket == "PCA" else bucket
 
-        staff = staff_cache.get(sid)
-        if staff:
-            _guard_role_history(staff, raw_role)
+        staff = _record_for_role(directory.get(sid), raw_role)
+        if staff is None:
+            staff = _add_staff_record(
+                facility, directory, sid, name, role, raw_role, status, reason
+            )
+        else:
             if rec.get("staff_name"):
                 staff.name = name
             # Any human decision is permanent until a human changes it. An
@@ -447,19 +547,6 @@ def _import_shifts(
                 staff.source_role = raw_role or staff.source_role
                 staff.eligibility_status = status
                 staff.eligibility_reason = reason
-        else:
-            staff = Staff(
-                facility_id=facility.id,
-                staff_id=sid,
-                name=name,
-                role=role,
-                source_role=raw_role,
-                eligibility_status=status,
-                eligibility_reason=reason,
-            )
-            db.session.add(staff)
-            db.session.flush()
-            staff_cache[sid] = staff
 
         break_minutes = _break_whole_minutes(rec.get("break_minutes"))
         start, end = rec.get("start_time"), rec.get("end_time")
@@ -470,7 +557,15 @@ def _import_shifts(
             start = end = time(0, 0)
 
         d = rec["date"]
-        previous = existing_by_staff.setdefault(staff.id, [])
+        void_reason = voided.get(_shift_key(sid, d, start, end, duration, coverage_known))
+        if void_reason is not None:
+            # Cumulative exports repeat old rows. A void stands until a person
+            # restores it, and review says what was left out.
+            outcome.void_matches.append(
+                {"staff": name, "date": d.isoformat(), "reason": void_reason}
+            )
+            continue
+        previous = existing_by_staff.setdefault(sid, [])
         pay_category = (str(rec.get("pay_category") or "").strip() or None)
         for old in previous:
             separate_payroll_line = (
@@ -586,6 +681,8 @@ def _import_resident_days(facility, records: list[dict], outcome: ImportOutcome)
             ),
             ancc_class=str(rec.get("ancc_class") or "").strip() or None,
             exclusion_reason=str(rec.get("exclusion_reason") or "").strip() or None,
+        )
+        lineage = dict(
             import_receipt_id=getattr(outcome.receipt, "id", None),
             source_row=rec.get("_source_row"),
             source_file=rec.get("_source_file"),
@@ -593,15 +690,61 @@ def _import_resident_days(facility, records: list[dict], outcome: ImportOutcome)
             source_page=rec.get("_source_page"),
         )
         if row:
-            for key, value in values.items():
-                setattr(row, key, value)
+            _update_census_row(row, values, lineage, outcome)
         else:
             db.session.add(
                 ResidentDay(
-                    facility_id=facility.id, resident_id=rid, date=day, **values
+                    facility_id=facility.id, resident_id=rid, date=day, **values, **lineage
                 )
             )
         outcome.resident_days_imported += 1
+
+
+def _update_census_row(row, values, lineage, outcome):
+    """Blank never erases verified census evidence, and each change is kept."""
+    changes = {
+        name: (getattr(row, name), value)
+        for name, value in values.items()
+        if value is not None and value != getattr(row, name)
+    }
+    if changes:
+        history = json.loads(row.revisions_json or "[]")
+        history.append({
+            name: getattr(row, name)
+            for name in (*values, *lineage)
+        })
+        row.revisions_json = json.dumps(history, default=str)
+        outcome.census_changed += 1
+        if len(outcome.census_changes) < 10:
+            outcome.census_changes.append({
+                "resident_id": row.resident_id,
+                "date": row.date.isoformat(),
+                "changes": [
+                    {"field": name, "from": old, "to": new}
+                    for name, (old, new) in changes.items()
+                    if name != "resident_name"
+                ],
+            })
+    for name, (_, value) in changes.items():
+        setattr(row, name, value)
+    for name, value in lineage.items():
+        setattr(row, name, value)
+
+
+def restore_census_rows(receipt_id) -> tuple[int, int]:
+    """Undo one import's census: earlier versions return, new rows go."""
+    restored = removed = 0
+    for row in ResidentDay.query.filter_by(import_receipt_id=receipt_id).all():
+        history = json.loads(row.revisions_json or "[]")
+        if not history:
+            db.session.delete(row)
+            removed += 1
+            continue
+        for name, value in history.pop().items():
+            setattr(row, name, value)
+        row.revisions_json = json.dumps(history) if history else None
+        restored += 1
+    return restored, removed
 
 
 def _import_care_episodes(facility, records: list[dict], outcome: ImportOutcome):

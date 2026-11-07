@@ -38,6 +38,7 @@ def public_review(review, include_samples=False):
                       "row_errors": outcome.get("row_errors", [])})
     impact = dict(review.get("impact", {}))
     if not include_samples:
-        impact.pop("period_sample", None)
+        for private in ("period_sample", "census_changes", "void_matches"):
+            impact.pop(private, None)
     return {"files": files, "impact": impact, "effect": review.get("effect", []),
             "basis": "Replaces only supplied staff/date/evidence groups and resident/date episode groups. Other dates and staff are preserved. Replaced shifts are retained and return if this import is later deleted. Resident census rows update by resident and date."}

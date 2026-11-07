@@ -218,11 +218,3 @@ def test_only_administrators_decide_external_mapping_and_it_is_audited(web_app):
     user.role = "facility_manager"
     db.session.commit()
     assert client.post("/api/settings/ai-mapping", data={"enabled": "0", "basis": "x"}).status_code == 403
-
-
-def test_built_in_daily_care_layout_records_occupancy_as_a_boolean():
-    from carelog.ingestion.mapping import run_spec
-    from carelog.ingestion.presets import matching_spec
-    headers = ["Date", "Resident ID", "Resident Name", "RN Minutes Delivered", "Total Care Minutes Delivered"]
-    sheet = Sheet(name="Care", headers=headers, rows=[dict(zip(headers, ["2026-08-01", "R1", "Res", "10", "20"]))])
-    assert run_spec(matching_spec([sheet]), [sheet])[0].records[0]["occupied"] is True

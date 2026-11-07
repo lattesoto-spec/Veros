@@ -149,9 +149,12 @@ def _delete_facility_data(facility_ids):
     ImportReceipt.query.filter(ImportReceipt.facility_id.in_(facility_ids)).delete(
         synchronize_session=False
     )
-    from carelog.models import FacilityTarget
+    from carelog.models import FacilityTarget, QuarterClosure
 
     FacilityTarget.query.filter(FacilityTarget.facility_id.in_(facility_ids)).delete(
+        synchronize_session=False
+    )
+    QuarterClosure.query.filter(QuarterClosure.facility_id.in_(facility_ids)).delete(
         synchronize_session=False
     )
     for model in (Staff, Resident):
@@ -190,6 +193,17 @@ def _purge_evidence(receipts, facility_ids=None) -> int:
         )
     )
     store = _storage()
+    if facility_ids is not None:
+        from carelog.models import QuarterClosure
+
+        keys = [
+            closure.pdf_key
+            for closure in QuarterClosure.query.filter(
+                QuarterClosure.facility_id.in_(facility_ids)
+            )
+        ]
+        if keys:
+            removed += store.delete(keys)
     for job in jobs:
         if job.storage_prefix and job.storage_prefix not in handled:
             removed += store.delete(

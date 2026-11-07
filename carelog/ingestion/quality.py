@@ -7,6 +7,7 @@ the user is told exactly what looks wrong.
 
 from datetime import date, datetime, time, timedelta
 from math import isfinite
+from zoneinfo import ZoneInfo
 
 from .mapping import MappingError
 
@@ -84,6 +85,22 @@ def _minutes(rec) -> float | None:
     else:
         return None
     return gross - (rec.get("break_minutes") or 0)
+
+
+def daylight_saving_warnings(records, zone_name) -> list[str]:
+    """Clock-face arithmetic is an hour out when a shift spans a clock change."""
+    zone = ZoneInfo(zone_name)
+    affected = []
+    for rec in records:
+        span = _span(rec)
+        if span and span[0].replace(tzinfo=zone).utcoffset() != span[1].replace(tzinfo=zone).utcoffset():
+            affected.append(f"{rec['staff_id']} on {rec['date']}")
+    if not affected:
+        return []
+    return [
+        "Daylight saving changed during these shifts, so their minutes may be an hour out. "
+        "Check them against the timesheet: " + ", ".join(affected[:10])
+    ]
 
 
 def check_shifts(records: list[dict], today: date | None = None) -> list[str]:

@@ -685,12 +685,12 @@ def test_facility_delete_purges_failed_sources_and_preserves_db_on_storage_failu
     def unavailable(keys):
         raise StorageError("offline")
     monkeypatch.setattr(storage, "delete", unavailable)
-    assert client.post(f"/api/facilities/{home_id}/delete", data={"confirm": "delete"}).status_code == 502
+    assert client.post(f"/api/facilities/{home_id}/delete", data={"confirm": "delete", "reason": "Closed home"}).status_code == 502
     with app.app_context():
         assert db.session.get(Facility, home_id) is not None
         assert db.session.get(ImportJob, "failed-source") is not None
     monkeypatch.setattr(storage, "delete", original_delete)
-    assert client.post(f"/api/facilities/{home_id}/delete", data={"confirm": "delete"}).status_code == 200
+    assert client.post(f"/api/facilities/{home_id}/delete", data={"confirm": "delete", "reason": "Closed home"}).status_code == 200
     assert storage.list("imports/job-failed-source") == []
     with app.app_context():
         assert db.session.get(Facility, home_id) is None
