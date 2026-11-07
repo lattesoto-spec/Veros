@@ -88,7 +88,7 @@ def summary_xlsx(facility, start: date, end: date) -> bytes:
     tests = quarterly_tests(facility, start, end)
     for row in tests["tests"]:
         wt.append([row["label"], row["achieved"], row["target"],
-                   "PASS" if row["passed"] else "FAIL" if row["passed"] is not None else "NO TARGET",
+                   "PASS" if row["passed"] else "FAIL" if row["passed"] is not None else "PROVISIONAL / NO TARGET",
                    row["shortfall"], row["shortfall_minutes"]])
 
     we = wb.create_sheet("Evidence reconciliation")
@@ -167,7 +167,7 @@ def board_pdf(facility, today: date) -> bytes:
             test_rows = [["Quarterly test", "Achieved", "Required", "Result"]]
             for row in tests["tests"]:
                 test_rows.append([row["label"], row["achieved"], row["target"],
-                                  "PASS" if row["passed"] else "FAIL"])
+                                  "PASS" if row["passed"] else "FAIL" if row["passed"] is False else "PROVISIONAL"])
             tt = Table(test_rows, colWidths=[75 * mm, 35 * mm, 35 * mm, 30 * mm])
             tt.setStyle(TableStyle([
                 ("FONTSIZE", (0, 0), (-1, -1), 9),
@@ -175,7 +175,7 @@ def board_pdf(facility, today: date) -> bytes:
                 ("BACKGROUND", (0, 0), (-1, 0), colors.whitesmoke),
             ]))
             elements += [Paragraph("Three quarterly tests", styles["Heading3"]), tt, Spacer(1, 6 * mm)]
-        if evidence and (evidence["unverified_minutes"] or not evidence["uses_resident_day_ledger"]):
+        if evidence and (evidence["unverified_minutes"] or not evidence["resident_day_ledger_complete"]):
             elements.append(Paragraph(
                 f"Evidence: {evidence['worked_minutes']} worked minutes; "
                 f"{evidence['unverified_minutes']} unverified minutes; "

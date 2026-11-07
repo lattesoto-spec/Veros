@@ -6,9 +6,41 @@ the user is told exactly what looks wrong.
 """
 
 from datetime import date, datetime, time, timedelta
+from math import isfinite
+
+from .mapping import MappingError
 
 KNOWN_ROLES = {"RN", "EN", "PCW", "PCA", "AIN", "ADMIN", "OTHER", ""}
 MAX_WARNINGS_PER_KIND = 10
+
+
+def validate_shifts(records, evidence_type="worked"):
+    """Reject a batch rather than count duplicate or impossible care evidence."""
+    seen, spans = set(), {}
+    for rec in records:
+        where = f"{rec.get('_source_file') or 'Source'} / {rec.get('_source_sheet') or 'shifts'} / row {rec.get('_source_row', '?')}"
+        span = _span(rec)
+        minutes = _minutes(rec)
+        problem = None
+        if evidence_type == "worked" and rec["date"] > date.today():
+            problem = "actual-worked date is in the future"
+        elif rec.get("break_minutes", 0) < 0:
+            problem = "negative break"
+        elif rec.get("start_time") == rec.get("end_time") and rec.get("start_time") is not None:
+            problem = "identical start and finish"
+        elif minutes is None or not isfinite(minutes) or not 0 < minutes <= 1440:
+            problem = "worked duration must be positive and no more than 24 hours"
+        key = (rec["staff_id"], rec["date"], rec.get("start_time"), rec.get("end_time"), rec.get("minutes"))
+        if key in seen:
+            problem = "duplicate shift"
+        seen.add(key)
+        if span:
+            previous = spans.setdefault(rec["staff_id"], [])
+            if any(span[0] < old[1] and old[0] < span[1] for old in previous):
+                problem = "overlapping shifts for the same staff member"
+            previous.append(span)
+        if problem:
+            raise MappingError(f"{where}: {problem}; nothing was imported. Correct the source and upload again.")
 
 
 def _span(rec) -> tuple[datetime, datetime] | None:

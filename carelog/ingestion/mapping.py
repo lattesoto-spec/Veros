@@ -19,6 +19,7 @@ Normalized schemas produced:
 """
 
 import re
+from math import isfinite
 from dataclasses import dataclass, field
 from datetime import date, datetime, time
 
@@ -81,7 +82,11 @@ class TargetResult:
 
 def parse_date_value(s: str, fmt: str | None = None) -> date:
     s = s.strip()
-    formats = ([fmt] if fmt else []) + DATE_FORMATS + DATETIME_FORMATS
+    if not fmt and re.fullmatch(r"\d{1,2}/\d{1,2}/\d{2,4}", s):
+        first, second, _ = s.split("/")
+        if int(first) <= 12 and int(second) <= 12 and first != second:
+            raise ValueError("ambiguous date: specify the source date format or use YYYY-MM-DD")
+    formats = [fmt] if fmt else DATE_FORMATS + DATETIME_FORMATS
     for f in formats:
         try:
             return datetime.strptime(s, f).date()
@@ -195,9 +200,9 @@ def _extract_field(fs: dict, row: dict, headers: list[str]):
         return n * fs.get("multiply", 1)
     if parse == "boolean":
         b = parse_bool(raw)
-        if b is None and fs.get("required"):
+        if b is None:
             raise ValueError(f"unrecognised boolean value: {raw!r}")
-        return fs.get("default", True) if b is None else b
+        return b
 
     if fs.get("normalize") == "role":
         return normalize_role(raw)
@@ -211,7 +216,7 @@ def _passes_filter(target: dict, row: dict, headers: list[str]) -> bool:
     try:
         val = _resolve_column(row, headers, rf.get("column", "")).strip().lower()
     except MappingError:
-        return True
+        raise MappingError("The configured row-filter column is missing; nothing was imported.") from None
     include = rf.get("include_values")
     exclude = rf.get("exclude_values")
     if include is not None:
@@ -297,6 +302,15 @@ def _check_record(kind: str, r: dict) -> str | None:
         has_minutes = isinstance(r.get("minutes"), (int, float)) and r["minutes"] > 0
         if not has_times and not has_minutes:
             return "no start/end times and no duration"
+        if has_times and r["start_time"] == r["end_time"]:
+            return "start and finish are identical; a worked interval is required"
+        for key in ("minutes", "break_minutes", "labour_cost"):
+            value = r.get(key)
+            if value is not None and (not isinstance(value, (int, float)) or not isfinite(value) or value < 0):
+                return f"{key} must be a finite non-negative number"
+        for key in ("is_direct_care", "is_agency"):
+            if key in r and not isinstance(r[key], bool):
+                return f"{key} must be an explicit boolean"
     elif kind == "staff":
         if not r.get("staff_id"):
             return "staff_id is blank"

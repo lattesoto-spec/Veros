@@ -6,13 +6,14 @@ say which calculation logic produced them.
 """
 
 from datetime import date, datetime, time, timedelta
+from decimal import Decimal
 
 
 from carelog.domain.care_minutes import _minutes_between, active_residents_on, quarter_bounds
 from carelog.domain import eligibility
 from carelog.models import CareEpisode, ResidentDay, Shift, Staff, db
 
-CALC_VERSION = "2026.08.3"
+CALC_VERSION = "2026.11.1"
 
 # Canonical reporting buckets. The mapping engine normalizes to PCW; the
 # government statement calls the bucket PCA — they are the same bucket.
@@ -24,6 +25,8 @@ def bucket_role(role: str) -> str:
 
 
 def worked_minutes(shift: Shift) -> int:
+    if shift.duration_minutes is not None:
+        return max(shift.duration_minutes, 0)
     return max(_minutes_between(shift.start_time, shift.end_time) - (shift.break_minutes or 0), 0)
 
 
@@ -120,100 +123,66 @@ def monthly_breakdown(facility_id: int, start: date, end: date) -> list[dict]:
 
 def rn_coverage(facility_id: int, day: date, ignore_gap_minutes: int = 30,
                 evidence_type: str = "worked") -> dict:
-    """Fraction of the 24h day with at least one RN on duty.
-
-    Only gaps *shorter than* `ignore_gap_minutes` are disregarded: a gap of
-    exactly 30 minutes is reportable, so the comparison must be strict.
-    """
-    shifts = (
-        db.session.query(Shift, Staff)
-        .join(Staff, Shift.staff_id == Staff.id)
-        .filter(
-            Shift.facility_id == facility_id,
-            Shift.date == day,
-            Shift.evidence_type == evidence_type,
-        )
-        .all()
-    )
-    intervals = []
-    for s, st in shifts:
-        if eligibility.bucket_for(st.role) != "RN" or not eligibility.counts_toward_care(st, day):
-            continue
-        start = datetime.combine(day, s.start_time)
-        end = datetime.combine(day, s.end_time)
-        if end <= start:
-            end += timedelta(days=1)
-        intervals.append((start, min(end, datetime.combine(day + timedelta(days=1), time(0)))))
-    # overnight shifts from the previous day spill into today
-    prev = (
-        db.session.query(Shift, Staff)
-        .join(Staff, Shift.staff_id == Staff.id)
-        .filter(
-            Shift.facility_id == facility_id,
-            Shift.date == day - timedelta(days=1),
-            Shift.evidence_type == evidence_type,
-        )
-        .all()
-    )
+    """Continuous coverage around midnight; duration-only evidence proves no interval."""
     day_start = datetime.combine(day, time(0))
-    for s, st in prev:
-        if eligibility.bucket_for(st.role) != "RN" or not eligibility.counts_toward_care(st, day):
+    day_end = day_start + timedelta(days=1)
+    window_start, window_end = day_start - timedelta(days=1), day_end + timedelta(days=1)
+    shifts = db.session.query(Shift, Staff).join(Staff, Shift.staff_id == Staff.id).filter(
+        Shift.facility_id == facility_id, Shift.date >= day - timedelta(days=1),
+        Shift.date <= day + timedelta(days=1), Shift.evidence_type == evidence_type,
+    ).all()
+    intervals, unknown = [], False
+    for shift, staff in shifts:
+        if eligibility.bucket_for(staff.role) != "RN":
             continue
-        if s.end_time <= s.start_time:  # crossed midnight
-            intervals.append((day_start, datetime.combine(day, s.end_time)))
-
-    intervals.sort()
+        if not shift.coverage_known or shift.start_time == shift.end_time:
+            if shift.date == day:
+                unknown = True
+            continue
+        start = datetime.combine(shift.date, shift.start_time)
+        end = datetime.combine(shift.date, shift.end_time)
+        if end < start:
+            end += timedelta(days=1)
+        # Effective dates and registration apply on each calendar date covered.
+        cursor = start
+        while cursor < end:
+            boundary = min(end, datetime.combine(cursor.date() + timedelta(days=1), time(0)))
+            if eligibility.counts_toward_care(staff, cursor.date()):
+                intervals.append((max(cursor, window_start), min(boundary, window_end)))
+            cursor = boundary
     merged = []
-    for iv in intervals:
-        if merged and iv[0] < merged[-1][1] + timedelta(minutes=ignore_gap_minutes):
-            merged[-1] = (merged[-1][0], max(merged[-1][1], iv[1]))
+    for start, end in sorted(intervals):
+        if end <= start:
+            continue
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(end, merged[-1][1]))
         else:
-            merged.append(list(iv) if isinstance(iv, tuple) else iv)
-            merged[-1] = (iv[0], iv[1])
-    covered = sum((e - s).total_seconds() / 60 for s, e in merged)
-    covered = min(covered, 1440)
-    # Presentation metadata for the dedicated coverage view. These values are
-    # derived from the exact merged intervals used above, so the UI never
-    # recreates RN eligibility or gap logic independently.
-    day_end = datetime.combine(day + timedelta(days=1), time(0))
+            merged.append((start, end))
     timeline = []
+    covered = 0
     for start, end in merged:
-        start_minute = max(int((start - day_start).total_seconds() / 60), 0)
-        end_minute = min(int((end - day_start).total_seconds() / 60), 1440)
-        timeline.append({
-            "start_minute": start_minute,
-            "end_minute": end_minute,
-            "left_pct": round(start_minute / 1440 * 100, 4),
-            "width_pct": round(max(end_minute - start_minute, 0) / 1440 * 100, 4),
-        })
-    gap_intervals = []
-    cursor = day_start
-    for start, end in merged:
-        if start > cursor:
-            minutes = int((start - cursor).total_seconds() / 60)
-            gap_intervals.append({
-                "start_minute": int((cursor - day_start).total_seconds() / 60),
-                "end_minute": int((start - day_start).total_seconds() / 60),
-                "minutes": minutes,
-                "reportable": minutes >= ignore_gap_minutes,
-            })
+        left, right = max(start, day_start), min(end, day_end)
+        if right > left:
+            lo, hi = int((left - day_start).total_seconds() / 60), int((right - day_start).total_seconds() / 60)
+            covered += hi - lo
+            timeline.append({"start_minute": lo, "end_minute": hi,
+                             "left_pct": round(lo / 1440 * 100, 4),
+                             "width_pct": round((hi - lo) / 1440 * 100, 4)})
+    gaps = []
+    cursor = window_start
+    for start, end in [*merged, (window_end, window_end)]:
+        left, right = max(cursor, day_start), min(start, day_end)
+        if right > left:
+            duration = int((start - cursor).total_seconds() / 60)
+            gaps.append({"start_minute": int((left - day_start).total_seconds() / 60),
+                         "end_minute": int((right - day_start).total_seconds() / 60),
+                         "minutes": int((right - left).total_seconds() / 60),
+                         "reportable": duration >= ignore_gap_minutes})
         cursor = max(cursor, end)
-    if cursor < day_end:
-        minutes = int((day_end - cursor).total_seconds() / 60)
-        gap_intervals.append({
-            "start_minute": int((cursor - day_start).total_seconds() / 60),
-            "end_minute": 1440,
-            "minutes": minutes,
-            "reportable": minutes >= ignore_gap_minutes,
-        })
-    return {
-        "covered_minutes": int(covered),
-        "coverage_pct": round(covered / 1440 * 100, 1),
-        "full_coverage": covered >= 1440,
-        "gaps": max(len(merged) - 1, 0) if merged else (1 if not intervals else 0),
-        "timeline": timeline,
-        "gap_intervals": gap_intervals,
-    }
+    return {"covered_minutes": covered, "coverage_pct": round(covered / 1440 * 100, 1),
+            "full_coverage": not unknown and not any(g["reportable"] for g in gaps),
+            "coverage_known": not unknown, "gaps": len(gaps), "timeline": timeline,
+            "gap_intervals": gaps}
 
 
 # ------------------------------------------------------------- gap detection
@@ -465,27 +434,36 @@ def quarterly_tests(facility, start: date, end: date) -> dict:
     care_target = facility.ancc_target or 0
     rn_target = facility.rn_target or 0
 
-    def result(key, label, achieved, target, basis):
+    from carelog.domain.care_minutes import denominator_issues
+    limitations = denominator_issues(facility.id, start, end)
+    if not bd:
+        limitations.append("No occupied bed days are available.")
+
+    def result(key, label, minutes, target, basis):
+        target = Decimal(str(target))
+        achieved_exact = Decimal(minutes) / Decimal(bd) if bd else Decimal(0)
+        shortfall = max(target * bd - minutes, Decimal(0))
         return {
             "key": key,
             "label": label,
-            "achieved": achieved,
-            "target": round(target, 1),
+            "achieved": float(round(achieved_exact, 1)),
+            "target": float(round(target, 1)),
             "basis": basis,
-            "passed": achieved >= target if target else None,
-            "shortfall": round(max(target - achieved, 0), 1),
-            "shortfall_minutes": round(max(target - achieved, 0) * bd),
+            "passed": minutes >= target * bd if target > 0 and bd and not limitations else None,
+            "shortfall": float(round(shortfall / bd, 3)) if bd else None,
+            "shortfall_minutes": float(shortfall),
+            "provisional": bool(limitations),
         }
 
     tests = [
         result("total_care", "Total care minutes",
-               per_bed_day(t["total_minutes"], bd), care_target,
+               t["total_minutes"], care_target,
                "RN + EN + eligible PCW/AIN minutes per occupied bed day"),
         result("rn_only", "Registered nurse minutes",
-               per_bed_day(t["rn_minutes"], bd), rn_target * RN_ONLY_FRACTION,
+               t["rn_minutes"], Decimal(str(rn_target)) * Decimal("0.9"),
                f"RN-only minutes per bed day, against {RN_ONLY_FRACTION:.0%} of the RN target"),
         result("rn_plus_en", "Registered + enrolled nurse minutes",
-               per_bed_day(t["rn_en_minutes"], bd), rn_target * RN_PLUS_EN_FRACTION,
+               t["rn_en_minutes"], rn_target,
                f"RN + EN minutes per bed day, against {RN_PLUS_EN_FRACTION:.0%} of the RN target"),
     ]
     decided = [x for x in tests if x["passed"] is not None]
@@ -494,9 +472,11 @@ def quarterly_tests(facility, start: date, end: date) -> dict:
     return {
         "totals": t,
         "tests": tests,
-        "passed": all(x["passed"] for x in decided) if decided else None,
+        "passed": all(x["passed"] for x in decided) if len(decided) == 3 else None,
         "failed": [x for x in decided if not x["passed"]],
         "calc_version": CALC_VERSION,
+        "limitations": limitations,
+        "provisional": bool(limitations),
         "target_reconciliation": reconcile_configured_targets(facility, start),
     }
 
@@ -532,9 +512,9 @@ def evidence_summary(facility_id: int, start: date, end: date) -> dict:
         ResidentDay.date <= end,
     )
     ledger_rows = ledger_query.count()
-    ledger_unverified = ledger_query.filter(
-        (ResidentDay.service_type == None) | (ResidentDay.service_type == "")  # noqa: E711
-    ).count()
+    from carelog.domain.care_minutes import denominator_issues, resident_day_problem
+    ledger_unverified = sum(bool(resident_day_problem(row)) for row in ledger_query.all())
+    limitations = denominator_issues(facility_id, start, end)
     ledger_dates = db.session.query(ResidentDay.date).filter(
         ResidentDay.facility_id == facility_id,
         ResidentDay.date >= start,
@@ -557,5 +537,6 @@ def evidence_summary(facility_id: int, start: date, end: date) -> dict:
         "resident_day_dates": ledger_dates,
         "resident_day_expected_dates": expected_dates,
         "uses_resident_day_ledger": ledger_rows > 0,
-        "resident_day_ledger_complete": ledger_dates == expected_dates,
+        "resident_day_ledger_complete": ledger_dates == expected_dates and not limitations,
+        "denominator_issues": limitations,
     }

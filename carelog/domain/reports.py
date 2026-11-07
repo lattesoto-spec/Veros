@@ -201,7 +201,7 @@ def compute_quarter_stats(facility_id: int, year: int, quarter: int) -> dict:
     per_obd = {}
     for role, _ in ROLES:
         per_obd[role] = per_bed_day(worked_minutes[role], obd)
-    total_per_obd = round(sum(per_obd.values()), 1)
+    total_per_obd = per_bed_day(sum(worked_minutes.values()), obd)
 
     worked_hours = {role: round(m / 60, 1) for role, m in worked_minutes.items()}
     blockers = []
@@ -513,7 +513,7 @@ def _care_minutes_per_obd_table(stats: dict, facility) -> Table:
 def _compliance_tests_table(stats: dict) -> Table:
     data = [["Test", "Achieved", "Required", "Result", "Shortfall total"]]
     for row in stats["tests"]["tests"]:
-        result = "PASS" if row["passed"] else "FAIL" if row["passed"] is not None else "NO TARGET"
+        result = "PASS" if row["passed"] else "FAIL" if row["passed"] is not None else "PROVISIONAL / NO TARGET"
         data.append([
             row["label"], f"{row['achieved']:.1f}", f"{row['target']:.1f}", result,
             f"{row['shortfall_minutes']:,.0f} min" if row["shortfall_minutes"] else "-",

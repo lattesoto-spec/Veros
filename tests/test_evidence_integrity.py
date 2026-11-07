@@ -1,0 +1,137 @@
+from datetime import date, time, timedelta
+
+import pytest
+
+from carelog.domain.care_minutes import denominator_issues, resident_day_is_occupied
+from carelog.domain.compliance import quarterly_tests, rn_coverage
+from carelog.domain.eligibility import classify
+from carelog.ingestion.mapping import MappingError, parse_date_value
+from carelog.ingestion.pipeline import ImportOutcome, _import_shifts
+from carelog.ingestion.quality import validate_shifts
+from carelog.models import Resident, ResidentDay, Shift, Staff, db
+from conftest import add_resident_days
+
+
+def worker(facility, role="RN"):
+    member = Staff(facility_id=facility.id, staff_id="W1", name="Worker", role=role,
+                   eligibility_status="approved", registration_number="RN1",
+                   registration_expiry=date(2030, 1, 1))
+    db.session.add(member)
+    db.session.flush()
+    return member
+
+
+@pytest.mark.parametrize("index,threshold", [(0, 470), (1, 423), (2, 470)])
+@pytest.mark.parametrize("delta", [-1, 0, 1])
+def test_all_three_verdicts_compare_exact_minutes(app, facility, index, threshold, delta):
+    with app.app_context():
+        facility.ancc_target = facility.rn_target = 47
+        day = date(2026, 8, 1)
+        add_resident_days(facility.id, day, 10)
+        member = worker(facility)
+        db.session.add(Shift(facility_id=facility.id, staff_id=member.id, date=day,
+                             start_time=time(8), end_time=time(16), duration_minutes=threshold + delta,
+                             evidence_type="worked"))
+        db.session.commit()
+        test = quarterly_tests(facility, day, day)["tests"][index]
+        assert test["passed"] is (delta >= 0)
+        assert test["shortfall_minutes"] == max(-delta, 0)
+
+
+def test_display_rounding_cannot_erase_a_shortfall(app, facility):
+    with app.app_context():
+        facility.ancc_target = 200
+        day = date(2026, 8, 1)
+        add_resident_days(facility.id, day, 25)
+        member = worker(facility)
+        for duration in (1000, 1000, 1000, 1000, 999):
+            db.session.add(Shift(facility_id=facility.id, staff_id=member.id, date=day,
+                                 start_time=time(0), end_time=time(1), duration_minutes=duration,
+                                 evidence_type="worked"))
+        db.session.commit()
+        result = quarterly_tests(facility, day, day)["tests"][0]
+        assert result["achieved"] == 200
+        assert result["passed"] is False
+        assert result["shortfall_minutes"] == 1
+
+
+def test_partial_census_blocks_a_passing_verdict(app, facility):
+    with app.app_context():
+        day = date(2026, 8, 1)
+        add_resident_days(facility.id, day, 1)
+        db.session.add(Resident(facility_id=facility.id, resident_id="MISSING", name="Resident",
+                                admitted_date=date(2026, 1, 1)))
+        member = worker(facility)
+        db.session.add(Shift(facility_id=facility.id, staff_id=member.id, date=day,
+                             start_time=time(0), end_time=time(23), evidence_type="worked"))
+        db.session.commit()
+        result = quarterly_tests(facility, day, day)
+        assert result["passed"] is None
+        assert result["provisional"] is True
+        assert "omits" in result["limitations"][0]
+        assert denominator_issues(facility.id, day, day + timedelta(days=1))
+
+
+def test_ambiguous_resident_days_are_excluded():
+    for service, leave, number in [("mystery", None, None), ("permanent", "hospital", None),
+                                   ("permanent", "unknown", None)]:
+        assert not resident_day_is_occupied(ResidentDay(occupied=True, service_type=service,
+                                                       leave_type=leave, leave_day_number=number))
+
+
+def test_imports_preserve_other_dates_and_reimport_idempotently(app, facility):
+    with app.app_context():
+        for month in (8, 9, 8):
+            outcome = ImportOutcome("worked.csv", "x", True, {}, [])
+            _import_shifts(facility, [{"staff_id": "W1", "role": "PCW", "date": date(2026, month, 1),
+                                      "start_time": time(8), "end_time": time(16)}], outcome, "worked")
+            db.session.commit()
+        assert Shift.query.count() == 2
+
+
+@pytest.mark.parametrize("change", [{"break_minutes": -120}, {"end_time": time(8)},
+                                    {"date": date.today() + timedelta(days=1)}])
+def test_bad_worked_rows_are_rejected(change):
+    row = {"staff_id": "W1", "date": date(2026, 8, 1), "start_time": time(8), "end_time": time(16)}
+    with pytest.raises(MappingError):
+        validate_shifts([{**row, **change}])
+
+
+def test_duplicate_and_overlapping_rows_are_rejected():
+    row = {"staff_id": "W1", "date": date(2026, 8, 1), "start_time": time(8), "end_time": time(16)}
+    for second in [row, {**row, "start_time": time(15)}]:
+        with pytest.raises(MappingError):
+            validate_shifts([row, second])
+
+
+def test_midnight_gap_is_reportable_as_one_continuous_absence(app, facility):
+    with app.app_context():
+        day = date(2026, 9, 30)
+        member = worker(facility)
+        for current, start, end in [(day, time(0), time(23, 45)),
+                                     (day + timedelta(days=1), time(0, 15), time(23, 59))]:
+            db.session.add(Shift(facility_id=facility.id, staff_id=member.id, date=current,
+                                 start_time=start, end_time=end, evidence_type="worked"))
+        db.session.commit()
+        assert rn_coverage(facility.id, day)["gap_intervals"][-1]["reportable"] is True
+        assert rn_coverage(facility.id, day + timedelta(days=1))["gap_intervals"][0]["reportable"] is True
+
+
+def test_duration_only_time_never_proves_rn_coverage(app, facility):
+    with app.app_context():
+        member = worker(facility)
+        day = date(2026, 8, 1)
+        db.session.add(Shift(facility_id=facility.id, staff_id=member.id, date=day,
+                             start_time=time(0), end_time=time(0), duration_minutes=480,
+                             coverage_known=False, evidence_type="worked"))
+        db.session.commit()
+        assert rn_coverage(facility.id, day)["covered_minutes"] == 0
+        assert rn_coverage(facility.id, day)["coverage_known"] is False
+
+
+def test_ambiguous_dates_and_non_direct_titles_need_review():
+    with pytest.raises(ValueError, match="ambiguous"):
+        parse_date_value("04/05/2026")
+    assert parse_date_value("04/05/2026", "%d/%m/%Y") == date(2026, 5, 4)
+    for title in ("Non-RN carer", "Clinical Nurse Educator"):
+        assert classify(title)[1] == "pending"

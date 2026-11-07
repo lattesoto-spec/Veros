@@ -137,8 +137,8 @@ def rn_coverage_view():
     reportable_gaps = []
     for offset in range((end - start).days + 1):
         day = start + timedelta(days=offset)
-        available = day in source_dates
         result = rn_coverage(facility.id, day)
+        available = day in source_dates and result["coverage_known"]
         result["date"] = day
         result["available"] = available
         days.append(result)
@@ -277,7 +277,7 @@ def dashboard():
             facility_id=facility.id, evidence_type="worked", date=today
         ).first()
         is not None
-    )
+    ) and coverage["coverage_known"]
     alerts = detect_gaps(facility, today)
     last_receipt = _latest_receipt(facility)
     data_age_days = (

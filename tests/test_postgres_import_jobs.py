@@ -115,3 +115,17 @@ def test_additive_provenance_migration_keeps_rows(pg_app):
     assert "source_sheet" in {
         c["name"] for c in inspect(db.engine).get_columns("shifts")
     }
+
+
+def test_additive_duration_migration_keeps_existing_facility(pg_app):
+    from sqlalchemy import text, inspect
+
+    _, facility, _ = pg_app
+    for column in ("duration_minutes", "coverage_known"):
+        db.session.execute(text(f"ALTER TABLE shifts DROP COLUMN {column}"))
+    db.session.commit()
+    assert set(init_db()) == {"shifts.duration_minutes", "shifts.coverage_known"}
+    assert db.session.get(Facility, facility.id).name == "Test home"
+    assert {"duration_minutes", "coverage_known"} <= {
+        c["name"] for c in inspect(db.engine).get_columns("shifts")
+    }

@@ -16,7 +16,7 @@ MODEL_FIELDS = {
     "Resident": "id resident_id name ancc_class admitted_date discharged_date",
     "ResidentDay": "id resident_id resident_name date occupied service_type leave_type leave_day_number ancc_class exclusion_reason source_row source_file source_sheet source_page",
     "Staff": "id staff_id name role source_role eligibility_status eligibility_reason eligible_from eligible_to approved_by_user_id approved_at employment_type classification registration_number registration_expiry",
-    "Shift": "id staff_id date start_time end_time is_direct_care break_minutes is_agency evidence_type labour_cost import_receipt_id source_row source_file source_sheet source_page",
+    "Shift": "id staff_id date start_time end_time is_direct_care break_minutes duration_minutes coverage_known is_agency evidence_type labour_cost import_receipt_id source_row source_file source_sheet source_page",
     "CareEpisode": "id resident_id resident_name date care_type care_category staff_id staff_name source_role start_time end_time minutes import_receipt_id source_row source_file source_sheet source_page",
     "ImportReceipt": "id facility_id imported_at residents_imported residents_skipped shifts_imported shifts_skipped resident_days_imported care_episodes_imported evidence_type first_shift_date last_shift_date imported_by calc_version",
     "FormatMapping": "id kinds source_filename created_at fingerprint",

@@ -208,6 +208,8 @@ class Shift(db.Model):
     end_time = db.Column(db.Time, nullable=False)
     is_direct_care = db.Column(db.Boolean, nullable=False, default=True)
     break_minutes = db.Column(db.Integer, nullable=False, default=0)
+    duration_minutes = db.Column(db.Integer)
+    coverage_known = db.Column(db.Boolean, nullable=False, default=True)
     is_agency = db.Column(db.Boolean, nullable=False, default=False)
     # The evidence basis is explicit. Only "worked" rows feed historical
     # compliance; "rostered" rows are planning evidence and "unverified" rows

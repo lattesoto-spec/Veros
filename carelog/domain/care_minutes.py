@@ -29,9 +29,12 @@ def resident_day_is_occupied(row: ResidentDay) -> bool:
     if not row.occupied:
         return False
     service = (row.service_type or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if resident_day_problem(row):
+        return False
     if service in {
         "private", "private_resident", "transition_care", "transition_care_program",
         "tcp", "other_program", "non_an_acc",
+        "private_/_non_subsidised", "transition_care_programme",
     }:
         return False
     leave = (row.leave_type or "").strip().lower().replace("-", "_").replace(" ", "_")
@@ -39,6 +42,54 @@ def resident_day_is_occupied(row: ResidentDay) -> bool:
             row.leave_day_number is not None and row.leave_day_number >= 29:
         return False
     return True
+
+
+def resident_day_problem(row) -> str | None:
+    service = (row.service_type or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if service not in {"permanent", "respite", "an_acc", "an_acc_permanent", "an_acc_respite", "residential", "private", "private_resident",
+                       "transition_care", "transition_care_program", "transition_care_programme", "private_/_non_subsidised",
+                       "tcp", "other_program", "non_an_acc"}:
+        return "missing or unrecognised resident service type"
+    leave = (row.leave_type or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if leave not in {"", "none", "no", "hospital", "hospital_leave", "hospital_transition", "social", "social_leave"}:
+        return "unrecognised leave type"
+    if leave in {"hospital", "hospital_leave", "hospital_transition"} and (
+        row.leave_day_number is None or row.leave_day_number < 1
+    ):
+        return "hospital leave needs a positive consecutive leave day"
+    return None
+
+
+def denominator_issues(facility_id, start, end):
+    """Reconcile complete census identities, not merely distinct dates."""
+    rows = ResidentDay.query.filter(ResidentDay.facility_id == facility_id,
+                                   ResidentDay.date >= start - timedelta(days=1), ResidentDay.date <= end).all()
+    residents = Resident.query.filter_by(facility_id=facility_id).all()
+    by_day = {}
+    for row in rows:
+        by_day.setdefault(row.date, []).append(row)
+    issues = []
+    day = start
+    while day <= end:
+        ledger = by_day.get(day, [])
+        if not ledger:
+            issues.append(f"{day}: no verified resident-day census")
+        else:
+            ids = {row.resident_id for row in ledger}
+            expected = {r.resident_id for r in residents if r.admitted_date and r.admitted_date <= day
+                        and (r.discharged_date is None or r.discharged_date > day)}
+            missing = expected - ids
+            if missing:
+                issues.append(f"{day}: census omits {len(missing)} active resident(s)")
+            previous = {r.resident_id for r in by_day.get(day - timedelta(days=1), [])}
+            discharged = {r.resident_id for r in residents if r.discharged_date and r.discharged_date <= day}
+            if previous - ids - discharged and (residents or len(ids) < len(previous)):
+                issues.append(f"{day}: census identities dropped without recorded discharge")
+            invalid = sum(bool(resident_day_problem(row)) for row in ledger)
+            if invalid:
+                issues.append(f"{day}: {invalid} resident-day row(s) have unverified service or leave evidence")
+        day += timedelta(days=1)
+    return issues
 
 
 def daily_stats(facility_id: int, day: date, ancc_target: float, rn_target: float) -> dict:

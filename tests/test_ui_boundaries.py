@@ -239,10 +239,14 @@ def test_redesigned_reporting_routes_render_calculated_data(web_app):
         response = client.get(path)
         assert response.status_code == 200, path
 
-    assert client.get("/api/dashboard").json["data"]["tests"]["passed"] is True
+    # Only two August dates are present in a July-to-date period. The result
+    # must now remain provisional rather than imply a verified quarterly pass.
+    tests = client.get("/api/dashboard").json["data"]["tests"]
+    assert tests["passed"] is None
+    assert tests["provisional"] is True
     assert client.get("/api/rn-coverage?month=2026-08").json["data"]["available_days"] == 2
     summaries = client.get("/api/facilities").json["data"]["summary"]
-    assert next(iter(summaries.values()))["period_status"] is True
+    assert next(iter(summaries.values()))["period_status"] is None
 
 
 @pytest.mark.parametrize("invalid", ["", "nan", "inf", "-1", "0", "not a number"])

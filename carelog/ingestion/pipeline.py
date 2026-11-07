@@ -24,7 +24,7 @@ from carelog.models import (
 from .analyzer import generate_mapping_spec
 from .evidence import classify_shift_evidence
 from .fingerprint import fingerprint
-from .mapping import TargetResult, apply_header_overrides, run_spec
+from .mapping import MappingError, TargetResult, apply_header_overrides, run_spec
 from .presets import matching_spec
 from .quality import check_shifts
 from .reader import read_upload
@@ -130,6 +130,11 @@ def ingest_file(facility, filename: str, data: bytes, receipt=None, progress=Non
         progress("extracting rows")
     mapped_sheets = apply_header_overrides(spec, sheets)
     results = run_spec(spec, mapped_sheets)
+    for result in results:
+        if not result.records:
+            raise MappingError(f"{filename} / {result.sheet}: no usable {result.kind} rows; nothing was imported.")
+        if result.row_errors:
+            raise MappingError(f"{filename} / {result.sheet}: " + "; ".join(result.row_errors[:10]))
 
     outcome = ImportOutcome(
         filename=filename, fingerprint=mapping.fingerprint, mapping_reused=reused,
@@ -153,6 +158,8 @@ def ingest_file(facility, filename: str, data: bytes, receipt=None, progress=Non
                 auto_type, basis = evidence_type, "server-side evidence override"
             r.evidence_type = auto_type
             r.evidence_basis = basis
+            from .quality import validate_shifts
+            validate_shifts(r.records, evidence_type=auto_type)
             outcome.warnings.extend(check_shifts(r.records))
             _import_shifts(facility, r.records, outcome, evidence_type=auto_type)
         elif r.kind == "staff":
@@ -229,16 +236,25 @@ def _import_shifts(facility, records: list[dict], outcome: ImportOutcome,
     if evidence_type not in ("worked", "rostered", "unverified"):
         evidence_type = "unverified"
 
-    # Replace only the same evidence stream. A roster import must never erase
-    # actual-worked rows (or vice versa), and several files in one receipt may
-    # contribute to the same stream without deleting one another.
-    receipt = outcome.receipt
-    replaced = getattr(receipt, "_replaced_shift_evidence", set()) if receipt else set()
-    if evidence_type not in replaced:
-        Shift.query.filter_by(facility_id=facility.id, evidence_type=evidence_type).delete()
-        replaced.add(evidence_type)
-        if receipt is not None:
-            receipt._replaced_shift_evidence = replaced
+    # Replace only the supplied staff/date groups in this evidence stream.
+    # Separate months and files for other staff remain intact.
+    dates_by_staff = {}
+    for rec in records:
+        dates_by_staff.setdefault(str(rec["staff_id"]).strip(), set()).add(rec["date"])
+    for sid, days in dates_by_staff.items():
+        member = Staff.query.filter_by(facility_id=facility.id, staff_id=sid).first()
+        if member:
+            query = Shift.query.filter(Shift.facility_id == facility.id,
+                                       Shift.staff_id == member.id,
+                                       Shift.evidence_type == evidence_type,
+                                       Shift.date.in_(days))
+            receipt_id = getattr(outcome.receipt, "id", None)
+            if receipt_id:
+                from sqlalchemy import or_
+                query = query.filter(or_(Shift.import_receipt_id != receipt_id,
+                                         Shift.import_receipt_id.is_(None)))
+            query.delete(synchronize_session=False)
+    db.session.flush()
 
     staff_cache = {s.staff_id: s for s in Staff.query.filter_by(facility_id=facility.id).all()}
     for rec in records:
@@ -275,13 +291,12 @@ def _import_shifts(facility, records: list[dict], outcome: ImportOutcome,
 
         break_minutes = int(rec.get("break_minutes") or 0)
         start, end = rec.get("start_time"), rec.get("end_time")
-        if not (isinstance(start, time) and isinstance(end, time)):
-            # Duration-only exports: synthesize a midnight-anchored window so
-            # the minutes-between computation in the reporting engine holds.
-            minutes = min(int(rec["minutes"]), 24 * 60 - 1)
-            start = time(0, 0)
-            end_dt = datetime.combine(date.today(), start) + timedelta(minutes=minutes)
-            end = end_dt.time()
+        coverage_known = isinstance(start, time) and isinstance(end, time)
+        duration = None
+        if not coverage_known:
+            duration = int(rec["minutes"]) - break_minutes
+            start = end = time(0, 0)
+
 
         d = rec["date"]
         db.session.add(Shift(
@@ -292,6 +307,8 @@ def _import_shifts(facility, records: list[dict], outcome: ImportOutcome,
             end_time=end,
             is_direct_care=bool(rec.get("is_direct_care", True)),
             break_minutes=break_minutes,
+            duration_minutes=duration,
+            coverage_known=coverage_known,
             is_agency=bool(rec.get("is_agency", False)),
             evidence_type=evidence_type,
             labour_cost=(float(rec["labour_cost"]) if isinstance(
@@ -361,11 +378,15 @@ def _import_resident_days(facility, records: list[dict], outcome: ImportOutcome)
 
 
 def _import_care_episodes(facility, records: list[dict], outcome: ImportOutcome):
-    receipt = outcome.receipt
-    if not getattr(receipt, "_replaced_care_episodes", False):
-        CareEpisode.query.filter_by(facility_id=facility.id).delete()
-        if receipt is not None:
-            receipt._replaced_care_episodes = True
+    # Replace supplied resident/date groups, preserving unrelated history.
+    receipt_id = getattr(outcome.receipt, "id", None)
+    for rid, day in {(str(r["resident_id"]).strip(), r["date"]) for r in records}:
+        query = CareEpisode.query.filter_by(facility_id=facility.id, resident_id=rid, date=day)
+        if receipt_id:
+            from sqlalchemy import or_
+            query = query.filter(or_(CareEpisode.import_receipt_id != receipt_id,
+                                     CareEpisode.import_receipt_id.is_(None)))
+        query.delete(synchronize_session=False)
 
     for rec in records:
         minutes = rec.get("minutes")

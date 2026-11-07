@@ -68,6 +68,10 @@ def classify(raw_role: str) -> tuple[str, str, str]:
     text = (raw_role or "").strip().lower()
     if not text:
         return "OTHER", PENDING, "no role recorded"
+    if re.search(r"\b(non|not|no)\W+(rn|en|nurse|care)\b", text) or any(
+        term in text for term in ("educator", "education", "research", "non direct", "non-direct")
+    ):
+        return "OTHER", PENDING, "non-direct-care or negated title requires review"
 
     for term in INELIGIBLE:
         if term in text:
