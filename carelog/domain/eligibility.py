@@ -182,4 +182,10 @@ def registration_problem(staff, on_day=None) -> str | None:
     check_day = on_day or facility_today(staff.facility_id)
     if expiry < check_day:
         return f"{bucket} Ahpra registration expired on {expiry.isoformat()}"
+    for gap in getattr(staff, "credential_gaps", None) or ():
+        if gap["from"] <= check_day.isoformat() <= gap["to"]:
+            return (
+                f"{bucket} registration renewal is not evidenced from "
+                f"{gap['from']} to {gap['to']}; confirm continuous registration"
+            )
     return None

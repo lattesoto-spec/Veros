@@ -1,8 +1,9 @@
+import hashlib
 import hmac
 import json
 import os
 from datetime import datetime, timedelta
-from sqlalchemy import update
+from sqlalchemy import or_, update
 
 from flask import (
     Response,
@@ -192,18 +193,23 @@ def import_status(job_id):
     if not job:
         flash("That import job no longer exists. Check the audit trail for the result.")
         return navigate(url_for("api.universal_import"))
-    return resource("import_status", job=owned_or_404(job).as_dict())
+    owned_or_404(job)
+    return resource(
+        "import_status", job=job.as_dict(include_samples=has_permission("view_records"))
+    )
 
 
 @bp.route("/import/<job_id>/confirm", methods=["POST"])
 @require("import_data")
 def import_confirm(job_id):
     job = owned_or_404(import_jobs.get_job(job_id))
+    replace_period = form_data().get("replace_period") == "1"
     changed = db.session.execute(
         update(ImportJob)
         .where(ImportJob.id == job.id, ImportJob.status == "review")
         .values(
             status="queued",
+            replace_period=replace_period,
             approved_at=datetime.utcnow(),
             reviewed_by_user_id=current_user().id,
             updated_at=datetime.utcnow(),
@@ -218,7 +224,8 @@ def import_confirm(job_id):
         "import_approved",
         "import_job",
         job.id,
-        "Reviewed column mapping, evidence class, dates and replacement scope",
+        "Reviewed column mapping, evidence class, dates and replacement scope"
+        + ("; complete corrected export replaces the date range" if replace_period else ""),
     )
     db.session.commit()
     import_jobs.dispatch_job(current_app._get_current_object(), job.id)
@@ -251,6 +258,7 @@ def import_cancel(job_id):
 @require("import_data")
 def import_retry(job_id):
     job = owned_or_404(import_jobs.get_job(job_id))
+    hashes = {f["filename"]: f.get("sha256") for f in json.loads(job.files_json)}
     cutoff = datetime.utcnow() - timedelta(minutes=15)
     if job.status not in {"failed", "cancelled"}:
         changed = db.session.execute(
@@ -282,6 +290,8 @@ def import_retry(job_id):
             )
             for f in files
         ]
+        for name, data in payloads:
+            _verify_retained(hashes.get(name), data, "import_job", job.id, name)
         new_id = import_jobs.start_job(
             current_app._get_current_object(),
             job.facility_id,
@@ -311,10 +321,13 @@ def audit_job_file(job_id, filename):
         abort(404)
     try:
         contents = _storage().get(f"{job.storage_prefix}/{filename}")
-    except StorageError:
-        return {
-            "error": "The retained file could not be retrieved. Retry or contact support with this import reference."
-        }, 502
+        expected = next(
+            (f.get("sha256") for f in json.loads(job.files_json) if f["filename"] == filename),
+            None,
+        )
+        _verify_retained(expected, contents, "import_job", job.id, filename)
+    except StorageError as error:
+        return {"error": str(error) or "The retained file could not be retrieved."}, 502
     from io import BytesIO
     from flask import send_file
 
@@ -389,6 +402,11 @@ def audit():
                     "import_cancelled",
                     "import_retried",
                     "evidence_classified",
+                    "shift_voided",
+                    "shift_restored",
+                    "import_period_replaced",
+                    "evidence_integrity_failed",
+                    "registration_continuity_confirmed",
                 ]
             ),
         )
@@ -408,6 +426,12 @@ def audit_file(receipt_id, filename):
         return ("Not found", 404)
     try:
         blob = _storage_for(receipt).get(match.key)
+        expected = next(
+            (o.get("sha256") for o in json.loads(receipt.summary_json or "[]")
+             if o.get("filename") == safe),
+            None,
+        )
+        _verify_retained(expected, blob, "import_receipt", receipt.id, safe)
     except StorageError as e:
         current_app.logger.warning("Audit file fetch failed: %s", e)
         return ("That evidence file could not be retrieved from storage.", 502)
@@ -416,6 +440,43 @@ def audit_file(receipt_id, filename):
         mimetype="application/octet-stream",
         headers={"Content-Disposition": f"attachment; filename={safe}"},
     )
+
+
+def _restore_superseded(receipt) -> int:
+    """Return rows this import replaced, unless newer evidence now covers them."""
+    restored = 0
+    for row in Shift.query.filter_by(superseded_by_receipt_id=receipt.id).all():
+        newer = Shift.query.filter(
+            Shift.facility_id == row.facility_id,
+            Shift.staff_id == row.staff_id,
+            Shift.date == row.date,
+            Shift.evidence_type == row.prior_evidence_type,
+            or_(
+                Shift.import_receipt_id != receipt.id,
+                Shift.import_receipt_id.is_(None),
+            ),
+        ).first()
+        if newer:
+            row.superseded_by_receipt_id = newer.import_receipt_id
+            continue
+        row.evidence_type = row.prior_evidence_type
+        row.prior_evidence_type = row.superseded_by_receipt_id = None
+        restored += 1
+    db.session.flush()
+    return restored
+
+
+def _verify_retained(expected, data, entity, entity_id, filename):
+    """Refuse to serve or re-import a retained file that has changed."""
+    if expected and hashlib.sha256(data).hexdigest() != expected:
+        auth.record(
+            "evidence_integrity_failed", entity, entity_id,
+            f"{filename}: retained bytes no longer match the recorded SHA-256",
+        )
+        db.session.commit()
+        raise StorageError(
+            f"{filename} failed its integrity check and was not used. Contact platform support."
+        )
 
 
 @bp.route("/audit/receipt/<int:receipt_id>/delete", methods=["POST"])
@@ -436,6 +497,7 @@ def delete_receipt(receipt_id):
         return {
             "error": "Evidence storage could not confirm deletion. The receipt was kept; investigate storage and retry."
         }, 502
+    restored = _restore_superseded(receipt)
     shifts = Shift.query.filter_by(import_receipt_id=receipt.id).delete(
         synchronize_session=False
     )
@@ -454,12 +516,13 @@ def delete_receipt(receipt_id):
         "import_receipt",
         receipt_id,
         f"{shifts} shifts, {resident_days} resident days, {episodes} care episodes, "
-        f"{files} evidence file(s)",
+        f"{files} evidence file(s); {restored} earlier shifts restored",
     )
     db.session.commit()
     flash(
         f"Import #{receipt_id} deleted: {shifts} shift row(s), {resident_days} "
-        f"resident-day row(s), {episodes} care episode(s) and {files} evidence file(s) removed."
+        f"resident-day row(s), {episodes} care episode(s) and {files} evidence file(s) removed. "
+        f"{restored} earlier shift row(s) it had replaced were restored."
     )
     return navigate(url_for("api.audit"))
 

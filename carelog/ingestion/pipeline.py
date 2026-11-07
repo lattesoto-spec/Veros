@@ -9,9 +9,12 @@ upload -> read structure -> fingerprint -> known format?
 import json
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
+from math import ceil, floor
 
+from carelog.domain.clock import facility_today
 from carelog.domain.eligibility import classify
 from carelog.models import (
+    SUPERSEDED,
     CareEpisode,
     FormatMapping,
     Resident,
@@ -31,6 +34,16 @@ from .reader import read_upload
 
 
 MAPPING_SPEC_VERSION = 2
+
+
+def _whole_minutes(value) -> int:
+    """Floor to a minute without letting binary floats lose one (4.1 h is 246)."""
+    return floor(round(float(value), 6))
+
+
+def _break_whole_minutes(value) -> int:
+    """Round breaks up: a fraction of a break is never counted as worked time."""
+    return ceil(round(float(value or 0), 6))
 
 
 @dataclass
@@ -55,6 +68,7 @@ class ImportOutcome:
     mapping_id: int | None = None
     receipt: object = None
     parsers: list[str] = field(default_factory=list)
+    sha256: str | None = None
 
 
 def get_or_create_mapping(
@@ -186,8 +200,6 @@ def ingest_file(
             r.evidence_basis = basis
             from .quality import validate_shifts
 
-            from carelog.domain.clock import facility_today
-
             local_today = facility_today(facility)
             validate_shifts(r.records, evidence_type=auto_type, today=local_today)
             outcome.warnings.extend(check_shifts(r.records, today=local_today))
@@ -237,6 +249,24 @@ def _guard_role_history(member, raw_role):
         )
 
 
+def record_credential_gap(member, new_expiry: date, today: date):
+    """A later expiry proves the present, not the days since the last one.
+
+    If the previous registration had already lapsed, the time up to this
+    evidence stays unverified until a reviewer confirms continuous registration.
+    """
+    previous = member.registration_expiry
+    if not previous or new_expiry <= previous:
+        return
+    start, end = previous + timedelta(days=1), today - timedelta(days=1)
+    if start > end:
+        return
+    gaps = json.loads(member.credential_gaps_json or "[]")
+    gap = [start.isoformat(), end.isoformat()]
+    if gap not in gaps:
+        member.credential_gaps_json = json.dumps(gaps + [gap])
+
+
 def _import_staff(facility, records: list[dict], outcome: ImportOutcome):
     cache = {
         s.staff_id: s for s in Staff.query.filter_by(facility_id=facility.id).all()
@@ -279,6 +309,7 @@ def _import_staff(facility, records: list[dict], outcome: ImportOutcome):
             member.registration_number = registration
         expiry = rec.get("registration_expiry")
         if isinstance(expiry, date):
+            record_credential_gap(member, expiry, facility_today(facility))
             member.registration_expiry = expiry
         employment = _normalise_employment_type(rec.get("employment_type"))
         if employment:
@@ -287,6 +318,20 @@ def _import_staff(facility, records: list[dict], outcome: ImportOutcome):
         if classification:
             member.classification = classification
         outcome.staff_imported += 1
+
+
+def retire_shifts(query, receipt_id) -> int:
+    """Keep replaced rows on record, restorable if the replacing import goes."""
+    if not receipt_id:
+        return query.delete(synchronize_session=False)
+    return query.update(
+        {
+            Shift.prior_evidence_type: Shift.evidence_type,
+            Shift.evidence_type: SUPERSEDED,
+            Shift.superseded_by_receipt_id: receipt_id,
+        },
+        synchronize_session=False,
+    )
 
 
 def _import_shifts(
@@ -322,7 +367,7 @@ def _import_shifts(
                         Shift.import_receipt_id.is_(None),
                     )
                 )
-            outcome.shifts_replaced += query.delete(synchronize_session=False)
+            outcome.shifts_replaced += retire_shifts(query, receipt_id)
     db.session.flush()
 
     staff_cache = {
@@ -378,17 +423,28 @@ def _import_shifts(
             db.session.flush()
             staff_cache[sid] = staff
 
-        break_minutes = int(rec.get("break_minutes") or 0)
+        break_minutes = _break_whole_minutes(rec.get("break_minutes"))
         start, end = rec.get("start_time"), rec.get("end_time")
         coverage_known = isinstance(start, time) and isinstance(end, time)
         duration = None
         if not coverage_known:
-            duration = int(rec["minutes"]) - break_minutes
+            duration = _whole_minutes(rec["minutes"]) - break_minutes
             start = end = time(0, 0)
 
         d = rec["date"]
         previous = existing_by_staff.setdefault(staff.id, [])
+        pay_category = (str(rec.get("pay_category") or "").strip() or None)
         for old in previous:
+            separate_payroll_line = (
+                not coverage_known
+                and not old.coverage_known
+                and pay_category
+                and old.pay_category
+                and pay_category != old.pay_category
+                and old.import_receipt_id == getattr(outcome.receipt, "id", None)
+            )
+            if separate_payroll_line:
+                continue
             if (not coverage_known or not old.coverage_known) and old.date == d:
                 raise MappingError(
                     f"{outcome.filename}, row {rec.get('_source_row', '?')}: duration-only rows overlap a staff/date group; correct the source before importing."
@@ -418,6 +474,7 @@ def _import_shifts(
             duration_minutes=duration,
             coverage_known=coverage_known,
             is_agency=bool(rec.get("is_agency", False)),
+            pay_category=pay_category,
             evidence_type=evidence_type,
             labour_cost=(
                 float(rec["labour_cost"])
@@ -551,7 +608,7 @@ def _import_care_episodes(facility, records: list[dict], outcome: ImportOutcome)
                 or None,
                 start_time=rec.get("start_time"),
                 end_time=rec.get("end_time"),
-                minutes=max(int(minutes or 0), 0),
+                minutes=max(_whole_minutes(minutes or 0), 0),
                 import_receipt_id=getattr(outcome.receipt, "id", None),
                 source_row=rec.get("_source_row"),
                 source_file=rec.get("_source_file"),

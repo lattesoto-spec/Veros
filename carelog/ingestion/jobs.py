@@ -18,22 +18,34 @@ Two ways to run the work, chosen by environment:
 Set IMPORT_WORKER=thread|invoke to force one; unset picks 'invoke' on Vercel.
 """
 
+import hashlib
 import json
 import os
 import threading
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from sqlalchemy.orm import Session
 from sqlalchemy import update, select
 
 from flask import current_app
 
-from carelog.domain.compliance import CALC_VERSION
-from carelog.models import Facility, ImportJob, ImportReceipt, db
+from carelog.domain.care_minutes import quarter_bounds
+from carelog.domain.clock import facility_today
+from carelog.domain.compliance import CALC_VERSION, quarterly_tests
+from carelog.models import (
+    RETIRED_EVIDENCE,
+    AuditLog,
+    Facility,
+    ImportJob,
+    ImportReceipt,
+    Shift,
+    Staff,
+    db,
+)
 
 from .analyzer import AnalyzerError
 from .mapping import MappingError
-from .pipeline import ingest_file
+from .pipeline import ingest_file, retire_shifts
 from .reader import FileReadError
 from .review import state_fingerprint
 
@@ -92,7 +104,14 @@ def start_job(
         evidence_type="auto",
         storage_prefix=prefix,
         files_json=json.dumps(
-            [{"filename": fname, "stage": "waiting"} for fname, _ in payloads]
+            [
+                {
+                    "filename": fname,
+                    "stage": "waiting",
+                    "sha256": hashlib.sha256(data).hexdigest(),
+                }
+                for fname, data in payloads
+            ]
         ),
     )
     db.session.add(job)
@@ -216,8 +235,21 @@ def run_job(job_id: str):
             files = json.loads(job.files_json)
             for state in files:
                 state["stage"] = "ready for review"
+            # Measure inside the uncommitted transaction, then again after the
+            # rollback, so review shows the real effect on all three tests.
+            periods = _affected_periods(job.facility_id, prepared.pop("dates"))
+            after = _test_positions(job.facility_id, periods)
+            leftovers = _period_rows(job.facility_id, job.receipt_id, prepared["scopes"])
+            if leftovers.count():
+                retire_shifts(leftovers, job.receipt_id)
+                after_period = _test_positions(job.facility_id, periods)
+            else:
+                after_period = None
             db.session.rollback()
             job = db.session.get(ImportJob, job_id)
+            prepared["effect"] = _merge_effect(
+                _test_positions(job.facility_id, periods), after, after_period
+            )
             prepared["state_fingerprint"] = baseline
             _touch(
                 job,
@@ -235,6 +267,21 @@ def run_job(job_id: str):
             if status != "running":
                 db.session.rollback()
                 return
+            if job.replace_period:
+                retired = retire_shifts(
+                    _period_rows(job.facility_id, job.receipt_id, prepared["scopes"]),
+                    job.receipt_id,
+                )
+                db.session.add(
+                    AuditLog(
+                        organization_id=job.organization_id,
+                        user_id=job.reviewed_by_user_id,
+                        action="import_period_replaced",
+                        entity="import_job",
+                        entity_id=job.id,
+                        detail=f"{retired} shift rows in the file's date range were absent from the corrected export and retained as superseded",
+                    )
+                )
             _touch(job, status="done")
     except AnalyzerError as e:
         # Provider users need an actionable result, not platform vendor names,
@@ -291,7 +338,11 @@ def _process(job: ImportJob, review=None):
     db.session.flush()
 
     outcomes = []
-    reviewed = {o["filename"]: o["spec"] for o in review["outcomes"]} if review else {}
+    reviewed = (
+        {o["filename"]: o["spec"] for o in review["outcomes"]}
+        if review
+        else json.loads(job.manual_specs_json or "{}")
+    )
     for state in files:
 
         def progress(stage, state=state):
@@ -302,6 +353,12 @@ def _process(job: ImportJob, review=None):
         data = storage.get(
             f"{job.storage_prefix}/{os.path.basename(state['filename'])}"
         )
+        digest = hashlib.sha256(data).hexdigest()
+        if state.get("sha256") and state["sha256"] != digest:
+            raise FileReadError(
+                f"{state['filename']} no longer matches the file that was uploaded. "
+                "Nothing was imported. Contact platform support with this import reference."
+            )
         outcome = ingest_file(
             facility,
             state["filename"],
@@ -310,6 +367,7 @@ def _process(job: ImportJob, review=None):
             progress=progress,
             reviewed_spec=reviewed.get(state["filename"]),
         )
+        outcome.sha256 = digest
         outcomes.append(outcome)
         state["stage"] = "done"
         state["detail"] = (
@@ -357,8 +415,13 @@ def _process(job: ImportJob, review=None):
     job.files_json = json.dumps(files)
     # run_job either rolls this entire transaction back for review, or commits
     # receipt, care rows, mapping changes and done status together.
+    scopes = _shift_scopes(outcomes)
+    leftovers = _period_rows(job.facility_id, receipt.id, scopes)
     return {
         "outcomes": _summarize(outcomes),
+        "samples": _samples(outcomes),
+        "scopes": scopes,
+        "dates": sorted(_evidence_dates(outcomes)),
         "impact": {
             "shifts_imported": receipt.shifts_imported,
             "shifts_replaced": sum(o.shifts_replaced for o in outcomes),
@@ -366,6 +429,8 @@ def _process(job: ImportJob, review=None):
             "resident_days_imported": receipt.resident_days_imported,
             "care_episodes_imported": receipt.care_episodes_imported,
             "care_episodes_replaced": sum(o.care_episodes_replaced for o in outcomes),
+            "period_rows": leftovers.count(),
+            "period_sample": _period_sample(leftovers),
             "first_date": receipt.first_shift_date.isoformat()
             if receipt.first_shift_date
             else None,
@@ -374,6 +439,135 @@ def _process(job: ImportJob, review=None):
             else None,
         },
     }
+
+
+def _shift_scopes(outcomes) -> list[dict]:
+    """The evidence stream and date range each shift sheet claims to describe."""
+    scopes = []
+    for outcome in outcomes:
+        for result in outcome.results:
+            days = [rec["date"] for rec in result.records] if result.kind == "shifts" else []
+            if days:
+                scopes.append(
+                    {
+                        "evidence_type": result.evidence_type,
+                        "first": min(days).isoformat(),
+                        "last": max(days).isoformat(),
+                    }
+                )
+    return scopes
+
+
+def _period_rows(facility_id, receipt_id, scopes):
+    """Earlier rows in a file's date range that the file does not contain."""
+    from sqlalchemy import and_, false, or_
+
+    ranges = [
+        and_(
+            Shift.evidence_type == scope["evidence_type"],
+            Shift.date >= date.fromisoformat(scope["first"]),
+            Shift.date <= date.fromisoformat(scope["last"]),
+        )
+        for scope in scopes
+    ]
+    return Shift.query.filter(
+        Shift.facility_id == facility_id,
+        Shift.evidence_type.notin_(RETIRED_EVIDENCE),
+        or_(Shift.import_receipt_id != receipt_id, Shift.import_receipt_id.is_(None)),
+        or_(*ranges) if ranges else false(),
+    )
+
+
+def _period_sample(query, limit=10) -> list[dict]:
+    from carelog.domain.compliance import worked_minutes
+
+    rows = query.order_by(Shift.date, Shift.id).limit(limit).all()
+    names = {
+        staff.id: staff.name
+        for staff in Staff.query.filter(Staff.id.in_({r.staff_id for r in rows}))
+    }
+    return [
+        {
+            "staff": names.get(row.staff_id, "Unknown"),
+            "date": row.date.isoformat(),
+            "minutes": worked_minutes(row),
+            "source_file": row.source_file,
+        }
+        for row in rows
+    ]
+
+
+def _evidence_dates(outcomes) -> set[str]:
+    return {
+        rec["date"].isoformat()
+        for outcome in outcomes
+        for result in outcome.results
+        for rec in result.records
+        if isinstance(rec.get("date"), date)
+    }
+
+
+def _affected_periods(facility_id, dates) -> list[tuple[date, date]]:
+    """Each touched quarter to date, so before and after compare the same span."""
+    today = facility_today(db.session.get(Facility, facility_id))
+    periods = {}
+    for value in dates:
+        start, end = quarter_bounds(date.fromisoformat(value))
+        periods[start] = max(start, min(end, today))
+    return sorted(periods.items())
+
+
+def _test_positions(facility_id, periods) -> list[dict]:
+    facility = db.session.get(Facility, facility_id)
+    positions = []
+    for start, end in periods:
+        result = quarterly_tests(facility, start, end)
+        positions.append(
+            {
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+                "period_label": result["period_label"],
+                "provisional": result["provisional"],
+                "tests": [
+                    {
+                        key: test[key]
+                        for key in ("key", "label", "achieved", "target", "on_track", "passed")
+                    }
+                    for test in result["tests"]
+                ],
+            }
+        )
+    return positions
+
+
+def _merge_effect(before, after, after_period) -> list[dict]:
+    return [
+        {
+            "start": old["start"],
+            "end": old["end"],
+            "period_label": old["period_label"],
+            "before": old,
+            "after": new,
+            "after_period_replacement": replaced,
+        }
+        for old, new, replaced in zip(before, after, after_period or [None] * len(before))
+    ]
+
+
+def _samples(outcomes, rows=3) -> dict:
+    """Interpreted example values, shown only to users who may see records."""
+    samples = {}
+    for outcome in outcomes:
+        for result in outcome.results:
+            shown = {}
+            for rec in result.records[:rows]:
+                for name, value in rec.items():
+                    if not name.startswith("_") and value not in (None, ""):
+                        shown.setdefault(name, []).append(str(value))
+            samples.setdefault(outcome.filename, {})[
+                f"{result.sheet}/{result.kind}"
+            ] = shown
+    return samples
 
 
 def _progress(job_id, files):
@@ -405,6 +599,7 @@ def _summarize(outcomes) -> list[dict]:
         {
             "filename": o.filename,
             "fingerprint": o.fingerprint,
+            "sha256": o.sha256,
             "mapping_reused": o.mapping_reused,
             "ai_usage": o.ai_usage,
             "spec": o.spec,

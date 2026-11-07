@@ -1,5 +1,6 @@
 import json
 from carelog.domain.clock import facility_today
+from carelog.ingestion.pipeline import record_credential_gap
 from datetime import date, datetime, timedelta
 
 from flask import (
@@ -225,7 +226,19 @@ def eligibility_decide(staff_id):
     member.registration_number = (
         form_data().get("registration_number") or ""
     ).strip() or member.registration_number
-    member.registration_expiry = optional_date("registration_expiry")
+    new_expiry = optional_date("registration_expiry")
+    if new_expiry:
+        record_credential_gap(member, new_expiry, facility_today(facility))
+    member.registration_expiry = new_expiry
+    continuity = (form_data().get("registration_continuous") or "") == "1"
+    if continuity and not reason:
+        return {"error": "Record the basis for confirming continuous registration."}, 400
+    if continuity and member.credential_gaps:
+        auth.record(
+            "registration_continuity_confirmed", "staff", member.id,
+            f"{member.staff_id}: {json.dumps(member.credential_gaps)}; basis: {reason}",
+        )
+        member.credential_gaps_json = None
     member.eligible_from = eligible_from
     member.eligible_to = eligible_to
     member.employment_type = (

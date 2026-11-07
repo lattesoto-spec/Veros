@@ -67,3 +67,15 @@ Original source files remain retained on failure. Changes to care data and recei
 - Organisation-wide deletion is administrator-only. Clinical Managers and Compliance Officers can record eligibility decisions; individual decisions now audit before/after values and require an explicit approval start date. Legacy automatic classifications of pending titles do not count until reviewed.
 - Sessions expire after 30 idle minutes, and a session without an activity timestamp is not trusted.
 - Calendar boundaries use the organisation's timezone rather than server UTC.
+
+## Corrections without losing history
+
+- Replaced shifts are retained as `superseded` and voided shifts as `voided`. Both leave the worked, rostered and unverified streams, so no calculation can count them, and each keeps its prior evidence class.
+- Review shows shifts in a file's date range that the file omits. Confirming a complete corrected export retires them; otherwise they stay counted. Deleting an import restores what it replaced unless newer evidence covers those dates.
+- `POST /api/audit/shift/<id>/void` and `/restore` require `review_eligibility`, a recorded reason and the current facility scope. Restoring is refused when it would overlap or duplicate an active row.
+- Review calculates all three tests before and after the file inside the uncommitted transaction, then rolls back. Example values are returned only to users with `view_records`.
+- Each upload records a SHA-256 on the job and receipt, verified at import, retry and download. A mismatch is refused and audited.
+- A later registration expiry records the unevidenced period since the previous expiry. Those days stay withheld until a reviewer confirms continuity with a basis.
+- A `pay_category` column lets payroll carry several duration lines for one person and day, capped at 24 hours. Without it, identical lines remain rejected.
+- Duration minutes floor without binary-float loss and break minutes round up. `CALC_VERSION` is `2026.11.6`.
+- The dashboard no longer lists storage per receipt; the audit page remains the authority on retained files.

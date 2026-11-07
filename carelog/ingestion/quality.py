@@ -18,7 +18,7 @@ def validate_shifts(records, evidence_type="worked", today=None):
     """Reject a batch rather than count duplicate or impossible care evidence."""
     from carelog.domain.clock import organization_today
     today = today or organization_today()
-    seen, spans = set(), {}
+    seen, spans, day_totals = set(), {}, {}
     for rec in records:
         where = f"{rec.get('_source_file') or 'Source'} / {rec.get('_source_sheet') or 'shifts'} / row {rec.get('_source_row', '?')}"
         span = _span(rec)
@@ -43,6 +43,7 @@ def validate_shifts(records, evidence_type="worked", today=None):
             rec.get("start_time"),
             rec.get("end_time"),
             rec.get("minutes"),
+            rec.get("pay_category"),
         )
         if key in seen:
             problem = "duplicate shift"
@@ -52,6 +53,11 @@ def validate_shifts(records, evidence_type="worked", today=None):
             if any(span[0] < old[1] and old[0] < span[1] for old in previous):
                 problem = "overlapping shifts for the same staff member"
             previous.append(span)
+        elif minutes is not None:
+            day_key = (rec["staff_id"], rec["date"])
+            day_totals[day_key] = day_totals.get(day_key, 0) + minutes
+            if day_totals[day_key] > 1440:
+                problem = "duration lines for one person exceed 24 hours in a day"
         if problem:
             raise MappingError(
                 f"{where}: {problem}; nothing was imported. Correct the source and upload again."

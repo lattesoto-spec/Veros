@@ -4,6 +4,12 @@ from flask_sqlalchemy import SQLAlchemy
 
 db = SQLAlchemy()
 
+# Retained shift rows that have left every evidence stream. Calculations select
+# worked/rostered/unverified explicitly, so a retired row can never be counted.
+SUPERSEDED = "superseded"
+VOIDED = "voided"
+RETIRED_EVIDENCE = (SUPERSEDED, VOIDED)
+
 
 class Organization(db.Model):
     """A customer. Every piece of care data belongs to exactly one, and no
@@ -14,6 +20,8 @@ class Organization(db.Model):
     name = db.Column(db.Text, nullable=False)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     timezone = db.Column(db.Text, nullable=False, default="Australia/Sydney")
+    # External AI-assisted format mapping is off until an administrator opts in.
+    ai_mapping_enabled = db.Column(db.Boolean, nullable=False, default=False)
 
 
 class User(db.Model):
@@ -242,6 +250,18 @@ class Staff(db.Model):
     classification = db.Column(db.Text)  # award / EA classification
     registration_number = db.Column(db.Text)  # Ahpra, for RN and EN
     registration_expiry = db.Column(db.Date)
+    # Renewal periods not evidenced by a credential export: [[from, to], ...].
+    # A later expiry never rewrites a lapse; a reviewer confirms continuity.
+    credential_gaps_json = db.Column(db.Text)
+
+    @property
+    def credential_gaps(self):
+        import json
+
+        return [
+            {"from": start, "to": end}
+            for start, end in json.loads(self.credential_gaps_json or "[]")
+        ]
 
 
 class Shift(db.Model):
@@ -267,6 +287,16 @@ class Shift(db.Model):
     # remain visible but are withheld until their source is confirmed.
     evidence_type = db.Column(db.Text, nullable=False, default="unverified")
     labour_cost = db.Column(db.Float)
+    pay_category = db.Column(db.Text)  # distinguishes payroll lines for one day
+    # Correction history. Replaced and voided rows stay on record outside the
+    # evidence streams, keeping the class they held so they can be restored.
+    prior_evidence_type = db.Column(db.Text)
+    superseded_by_receipt_id = db.Column(
+        db.Integer, db.ForeignKey("import_receipts.id")
+    )
+    void_reason = db.Column(db.Text)
+    voided_by_user_id = db.Column(db.Integer, db.ForeignKey("users.id"))
+    voided_at = db.Column(db.DateTime)
     # Audit lineage: which import produced this row, and where it came from.
     import_receipt_id = db.Column(db.Integer, db.ForeignKey("import_receipts.id"))
     source_row = db.Column(db.Integer)
@@ -323,11 +353,28 @@ class ImportReceipt(db.Model):
     calc_version = db.Column(db.Text)
     summary_json = db.Column(db.Text)  # per-file outcome snapshot for the summary page
 
+    def _retired_shifts(self, kind):
+        return Shift.query.filter_by(
+            import_receipt_id=self.id, evidence_type=kind
+        ).count()
+
+    @property
+    def voided_rows(self):
+        return self._retired_shifts(VOIDED)
+
+    @property
+    def superseded_rows(self):
+        return self._retired_shifts(SUPERSEDED)
+
     @property
     def active_care_rows(self):
-        return sum(
+        active_shifts = Shift.query.filter(
+            Shift.import_receipt_id == self.id,
+            Shift.evidence_type.notin_(RETIRED_EVIDENCE),
+        ).count()
+        return active_shifts + sum(
             model.query.filter_by(import_receipt_id=self.id).count()
-            for model in (Shift, ResidentDay, CareEpisode)
+            for model in (ResidentDay, CareEpisode)
         )
 
     @property
@@ -380,6 +427,10 @@ class ImportJob(db.Model):
         db.Text, nullable=False, default="[]"
     )  # [{filename, stage, detail}]
     review_json = db.Column(db.Text)
+    # Reviewer-supplied column mappings, {filename: spec}, re-run deterministically.
+    manual_specs_json = db.Column(db.Text)
+    # Chosen at confirmation: rows in the date range absent from the file retire.
+    replace_period = db.Column(db.Boolean, nullable=False, default=False)
     approved_at = db.Column(db.DateTime)
     reviewed_by_user_id = db.Column(db.Integer, db.ForeignKey("users.id"))
     storage_prefix = db.Column(db.Text, nullable=False, default="")
@@ -387,7 +438,7 @@ class ImportJob(db.Model):
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
 
-    def as_dict(self) -> dict:
+    def as_dict(self, include_samples: bool = False) -> dict:
         import json as _json
         from carelog.ingestion.review import public_review
 
@@ -405,7 +456,7 @@ class ImportJob(db.Model):
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": updated.isoformat() if updated else None,
             "approved_at": self.approved_at.isoformat() if self.approved_at else None,
-            "review": public_review(_json.loads(self.review_json))
+            "review": public_review(_json.loads(self.review_json), include_samples)
             if self.review_json
             else None,
         }

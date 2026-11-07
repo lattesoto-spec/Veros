@@ -38,6 +38,7 @@ SHIFT_FIELDS = [
     "is_direct_care",
     "is_agency",
     "labour_cost",
+    "pay_category",
 ]
 STAFF_FIELDS = [
     "staff_id",

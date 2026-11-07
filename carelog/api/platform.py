@@ -14,6 +14,7 @@ from carelog.domain.compliance import (
 from carelog.ingestion import jobs as import_jobs
 from carelog.ingestion.analyzer import ai_ready, resolve_model
 from carelog.models import (
+    RETIRED_EVIDENCE,
     AuditLog,
     Facility,
     ImportReceipt,
@@ -43,7 +44,10 @@ def _platform_org_summary(org):
         ).count(),
         "facilities": len(facility_ids),
         "shifts": (
-            Shift.query.filter(Shift.facility_id.in_(facility_ids)).count()
+            Shift.query.filter(
+                Shift.facility_id.in_(facility_ids),
+                Shift.evidence_type.notin_(RETIRED_EVIDENCE),
+            ).count()
             if facility_ids
             else 0
         ),
@@ -107,7 +111,10 @@ def platform_organization(organization_id):
                 "residents": Resident.query.filter_by(
                     facility_id=facility.id, discharged_date=None
                 ).count(),
-                "shifts": Shift.query.filter_by(facility_id=facility.id).count(),
+                "shifts": Shift.query.filter(
+                    Shift.facility_id == facility.id,
+                    Shift.evidence_type.notin_(RETIRED_EVIDENCE),
+                ).count(),
                 "latest": latest.date if latest else None,
             }
         )

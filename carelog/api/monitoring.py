@@ -43,7 +43,6 @@ from carelog.models import (
 from carelog.services.workspace import (
     _clock_label,
     _latest_receipt,
-    _receipt_files,
     current_facility,
 )
 
@@ -297,7 +296,9 @@ def dashboard():
         (facility_today(facility) - last_receipt.imported_at.date()).days if last_receipt else None
     )
     receipts = ImportReceipt.query.filter_by(facility_id=facility.id).all()
-    with_files = sum(1 for r in receipts if _receipt_files(r))
+    # The dashboard must not make one storage call per receipt. The audit page
+    # lists the stored objects; here a recorded retention location is enough.
+    with_files = sum(1 for r in receipts if r.source_path)
     audit_readiness = round(with_files / len(receipts) * 100) if receipts else None
     evidence = evidence_summary(facility.id, q_start, today)
     tests = quarterly_tests(facility, q_start, today)

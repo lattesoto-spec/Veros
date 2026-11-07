@@ -23,6 +23,7 @@ from carelog.domain.compliance import (
     quarterly_tests,
 )
 from carelog.models import (
+    RETIRED_EVIDENCE,
     CareEpisode,
     Facility,
     ImportReceipt,
@@ -208,7 +209,9 @@ def facilities_view():
                     None
                 )
         summary[f.id] = {
-            "shifts": Shift.query.filter_by(facility_id=f.id).count(),
+            "shifts": Shift.query.filter(
+                Shift.facility_id == f.id, Shift.evidence_type.notin_(RETIRED_EVIDENCE)
+            ).count(),
             "residents": Resident.query.filter_by(
                 facility_id=f.id, discharged_date=None
             ).count(),
