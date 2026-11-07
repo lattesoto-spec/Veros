@@ -45,14 +45,9 @@ from carelog.models import (
 
 from .analyzer import AnalyzerError
 from .mapping import MappingError
-from .pipeline import MappingRequired, ingest_file, retire_shifts
+from .pipeline import MappingRequired, ingest_file, layout_scope, retire_shifts
 from .reader import FileReadError
 from .review import state_fingerprint
-
-# Guards the shift-replacing import against a concurrent second import in the
-# same process. Cross-process safety comes from a job claim and a facility row lock.
-_RUN_LOCK = threading.Lock()
-
 
 def worker_mode() -> str:
     mode = (os.environ.get("IMPORT_WORKER") or "").strip().lower()
@@ -198,18 +193,6 @@ def _run_in_app(app, job_id: str):
 def run_job(job_id: str):
     """Execute a queued job. Safe to call twice: the status check makes the
     second caller a no-op, so a retried dispatch cannot double-import."""
-    if not _RUN_LOCK.acquire(timeout=60):
-        db.session.execute(
-            update(ImportJob)
-            .where(ImportJob.id == job_id, ImportJob.status == "queued")
-            .values(
-                status="failed",
-                error="Another import is still running. Retry this upload shortly.",
-                updated_at=datetime.utcnow(),
-            )
-        )
-        db.session.commit()
-        return
     try:
         # Compare-and-set prevents a duplicate serverless invocation claiming
         # the same job. Progress uses another session, never the care transaction.
@@ -261,6 +244,8 @@ def run_job(job_id: str):
                 receipt_id=None,
             )
         else:
+            if prepared["impact"]["holds"] or prepared["impact"]["pay_unknown"]:
+                raise FileReadError("Unanswered source questions remain. Nothing was imported. Retry and resolve every question before confirming.")
             # A recovery action may have superseded a stalled worker. Lock and
             # re-check its state before committing any care data.
             status = db.session.execute(
@@ -313,8 +298,6 @@ def run_job(job_id: str):
             "Contact platform support and include this import reference.",
         )
         raise
-    finally:
-        _RUN_LOCK.release()
 
 
 def _process(job: ImportJob, review=None):
@@ -430,6 +413,7 @@ def _process(job: ImportJob, review=None):
         "impact": {
             "shifts_imported": receipt.shifts_imported,
             "shifts_replaced": sum(o.shifts_replaced for o in outcomes),
+            "replaced_sample": [row for o in outcomes for row in o.replaced_sample][:20],
             "residents_imported": receipt.residents_imported,
             "resident_days_imported": receipt.resident_days_imported,
             "care_episodes_imported": receipt.care_episodes_imported,
@@ -465,7 +449,7 @@ def without_personal_samples(review_json):
         return review_json
     review = json.loads(review_json)
     review.pop("samples", None)
-    for name in ("period_sample", "census_changes", "void_matches", "holds"):
+    for name in ("period_sample", "replaced_sample", "census_changes", "void_matches", "holds"):
         review.get("impact", {}).pop(name, None)
     return json.dumps(review)
 
@@ -482,6 +466,7 @@ def _shift_scopes(outcomes) -> list[dict]:
                         "evidence_type": result.evidence_type,
                         "first": min(days).isoformat(),
                         "last": max(days).isoformat(),
+                        "fingerprint": outcome.fingerprint,
                     }
                 )
     return scopes
@@ -496,6 +481,7 @@ def _period_rows(facility_id, receipt_id, scopes):
             Shift.evidence_type == scope["evidence_type"],
             Shift.date >= date.fromisoformat(scope["first"]),
             Shift.date <= date.fromisoformat(scope["last"]),
+            layout_scope(facility_id, scope.get("fingerprint")),
         )
         for scope in scopes
     ]

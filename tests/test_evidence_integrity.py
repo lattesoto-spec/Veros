@@ -1,3 +1,4 @@
+import json
 from datetime import date, time, timedelta
 
 import pytest
@@ -8,7 +9,7 @@ from carelog.domain.eligibility import classify
 from carelog.ingestion.mapping import MappingError, parse_date_value
 from carelog.ingestion.pipeline import ImportOutcome, _import_shifts
 from carelog.ingestion.quality import validate_shifts
-from carelog.models import FacilityTarget, Resident, ResidentDay, Shift, Staff, db
+from carelog.models import FacilityTarget, ImportReceipt, Resident, ResidentDay, Shift, Staff, db
 from conftest import add_resident_days
 
 
@@ -138,7 +139,11 @@ def test_ambiguous_resident_days_are_excluded():
 def test_imports_preserve_other_dates_and_reimport_idempotently(app, facility):
     with app.app_context():
         for month in (8, 9, 8):
-            outcome = ImportOutcome("worked.csv", "x", True, {}, [])
+            receipt = ImportReceipt(facility_id=facility.id,
+                                    summary_json=json.dumps([{"filename": "worked.csv", "fingerprint": "x"}]))
+            db.session.add(receipt)
+            db.session.flush()
+            outcome = ImportOutcome("worked.csv", "x", True, {}, [], receipt=receipt)
             _import_shifts(
                 facility,
                 [
@@ -148,13 +153,15 @@ def test_imports_preserve_other_dates_and_reimport_idempotently(app, facility):
                         "date": date(2026, month, 1),
                         "start_time": time(8),
                         "end_time": time(16),
+                        "_source_file": "worked.csv",
                     }
                 ],
                 outcome,
                 "worked",
             )
             db.session.commit()
-        assert Shift.query.count() == 2
+        assert Shift.query.filter_by(evidence_type="worked").count() == 2
+        assert Shift.query.filter_by(evidence_type="superseded").count() == 1
 
 
 @pytest.mark.parametrize(

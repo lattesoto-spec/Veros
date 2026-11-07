@@ -18,7 +18,7 @@ from carelog.domain.care_minutes import (
 from carelog.domain import eligibility
 from carelog.models import CareEpisode, Resident, ResidentDay, Shift, Staff, db
 
-CALC_VERSION = "2026.11.8"
+CALC_VERSION = "2026.11.9"
 
 # Canonical reporting buckets. The mapping engine normalizes to PCW; the
 # government statement calls the bucket PCA — they are the same bucket.
@@ -381,22 +381,14 @@ def detect_gaps(facility, today: date) -> list[dict]:
 
     # Tomorrow's rostered RN shortfall (only if the roster extends that far)
     tomorrow = today + timedelta(days=1)
-    has_future = (
+    has_roster = (
         db.session.query(Shift.id)
-        .filter(Shift.facility_id == fid, Shift.date >= tomorrow)
+        .filter_by(facility_id=fid, date=tomorrow, evidence_type="rostered")
         .first()
         is not None
     )
-    if has_future and approved:
-        has_roster = (
-            db.session.query(Shift.id)
-            .filter_by(facility_id=fid, date=tomorrow, evidence_type="rostered")
-            .first()
-            is not None
-        )
-        b = day_breakdown(
-            fid, tomorrow, evidence_type="rostered" if has_roster else "worked"
-        )
+    if has_roster and approved:
+        b = day_breakdown(fid, tomorrow, evidence_type="rostered")
         residents = b["residents"] or active_residents_on(fid, today)
         rn_needed = rn_target * RN_ONLY_FRACTION * residents
         if b["rn_minutes"] < rn_needed:

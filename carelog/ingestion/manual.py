@@ -236,6 +236,8 @@ def _build_target(mapping, sheet, problems):
     if kind == "shifts":
         problems.extend(_shift_problems(chosen, label))
     target = {"kind": kind, "sheet": sheet.name, "fields": fields}
+    if kind == "shifts" and chosen.get("break_minutes") == ALWAYS_TRUE:
+        target["break_basis"] = "Reviewer confirmed these times already exclude unpaid breaks."
     if sheet.raw_rows:
         target["header_row"] = header_row
     filter_column = (mapping.get("filter_column") or "").strip()

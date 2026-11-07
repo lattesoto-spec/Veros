@@ -7,6 +7,18 @@ The complete UI-ordered feature inventory lives in `FEATURES.md` in the independ
 - The closed-quarter register flags changed evidence readiness, limitations, contributing source files and calculation versions as well as changed care-minute figures and target comparisons. Equal headline totals no longer hide a changed evidence basis.
 - Each flagged quarter lists the reasons for review and whether live evidence is provisional. Its issued statement and original figures remain available unchanged. No arithmetic outputs changed.
 
+## Provider source questions and identity safeguards (UI order)
+
+1. **Dashboard:** provisional metric badges say “Review required”. Tomorrow's roster-shortfall alerts require actual rostered evidence on that date; future unverified or later-dated records do not invent an empty roster.
+2. **Imports:** status columns are detected by name and rejected/pending/cancelled/no-show values. Unresolved meanings block confirmation, and known non-worked statuses remain excluded even with remembered mappings. A cancelled correction retires the earlier worked record for the same source layout and staff/date group. A file with no usable rows still fails visibly and retains its source.
+3. **Imports:** every mapping path requires an unpaid-break column or an explicit reviewer confirmation that clock times already exclude breaks. A worker rechecks unanswered questions before commit. Additional multi-site column names include Ward, Business Unit and Department.
+4. **Imports:** conflicting names or Ahpra numbers for an existing staff ID reject the whole batch, preserving earlier shifts, identity, decisions and credentials. Name and registration columns cannot hide a collision simply by being omitted from the mapping. Correct source errors or use distinct identifiers across systems.
+5. **Imports:** replacement and complete-period correction are limited to the same retained layout fingerprint. Other layouts remain intact; overlapping time across them is rejected. Legacy rows without layout evidence are not silently replaced. Review shows up to 20 existing/incoming staff identities and earlier source files; these samples require record permission and are cleared when review ends.
+6. **Eligibility:** role exclusions match occupational words and explicit occupational stems, not incidental substrings in “Rostered” or “Garden Court”. Ambiguous modified nursing/care titles remain pending for an audited effective-date decision. Explicit ineligible occupations still cannot be approved into care totals.
+7. **Operations:** independent facilities no longer share a process-wide import lock; PostgreSQL's facility row lock and atomic job claim remain authoritative. Operator diagnostics use constant-time token comparison and report proxy configuration presence without credentials or raw network exception text.
+
+`CALC_VERSION` is `2026.11.9`. Original numerical golden fixtures remain unchanged. Verification uses synthetic evidence and a dedicated local PostgreSQL database; provider usability and deployed behavior remain separately unverified.
+
 ## 2026-11-07
 
 1. **Imports / Facilities / Settings:** explicitly validate both verified facility targets before any mutation. Non-finite, missing, non-positive or inconsistent targets are rejected. Synthetic two-file demo sources generate in temporary test directories.

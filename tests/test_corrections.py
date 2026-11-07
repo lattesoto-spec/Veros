@@ -45,6 +45,8 @@ SPEC = {
         "kind": "shifts",
         "sheet": "CSV",
         "fail_on_row_error": True,
+        "row_filter": {"column": "Approval Status", "include_values": ["Approved"]},
+        "break_basis": "Synthetic intervals contain no unpaid breaks.",
         "fields": {
             "staff_id": {"column": "Staff ID"},
             "staff_name": {"column": "Staff Name"},
@@ -52,6 +54,7 @@ SPEC = {
             "date": {"column": "Work Date", "parse": "date"},
             "start_time": {"column": "Actual Start", "parse": "time"},
             "end_time": {"column": "Actual Finish", "parse": "time"},
+            "break_minutes": {"source": "constant", "value": 0, "parse": "number"},
         },
     }],
     "reasoning": "test mapping",

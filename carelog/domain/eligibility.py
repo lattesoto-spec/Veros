@@ -89,7 +89,8 @@ INELIGIBLE = (
     "kitchen",
     "hospitality",
     "maintenance",
-    "garden",
+    "gardener",
+    "gardening",
     "driver",
     "volunteer",
     "student",
@@ -122,7 +123,13 @@ def classify(raw_role: str) -> tuple[str, str, str]:
         return "OTHER", PENDING, "non-direct-care or negated title requires review"
 
     for term in INELIGIBLE:
-        if term in text:
+        # Match role words, not incidental parts of Rostered, Garden Court or
+        # a person's location. Explicit occupational stems keep their variants.
+        suffix = {
+            "physio": r"\w*", "occupational therap": r"\w*", "podiatr": r"\w*",
+            "dietit": r"\w*", "exercise physiolog": r"\w*", "clean": r"(?:er|ers|ing)?",
+        }.get(term, "")
+        if re.search(r"\b" + re.escape(term) + suffix + r"\b", text):
             return "OTHER", EXCLUDED, f"not a direct-care role ({term})"
 
     for bucket, terms in DEFINITIVE.items():

@@ -340,7 +340,8 @@ def import_resolve_hold(job_id):
     if hold is None or outcome is None:
         return {"error": "That question is no longer open. Reload this review."}, 409
     spec = outcome["spec"]
-    target = next(t for t in spec["targets"] if t.get("sheet") == sheet)
+    target = next(t for t in spec["targets"] if t.get("sheet") == sheet
+                  and (kind == "site" or t.get("kind") == "shifts"))
     if kind == "pay_column":
         if value == "none":
             target["all_lines_worked"] = basis
@@ -348,9 +349,24 @@ def import_resolve_hold(job_id):
             target["fields"]["pay_category"] = {"column": value}
         else:
             return {"error": "Choose a column from this sheet."}, 400
-    elif value == "all":
+    elif kind == "breaks":
+        if value == "none":
+            target["fields"]["break_minutes"] = {"source": "constant", "value": 0, "parse": "number"}
+            target["break_basis"] = basis
+        elif value in {option["column"] for option in hold["options"]}:
+            target["fields"]["break_minutes"] = {"column": value, "parse": "number"}
+        else:
+            return {"error": "Choose the break column or confirm these times already exclude breaks."}, 400
+    elif kind == "status":
+        if value == "all" and hold.get("allow_all"):
+            target.setdefault("status_attestations", {})[hold["column"]] = {"basis": basis, "values": hold["options"]}
+        elif value in hold["options"]:
+            target.setdefault("status_filters", []).append({"column": hold["column"], "include_values": [value]})
+        else:
+            return {"error": "Choose an eligible status from this sheet. Rejected, pending and cancelled lines cannot count."}, 400
+    elif kind == "site" and value == "all":
         target["single_site"] = basis
-    elif value in hold["options"]:
+    elif kind == "site" and value in hold["options"]:
         target["site_filter"] = {"column": hold["column"], "include_values": [value]}
     else:
         return {"error": "Choose a value from this sheet."}, 400

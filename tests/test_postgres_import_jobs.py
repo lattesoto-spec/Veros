@@ -112,6 +112,54 @@ def test_duplicate_names_rejected_before_storage(pg_app):
     assert ImportJob.query.count() == 0
 
 
+def test_imports_for_other_organisations_do_not_wait_on_a_process_lock(pg_app, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    app, facility, storage = pg_app
+    other_org = Organization(name="Another synthetic provider")
+    db.session.add(other_org)
+    db.session.flush()
+    other = Facility(organization_id=other_org.id, name="Another home")
+    db.session.add(other)
+    db.session.commit()
+    source = Path(__file__).parents[1] / "sample_data/demo_video/caremin_demo_actual_worked_export.xlsx"
+    inputs = [(source.name, source.read_bytes())]
+    first = jobs.start_job(app, facility.id, inputs, storage, organization_id=facility.organization_id)
+    second = jobs.start_job(app, other.id, inputs, storage, organization_id=other.organization_id)
+    started, release, second_done = Event(), Event(), Event()
+    process = jobs._process
+
+    def controlled(job, review=None):
+        if job.id == first:
+            started.set()
+            assert release.wait(20), "Test did not release the first facility import"
+        return process(job, review=review)
+
+    def run(job_id):
+        try:
+            jobs._run_in_app(app, job_id)
+        finally:
+            if job_id == second:
+                second_done.set()
+
+    monkeypatch.setattr(jobs, "_process", controlled)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first_run = executor.submit(run, first)
+        try:
+            assert started.wait(5)
+            second_run = executor.submit(run, second)
+            assert second_done.wait(15), "Another organisation was blocked by the first import"
+            second_run.result()
+        finally:
+            release.set()
+        first_run.result()
+    db.session.expire_all()
+    assert db.session.get(ImportJob, first).status == "review"
+    assert db.session.get(ImportJob, second).status == "review"
+    assert Shift.query.count() == ImportReceipt.query.count() == 0
+
+
 def test_missing_worker_fails_readiness_and_retains_the_source(pg_app, monkeypatch):
     app, facility, storage = pg_app
     monkeypatch.delenv("WORKER_SECRET")

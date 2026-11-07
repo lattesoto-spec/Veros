@@ -1,3 +1,4 @@
+import hmac
 import os
 
 from flask import (
@@ -21,7 +22,8 @@ def _debug_allowed() -> bool:
     are for the operator only: a signed-in superuser, or a caller holding
     DEBUG_TOKEN (which is how the setup script checks a fresh deploy)."""
     token = os.environ.get("DEBUG_TOKEN")
-    if token and request.headers.get("x-debug-token") == token:
+    supplied = request.headers.get("x-debug-token", "")
+    if token and hmac.compare_digest(supplied.encode(), token.encode()):
         return True
     user = current_user()
     return bool(user and user.is_superuser)
@@ -41,7 +43,7 @@ def debug_network():
 
     report = {
         "env": {
-            k: os.environ[k]
+            k: "configured"
             for k in (
                 "HTTPS_PROXY",
                 "HTTP_PROXY",
@@ -65,7 +67,7 @@ def debug_network():
         except Exception as e:
             return {
                 "ok": False,
-                "error": f"{type(e).__name__}: {e}",
+                "error": type(e).__name__,
                 "seconds": round(_time.monotonic() - t, 2),
             }
 

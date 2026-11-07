@@ -21,6 +21,7 @@ from carelog.models import (
     AuditLog,
     CareEpisode,
     FormatMapping,
+    ImportReceipt,
     Organization,
     PayCategoryRule,
     Resident,
@@ -38,6 +39,7 @@ from .paycodes import candidate_columns, pay_column, split_records
 from .presets import matching_spec
 from .quality import _minutes as record_minutes, check_shifts, daylight_saving_warnings
 from .reader import read_upload, rebuild_with_header
+from .statuses import disallowed, prepare_status_filters, status_columns
 
 
 MAPPING_SPEC_VERSION = 2
@@ -106,6 +108,7 @@ class ImportOutcome:
     census_changes: list[dict] = field(default_factory=list)
     void_matches: list[dict] = field(default_factory=list)
     holds: list[dict] = field(default_factory=list)
+    replaced_sample: list[dict] = field(default_factory=list)
 
 
 def get_or_create_mapping(
@@ -207,6 +210,8 @@ def ingest_file(
     _rebind_sheets(spec, sheets, filename)
     mapped_sheets = apply_header_overrides(spec, sheets)
     _read_pay_columns(spec, mapped_sheets)
+    _read_identity_columns(spec, mapped_sheets)
+    prepare_status_filters(spec, mapped_sheets)
     results = run_spec(spec, mapped_sheets)
     for result in results:
         if not result.records:
@@ -278,7 +283,8 @@ def ingest_file(
                 r.records, organization.timezone if organization else "Australia/Sydney"
             ))
             _import_shifts(
-                facility, r.records, outcome, evidence_type=auto_type, ruled_out=ruled_out
+                facility, r.records, outcome, evidence_type=auto_type,
+                ruled_out=[*ruled_out, *r.excluded_records],
             )
         elif r.kind == "staff":
             continue
@@ -313,6 +319,27 @@ def _staff_directory(facility) -> dict[str, list]:
     for member in Staff.query.filter_by(facility_id=facility.id).order_by(Staff.id):
         directory.setdefault(member.staff_id, []).append(member)
     return directory
+
+
+def _validate_staff_identity(directory, rec, filename):
+    """A source identifier alone cannot transfer one person's credentials."""
+    sid = str(rec["staff_id"]).strip()
+    name = " ".join(str(rec.get("staff_name") or "").split()).casefold()
+    registration = str(rec.get("registration_number") or "").strip().casefold()
+    for existing in directory.get(sid, []):
+        old_name = " ".join((existing.name or "").split()).casefold()
+        old_registration = (existing.registration_number or "").strip().casefold()
+        if name and old_name and old_name != sid.casefold() and name != old_name:
+            raise MappingError(
+                f"{filename}: staff ID {sid} is recorded as {existing.name!r}, "
+                f"but this file names {rec['staff_name']!r}. Nothing was imported. "
+                "Correct the source, or use distinct staff identifiers across payroll and agency systems."
+            )
+        if registration and old_registration and registration != old_registration:
+            raise MappingError(
+                f"{filename}: staff ID {sid} has a different Ahpra registration number. "
+                "Nothing was imported. Verify the person and use a distinct identifier for a different worker."
+            )
 
 
 def _record_for_role(versions, raw_role):
@@ -395,6 +422,7 @@ def record_credential_gap(member, new_expiry: date, today: date):
 def _import_staff(facility, records: list[dict], outcome: ImportOutcome):
     directory = _staff_directory(facility)
     for rec in records:
+        _validate_staff_identity(directory, rec, outcome.filename)
         sid = str(rec["staff_id"]).strip()
         name = str(rec.get("staff_name") or "").strip() or sid
         raw_role = str(rec.get("source_role") or rec.get("role") or "").strip()
@@ -466,7 +494,8 @@ def _rebind_sheets(spec, sheets, filename):
 
 SITE_COLUMNS = {
     "site", "site_name", "facility", "facility_name", "home", "home_name", "campus",
-    "location", "cost_centre", "cost_center", "service_location",
+    "location", "cost_centre", "cost_center", "service_location", "ward",
+    "business_unit", "department",
 }
 
 
@@ -479,6 +508,33 @@ def _review_holds(spec, sheets, filename) -> list[dict]:
         sheet = next(s for s in sheets if s.name == target.get("sheet"))
         mapped = _target_columns(target)
         fields = target.get("fields", {})
+        if target["kind"] == "shifts":
+            break_rule = fields.get("break_minutes", {})
+            if {"start_time", "end_time"} <= set(fields) and (
+                not break_rule or (break_rule.get("source") == "constant" and not target.get("break_basis"))
+            ):
+                holds.append({
+                    "kind": "breaks", "file": filename, "sheet": sheet.name,
+                    "options": candidate_columns(sheet.headers, sheet.rows, mapped),
+                })
+            for header in status_columns(sheet):
+                filters = [target.get("row_filter", {})] + target.get("status_filters", [])
+                if any(f.get("column") == header and f.get("include_values")
+                       and all(str(v).strip() and not disallowed(v) for v in f["include_values"]) for f in filters):
+                    continue
+                values = sorted({str(r.get(header) or "").strip() for r in sheet.rows})
+                attestation = target.get("status_attestations", {}).get(header)
+                if (isinstance(attestation, dict) and attestation.get("basis")
+                    and set(values) <= set(attestation.get("values", []))
+                    and all(v and not disallowed(v) for v in values)):
+                    continue
+                holds.append({
+                    "kind": "status", "file": filename, "sheet": sheet.name,
+                    "column": header, "options": [v for v in values if v and not disallowed(v)],
+                    "excluded": [v or "Blank" for v in values if disallowed(v) or not v],
+                    "allow_all": bool(values) and all(v and not disallowed(v) for v in values),
+                })
+                break  # Ask about another status column after this one is resolved.
         if (
             target["kind"] == "shifts"
             and "minutes" in fields
@@ -519,6 +575,22 @@ def _read_pay_columns(spec, sheets):
             target.setdefault("fields", {})["pay_category"] = {"column": column}
 
 
+def _read_identity_columns(spec, sheets):
+    """Omitting an available name or Ahpra column cannot hide an ID collision."""
+    for target in spec.get("targets", []):
+        if target.get("kind") not in ("shifts", "staff"):
+            continue
+        sheet = next(s for s in sheets if s.name == target["sheet"])
+        for field_name, headers in (
+            ("staff_name", {"staff_name", "employee_name", "worker_name", "full_name"}),
+            ("registration_number", {"ahpra_registration", "ahpra_number", "ahpra_registration_number", "registration_number"}),
+        ):
+            if field_name not in target["fields"]:
+                found = [h for h in sheet.headers if normalize_header(h) in headers]
+                if len(found) == 1:
+                    target["fields"][field_name] = {"column": found[0]}
+
+
 def retire_shifts(query, receipt_id) -> int:
     """Keep replaced rows on record, restorable if the replacing import goes."""
     if not receipt_id:
@@ -535,6 +607,25 @@ def retire_shifts(query, receipt_id) -> int:
 
 def _shift_key(sid, day, start, end, duration, coverage_known):
     return (sid, day, start, end) if coverage_known else (sid, day, duration)
+
+
+def layout_scope(facility_id, source_fingerprint):
+    """Replacement follows the source layout, including renamed monthly files.
+
+    Legacy rows without retained layout evidence are not silently replaced.
+    Overlaps with another source remain a visible validation error.
+    """
+    from sqlalchemy import and_, false, or_
+
+    if not source_fingerprint:
+        return false()
+    matches = []
+    for receipt in ImportReceipt.query.filter_by(facility_id=facility_id):
+        for source in json.loads(receipt.summary_json or "[]"):
+            if source.get("fingerprint") == source_fingerprint and source.get("filename"):
+                matches.append(and_(Shift.import_receipt_id == receipt.id,
+                                    Shift.source_file == source["filename"]))
+    return or_(*matches) if matches else false()
 
 
 def _voided_keys(facility, records, evidence_type) -> dict:
@@ -579,27 +670,30 @@ def _import_shifts(
     for rec in [*records, *ruled_out]:
         dates_by_staff.setdefault(str(rec["staff_id"]).strip(), set()).add(rec["date"])
     directory = _staff_directory(facility)
+    # Check before retiring any shifts or updating any staff fields.
+    for rec in [*records, *ruled_out]:
+        _validate_staff_identity(directory, rec, outcome.filename)
     person_of = {m.id: sid for sid, versions in directory.items() for m in versions}
-    for sid, days in dates_by_staff.items():
-        members = [member.id for member in directory.get(sid, [])]
-        if members:
-            query = Shift.query.filter(
-                Shift.facility_id == facility.id,
-                Shift.staff_id.in_(members),
-                Shift.evidence_type == evidence_type,
-                Shift.date.in_(days),
-            )
-            receipt_id = getattr(outcome.receipt, "id", None)
-            if receipt_id:
-                from sqlalchemy import or_
+    from sqlalchemy import and_, false, or_
 
-                query = query.filter(
-                    or_(
-                        Shift.import_receipt_id != receipt_id,
-                        Shift.import_receipt_id.is_(None),
-                    )
-                )
-            outcome.shifts_replaced += retire_shifts(query, receipt_id)
+    groups = [and_(Shift.staff_id.in_([m.id for m in directory[sid]]), Shift.date.in_(days))
+              for sid, days in dates_by_staff.items() if sid in directory]
+    query = Shift.query.filter(
+        Shift.facility_id == facility.id, Shift.evidence_type == evidence_type,
+        layout_scope(facility.id, outcome.fingerprint), or_(*groups) if groups else false(),
+    )
+    receipt_id = getattr(outcome.receipt, "id", None)
+    if receipt_id:
+        query = query.filter(or_(Shift.import_receipt_id != receipt_id, Shift.import_receipt_id.is_(None)))
+    new_names = {str(rec["staff_id"]).strip(): rec.get("staff_name") for rec in [*records, *ruled_out]}
+    members_by_id = {m.id: m for versions in directory.values() for m in versions}
+    for old in query.order_by(Shift.date, Shift.id).limit(max(0, 20 - len(outcome.replaced_sample))):
+        member = members_by_id[old.staff_id]
+        outcome.replaced_sample.append({
+            "previous_staff": member.name, "incoming_staff": new_names.get(member.staff_id) or member.name,
+            "date": old.date.isoformat(), "source_file": old.source_file,
+        })
+    outcome.shifts_replaced += retire_shifts(query, receipt_id)
     db.session.flush()
 
     existing_by_staff = {}
@@ -617,6 +711,7 @@ def _import_shifts(
             existing_by_staff.setdefault(person_of[existing.staff_id], []).append(existing)
     voided = _voided_keys(facility, records, evidence_type)
     for rec in records:
+        _validate_staff_identity(directory, rec, outcome.filename)
         sid = str(rec["staff_id"]).strip()
         role = (rec.get("role") or "OTHER").strip().upper() or "OTHER"
         name = (rec.get("staff_name") or "").strip() or sid

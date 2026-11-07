@@ -39,6 +39,7 @@ SHIFT_FIELDS = [
     "is_agency",
     "labour_cost",
     "pay_category",
+    "registration_number",
 ]
 STAFF_FIELDS = [
     "staff_id",
@@ -125,6 +126,7 @@ class TargetResult:
     evidence_type: str | None = None
     evidence_basis: str | None = None
     pay_categories: list[dict] = field(default_factory=list)
+    excluded_records: list[dict] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------- parsing
@@ -274,6 +276,9 @@ def _extract_field(fs: dict, row: dict, headers: list[str]):
 
 
 def _passes_filter(target: dict, row: dict, headers: list[str]) -> bool:
+    for status_filter in target.get("excluded_status_filters", []) + target.get("status_filters", []):
+        if not _matches_filter(status_filter, row, headers):
+            return False
     site = target.get("site_filter")
     if site and not _matches_filter(site, row, headers):
         return False
@@ -336,6 +341,24 @@ def run_target(target: dict, sheets: list[Sheet]) -> TargetResult:
         result.rows_seen += 1
         if not _passes_filter(target, row, sheet.headers):
             result.rows_filtered += 1
+            # A cancelled correction still speaks for this staff/date group.
+            # Keep only its identity for replacement; its time never counts.
+            status_filters = target.get("excluded_status_filters", [])
+            rejected = any(not _matches_filter(f, row, sheet.headers) for f in status_filters)
+            if kind == "shifts" and rejected:
+                context = {k: v for k, v in target.items()
+                           if k not in ("excluded_status_filters", "status_filters")}
+                if context.get("row_filter", {}).get("column") in {f["column"] for f in status_filters}:
+                    context.pop("row_filter")
+                if _passes_filter(context, row, sheet.headers):
+                    try:
+                        identity = {name: _extract_field(fields_spec[name], row, sheet.headers)
+                                    for name in ("staff_id", "staff_name", "date") if name in fields_spec}
+                        if not identity.get("staff_id") or not isinstance(identity.get("date"), date):
+                            raise ValueError("staff ID and date are required for a rejected-status correction")
+                    except (ValueError, MappingError) as error:
+                        raise MappingError(f"{sheet.name}: Row {idx}: {error}") from None
+                    result.excluded_records.append(identity)
             continue
         record, err = {}, None
         for name, fs in fields_spec.items():
