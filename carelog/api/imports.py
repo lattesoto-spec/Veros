@@ -19,6 +19,7 @@ from carelog.api.responses import form_data, navigate, resource
 from carelog.auth import (
     current_organization_id,
     current_user,
+    has_permission,
     owned_or_404,
     require,
 )
@@ -36,6 +37,7 @@ from carelog.models import (
     Shift,
     db,
 )
+from carelog.services.targets import parse_targets
 from carelog.services.workspace import (
     ROOT,
     _confirmed,
@@ -77,6 +79,14 @@ def universal_import():
 
     if not name and not facility:
         errors.append("Facility name is required for the first import.")
+    targets = None
+    if not facility:
+        if not has_permission("manage_facility"):
+            errors.append("Ask your administrator to create a facility before importing.")
+        try:
+            targets = parse_targets(form_data())
+        except ValueError as error:
+            errors.append(str(error))
     if not files:
         errors.append("Upload at least one file.")
     if errors:
@@ -88,7 +98,8 @@ def universal_import():
         ), 400
 
     if not facility:
-        facility = Facility(name=name, organization_id=current_organization_id())
+        facility = Facility(name=name, organization_id=current_organization_id(),
+                            ancc_target=targets[0], rn_target=targets[1])
         db.session.add(facility)
         db.session.flush()
         session["facility_id"] = facility.id

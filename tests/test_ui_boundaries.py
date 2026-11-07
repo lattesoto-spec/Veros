@@ -243,3 +243,36 @@ def test_redesigned_reporting_routes_render_calculated_data(web_app):
     assert client.get("/api/rn-coverage?month=2026-08").json["data"]["available_days"] == 2
     summaries = client.get("/api/facilities").json["data"]["summary"]
     assert next(iter(summaries.values()))["period_status"] is True
+
+
+@pytest.mark.parametrize("invalid", ["", "nan", "inf", "-1", "0", "not a number"])
+def test_invalid_targets_never_change_facility_state(web_app, invalid):
+    app, ids = web_app
+    client = app.test_client()
+    sign_in_as(client, ids["admin"])
+    with app.app_context():
+        home_id = Facility.query.filter_by(organization_id=ids["customer"]).one().id
+    for route in ("/api/settings", "/api/facility/targets", f"/api/facilities/{home_id}/update"):
+        response = client.post(route, data={
+            "facility_name": "Changed", "name": "Changed", "ancc_target": "220", "rn_target": invalid,
+        })
+        assert response.status_code == 400
+        with app.app_context():
+            home = db.session.get(Facility, home_id)
+            assert (home.name, home.ancc_target, home.rn_target) == ("Sunrise Home", 215, 44)
+    response = client.post("/api/facilities/create", data={"name": "Invalid Home", "ancc_target": "220", "rn_target": invalid})
+    assert response.status_code == 400
+    with app.app_context():
+        assert Facility.query.filter_by(name="Invalid Home").count() == 0
+
+
+def test_targets_require_explicit_values_and_record_valid_updates(web_app):
+    app, ids = web_app
+    client = app.test_client()
+    sign_in_as(client, ids["admin"])
+    assert client.post("/api/facilities/create", data={"name": "No targets"}).status_code == 400
+    assert client.post("/api/facility/targets", data={"ancc_target": "30", "rn_target": "44"}).status_code == 400
+    assert client.post("/api/facility/targets", data={"ancc_target": "220.5", "rn_target": "45"}).status_code == 200
+    with app.app_context():
+        home = Facility.query.filter_by(organization_id=ids["customer"]).one()
+        assert (home.ancc_target, home.rn_target) == (220.5, 45)

@@ -32,6 +32,7 @@ from carelog.models import (
     Staff,
     db,
 )
+from carelog.services.targets import parse_targets
 from carelog.services.workspace import (
     _confirmed,
     _delete_facility_data,
@@ -54,20 +55,17 @@ def settings():
         if not name:
             flash("Facility name is required.")
             return navigate(url_for("api.settings"))
+        try:
+            care_target, rn_target = parse_targets(form_data())
+        except ValueError as error:
+            flash(str(error))
+            return navigate(url_for("api.settings")), 400
         if not facility:
             facility = Facility(name=name, organization_id=current_organization_id())
             db.session.add(facility)
+            db.session.flush()
         facility.name = name
-        try:
-            facility.ancc_target = float(
-                form_data().get("ancc_target") or facility.ancc_target or 215
-            )
-            facility.rn_target = float(
-                form_data().get("rn_target") or facility.rn_target or 44
-            )
-        except ValueError:
-            flash("Targets must be numbers.")
-            return navigate(url_for("api.settings"))
+        facility.ancc_target, facility.rn_target = care_target, rn_target
         auth.record(
             "facility_updated",
             "facility",
@@ -116,13 +114,14 @@ def update_targets():
     if not facility:
         return navigate(url_for("api.universal_import"))
     try:
-        facility.ancc_target = float(
-            form_data().get("ancc_target") or facility.ancc_target
-        )
-        facility.rn_target = float(form_data().get("rn_target") or facility.rn_target)
-        db.session.commit()
-    except ValueError:
-        flash("Targets must be numbers.")
+        care_target, rn_target = parse_targets(form_data())
+    except ValueError as error:
+        flash(str(error))
+        return navigate(url_for("api.dashboard")), 400
+    facility.ancc_target, facility.rn_target = care_target, rn_target
+    auth.record("facility_updated", "facility", facility.id,
+                f"targets {care_target}/{rn_target}")
+    db.session.commit()
     return navigate(url_for("api.dashboard"))
 
 
@@ -223,13 +222,13 @@ def facility_create():
     if existing:
         flash(f"{name} already exists.")
         return navigate(url_for("api.facilities_view"))
-    facility = Facility(name=name, organization_id=current_organization_id())
     try:
-        facility.ancc_target = float(form_data().get("ancc_target") or 215)
-        facility.rn_target = float(form_data().get("rn_target") or 44)
-    except ValueError:
-        flash("Targets must be numbers.")
-        return navigate(url_for("api.facilities_view"))
+        care_target, rn_target = parse_targets(form_data())
+    except ValueError as error:
+        flash(str(error))
+        return navigate(url_for("api.facilities_view")), 400
+    facility = Facility(name=name, organization_id=current_organization_id(),
+                        ancc_target=care_target, rn_target=rn_target)
     db.session.add(facility)
     db.session.flush()
     auth.record("facility_created", "facility", facility.id, name)
@@ -248,16 +247,14 @@ def facility_update(facility_id):
     if facility is None:
         abort(404)
     name = (form_data().get("name") or "").strip()
+    try:
+        care_target, rn_target = parse_targets(form_data())
+    except ValueError as error:
+        flash(str(error))
+        return navigate(url_for("api.facilities_view")), 400
     if name:
         facility.name = name
-    try:
-        facility.ancc_target = float(
-            form_data().get("ancc_target") or facility.ancc_target
-        )
-        facility.rn_target = float(form_data().get("rn_target") or facility.rn_target)
-    except ValueError:
-        flash("Targets must be numbers.")
-        return navigate(url_for("api.facilities_view"))
+    facility.ancc_target, facility.rn_target = care_target, rn_target
     auth.record(
         "facility_updated",
         "facility",
