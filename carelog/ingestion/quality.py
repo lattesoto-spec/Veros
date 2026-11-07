@@ -13,6 +13,7 @@ from .mapping import MappingError
 
 KNOWN_ROLES = {"RN", "EN", "PCW", "PCA", "AIN", "ADMIN", "OTHER", ""}
 MAX_WARNINGS_PER_KIND = 10
+MAX_SHIFT_MINUTES = 16 * 60
 
 
 def validate_shifts(records, evidence_type="worked", today=None):
@@ -38,6 +39,11 @@ def validate_shifts(records, evidence_type="worked", today=None):
             problem = "identical start and finish"
         elif minutes is None or not isfinite(minutes) or not 0 < minutes <= 1440:
             problem = "worked duration must be positive and no more than 24 hours"
+        elif _span(rec) and minutes > MAX_SHIFT_MINUTES:
+            problem = (
+                f"{minutes / 60:.1f} hours between start and finish, which is usually "
+                "a mistyped time"
+            )
         key = (
             rec["staff_id"],
             rec["date"],

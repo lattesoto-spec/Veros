@@ -29,6 +29,7 @@ from carelog.models import (
     Facility,
     ImportReceipt,
     Organization,
+    PayCategoryRule,
     Resident,
     ResidentDay,
     Shift,
@@ -89,7 +90,30 @@ def settings():
         facility=facility,
         organization=db.session.get(Organization, current_organization_id()),
         ai_service_configured=ai_ready(),
+        pay_rules=[
+            {"id": rule.id, "category": rule.category, "treatment": rule.treatment,
+             "basis": rule.basis, "decided_at": rule.decided_at}
+            for rule in PayCategoryRule.query.filter_by(
+                organization_id=current_organization_id()
+            ).order_by(PayCategoryRule.category)
+        ],
     )
+
+
+@bp.post("/settings/pay-rules/<int:rule_id>/delete")
+@require("review_eligibility")
+def pay_rule_delete(rule_id):
+    """Withdraw a decision. It only affects imports from now on."""
+    rule = PayCategoryRule.query.filter_by(
+        id=rule_id, organization_id=current_organization_id()
+    ).first()
+    if rule is None:
+        abort(404)
+    auth.record("pay_category_withdrawn", "pay_category_rule", rule.id, f"{rule.category}: {rule.treatment}")
+    db.session.delete(rule)
+    db.session.commit()
+    flash("Decision withdrawn. Future imports will ask again.")
+    return navigate(url_for("api.settings"))
 
 
 @bp.post("/settings/ai-mapping")

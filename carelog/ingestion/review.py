@@ -5,7 +5,9 @@ import json
 
 from sqlalchemy import select
 
-from carelog.models import CareEpisode, FacilityTarget, Resident, ResidentDay, Shift, Staff, db
+from carelog.models import (
+    CareEpisode, Facility, FacilityTarget, PayCategoryRule, Resident, ResidentDay, Shift, Staff, db,
+)
 
 
 def state_fingerprint(facility_id):
@@ -16,6 +18,9 @@ def state_fingerprint(facility_id):
         digest.update(model.__tablename__.encode())
         for row in rows:
             digest.update(json.dumps(list(row), default=str, ensure_ascii=True).encode())
+    organization_id = db.session.get(Facility, facility_id).organization_id
+    rules = PayCategoryRule.query.filter_by(organization_id=organization_id)
+    digest.update(json.dumps(sorted((r.category, r.treatment) for r in rules)).encode())
     return digest.hexdigest()
 
 

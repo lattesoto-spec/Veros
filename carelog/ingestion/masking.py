@@ -92,8 +92,9 @@ def header_like(cells) -> bool:
     return known / len(filled) >= 0.6
 
 
-def mask_row(cells, detected_header: bool) -> list[str]:
-    keep_text = detected_header or header_like(cells)
+def mask_row(cells) -> list[str]:
+    """Judge each row by its content. A detected header may be the first record."""
+    keep_text = header_like(cells)
     return [mask_header(cell) if keep_text else mask_value(cell) for cell in cells]
 
 

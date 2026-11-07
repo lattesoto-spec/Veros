@@ -99,3 +99,16 @@ Original source files remain retained on failure. Changes to care data and recei
 - Sign-out advances `User.session_epoch`, so a copied cookie stops working without revoking trusted devices. Sessions have a 12-hour absolute limit.
 - `QuarterClosure` keeps figures, the statement PDF with its SHA-256, source hashes and calculation version for a finished quarter. Reports shows when live figures have moved.
 - Shifts spanning a daylight-saving change are flagged at import. Their minutes still use clock-face arithmetic.
+
+## Closing the gaps found in the next review
+
+- Pay columns are found by content as well as name: a low-variety unmapped column with leave-like values is read as pay categories. A line corrected to leave replaces the worked row it used to be.
+- An unchanged census row stays with the import that first supplied it, so deleting a duplicate import leaves the census alone. Deleting a middle import removes its version from row history.
+- The MFA and recovery-code limit is held in `AuthRateLimit` per user with a 15-minute lockout, so replaying a signed cookie cannot reset it.
+- A gap reaching midnight with no evidence on the neighbouring date is `unassessed`, not reportable. A pending nurse-like title holds a gap as unassessed rather than confirming it.
+- A complete target reconciliation that disagrees with the approved target makes the on-screen result provisional, matching the PDF. More than 52 social-leave days in a financial year raises a limitation; this is a review flag, not an exclusion, and the rule awaits expert confirmation.
+- Closure figures use the statement's own date range and record every contributing receipt, including census-only imports.
+- Interval shifts over 16 hours are refused. Manual mappings must account for breaks and service type. An imported spec with times but no break column raises a warning.
+- Analyzer sheet names are aliased, and a detected header is only trusted if it reads like column names.
+- A roster-sounding file name alone yields `unverified` rather than `rostered`, so a provider can verify a real timesheet.
+- Pay decisions are listed in Settings and can be withdrawn. They are part of the review fingerprint.

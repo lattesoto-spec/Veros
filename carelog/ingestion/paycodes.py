@@ -28,7 +28,7 @@ WORKED_CATEGORIES = {
 }
 
 NON_WORKED_TERMS = (
-    "leave", "lsl", "annual", "personal", "sick", "carer", "compassionate", "bereavement",
+    "leave", "lsl", "annual", "sick", "compassionate", "bereavement",
     "parental", "maternity", "paternity", "workers comp", "workcover", "work cover",
     "training", "study", "induction", "allowance", "uniform", "laundry", "meal", "travel",
     "mileage", "on call", "on-call", "absence", "absent", "no show", "no-show",
@@ -40,8 +40,33 @@ def key(category) -> str:
     return " ".join(str(category or "").strip().lower().split())
 
 
-def pay_column(headers) -> str | None:
-    return next((h for h in headers if normalize_header(h) in PAY_COLUMNS), None)
+# Terms that identify a category column by its values. Narrower than the list
+# above: "travel" or "meal" could appear in an unrelated column.
+_VALUE_SIGNALS = (
+    "leave", "lsl", "sick", "workers comp", "workcover", "training", "allowance",
+    "absence", "absent", "compassionate", "bereavement", "parental",
+)
+_MAX_CATEGORIES = 40
+
+
+def pay_column(headers, rows=(), mapped=()) -> str | None:
+    """Find a pay column by name, then by content.
+
+    Header names vary too much to rely on, and missing one would count leave
+    as worked. Any low-variety text column holding leave-like values qualifies.
+    """
+    named = next((h for h in headers if normalize_header(h) in PAY_COLUMNS), None)
+    if named:
+        return named
+    for header in headers:
+        if header in mapped:
+            continue
+        values = {key(row.get(header)) for row in rows} - {""}
+        if not values or len(values) > _MAX_CATEGORIES:
+            continue
+        if any(signal in value for value in values for signal in _VALUE_SIGNALS):
+            return header
+    return None
 
 
 def treatment(category, rules: dict) -> str:
@@ -57,8 +82,8 @@ def treatment(category, rules: dict) -> str:
 
 
 def split_records(records, rules, minutes_of):
-    """Return worked records, and a per-category summary of every line seen."""
-    kept, summary = [], {}
+    """Return worked records, lines ruled out, and a summary of every category."""
+    kept, ruled_out, summary = [], [], {}
     for record in records:
         if "pay_category" not in record:
             kept.append(record)
@@ -72,4 +97,7 @@ def split_records(records, rules, minutes_of):
         entry["minutes"] += int(minutes_of(record) or 0)
         if decision == WORKED:
             kept.append(record)
-    return kept, sorted(summary.values(), key=lambda item: item["category"].lower())
+        elif decision == EXCLUDED:
+            ruled_out.append(record)
+    categories = sorted(summary.values(), key=lambda item: item["category"].lower())
+    return kept, ruled_out, categories

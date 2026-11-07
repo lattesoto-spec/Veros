@@ -18,13 +18,22 @@ from carelog.domain.reports import (
     _fy_label,
     build_quarterly_pdf,
     financial_quarter_bounds,
+    statement_end,
 )
-from carelog.models import ImportReceipt, QuarterClosure, db
+from carelog.models import (
+    RETIRED_EVIDENCE,
+    ImportReceipt,
+    QuarterClosure,
+    ResidentDay,
+    Shift,
+    db,
+)
 from carelog.storage import build_storage
 
 
 def _figures(facility, start, end) -> dict:
-    result = quarterly_tests(facility, start, end)
+    """The same figures the statement prints, over the same dates."""
+    result = quarterly_tests(facility, start, statement_end(facility.id, start, end))
     totals = result["totals"]
     return {
         "provisional": result["provisional"],
@@ -41,13 +50,22 @@ def _figures(facility, start, end) -> dict:
 
 
 def _sources(facility, start, end) -> list[dict]:
+    """Every import behind the numerator or the denominator of these figures."""
+    contributing = {
+        row[0]
+        for row in db.session.query(Shift.import_receipt_id).filter(
+            Shift.facility_id == facility.id, Shift.date >= start, Shift.date <= end,
+            Shift.evidence_type.notin_(RETIRED_EVIDENCE),
+        ).distinct()
+    } | {
+        row[0]
+        for row in db.session.query(ResidentDay.import_receipt_id).filter(
+            ResidentDay.facility_id == facility.id,
+            ResidentDay.date >= start, ResidentDay.date <= end,
+        ).distinct()
+    }
     sources = []
-    receipts = ImportReceipt.query.filter(
-        ImportReceipt.facility_id == facility.id,
-        ImportReceipt.first_shift_date <= end,
-        ImportReceipt.last_shift_date >= start,
-    ).order_by(ImportReceipt.id)
-    for receipt in receipts:
+    for receipt in ImportReceipt.query.filter(ImportReceipt.id.in_(contributing - {None})).order_by(ImportReceipt.id):
         for outcome in json.loads(receipt.summary_json or "[]"):
             sources.append(
                 {

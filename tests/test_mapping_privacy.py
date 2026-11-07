@@ -32,7 +32,8 @@ def mapping_payload(header_row=2):
             "date_format": "%d/%m/%Y",
             "fields": {
                 "staff_id": "Emp", "staff_name": "Who", "role": "Position", "date": "Day",
-                "start_time": "In", "end_time": "Out", "is_direct_care": ALWAYS_TRUE,
+                "start_time": "In", "end_time": "Out", "break_minutes": ALWAYS_TRUE,
+                "is_direct_care": ALWAYS_TRUE,
             },
         }],
     }
@@ -199,7 +200,7 @@ def test_build_spec_names_each_problem(change, message):
 
 def test_shift_mapping_needs_a_complete_time_or_duration():
     sheets = read_upload("bannered.csv", BANNERED)
-    fields = {"staff_id": "Emp", "role": "Position", "date": "Day", "is_direct_care": ALWAYS_TRUE}
+    fields = {"staff_id": "Emp", "role": "Position", "date": "Day", "is_direct_care": ALWAYS_TRUE, "break_minutes": ALWAYS_TRUE}
     base = {"sheet": sheets[0].name, "kind": "shifts", "header_row": 2, "date_format": "%d/%m/%Y"}
     assert any("start and finish" in p for p in build_spec([{**base, "fields": fields}], sheets)[1])
     assert any("both the start" in p for p in build_spec([{**base, "fields": {**fields, "start_time": "In"}}], sheets)[1])

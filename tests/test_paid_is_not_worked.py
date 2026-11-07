@@ -172,3 +172,102 @@ def test_census_change_is_listed_kept_and_undone_with_its_import(facility):
     db.session.flush()
     assert (row.occupied, row.service_type, row.import_receipt_id) == (False, "private", first.id)
     assert restore_census_rows(first.id) == (0, 1)
+
+
+@pytest.mark.parametrize("header", ["Payroll Category", "Earnings Rate", "Wage Category", "Pay Description"])
+def test_leave_is_found_by_its_values_whatever_the_column_is_called(header):
+    rows = [{"Name": "A", header: value} for value in ("Ordinary", "Annual Leave", "Personal Leave")]
+    assert pay_column(["Name", header], rows, mapped={"Name"}) == header
+
+
+def test_a_notes_column_or_role_is_not_mistaken_for_pay_categories():
+    notes = [{"Notes": f"Covered sick leave for {i}"} for i in range(50)]
+    assert pay_column(["Notes"], notes) is None
+    roles = [{"Department": "Personal Care Worker"}]
+    assert pay_column(["Department"], roles) is None
+    assert treatment("Personal Care", {}) == UNKNOWN
+
+
+def test_a_line_corrected_to_leave_replaces_the_worked_row(prepared):
+    app, ids, job_id, client, home = prepared
+    client.post(f"/api/import/{job_id}/pay-categories", data={
+        "decisions": json.dumps({"Mystery Code 7": "excluded"}), "basis": "Allowance"})
+    jobs.run_job(job_id)
+    client.post(f"/api/import/{job_id}/confirm")
+    jobs.run_job(job_id)
+    assert worked_minutes(home) == 480
+
+    corrected = PAYROLL.replace(b"2026-08-03,8,Ordinary", b"2026-08-03,8,Annual Leave").replace(b"Mystery Code 7", b"Ordinary")
+    second = jobs.start_job(app, home.id, [("payroll_timesheet.csv", corrected)], LocalStorage(app.config["UPLOADS_DIR"]),
+                            organization_id=ids["customer"], user_id=ids["admin"])
+    job = db.session.get(ImportJob, second)
+    job.manual_specs_json = json.dumps(spec_without_pay_column("payroll_timesheet.csv", corrected))
+    db.session.commit()
+    jobs.run_job(second)
+    review = json.loads(db.session.get(ImportJob, second).review_json)
+    assert review["impact"]["shifts_replaced"] == 1
+    client.post(f"/api/import/{second}/confirm")
+    jobs.run_job(second)
+    assert worked_minutes(home) == 480  # The 7 August line, not the old 3 August one.
+
+
+def test_deleting_a_duplicate_census_import_leaves_the_census_alone(facility):
+    first, second = ImportReceipt(facility_id=facility.id), ImportReceipt(facility_id=facility.id)
+    db.session.add_all([first, second])
+    db.session.flush()
+    rows = [census_row(service_type="permanent")]
+    _import_resident_days(facility, rows, ImportOutcome("a", "f", False, {}, [], receipt=first))
+    db.session.flush()
+    duplicate = ImportOutcome("b", "f", False, {}, [], receipt=second)
+    _import_resident_days(facility, rows, duplicate)
+    db.session.flush()
+    assert duplicate.census_changed == 0
+    assert restore_census_rows(second.id) == (0, 0)
+    db.session.flush()
+    row = ResidentDay.query.one()
+    assert row.import_receipt_id == first.id
+
+
+def test_deleting_the_middle_import_of_three_never_revives_it(facility):
+    receipts = [ImportReceipt(facility_id=facility.id) for _ in range(3)]
+    db.session.add_all(receipts)
+    db.session.flush()
+    for receipt, kind in zip(receipts, ("permanent", "respite", "private")):
+        _import_resident_days(facility, [census_row(service_type=kind)], ImportOutcome("a", "f", False, {}, [], receipt=receipt))
+        db.session.flush()
+    assert restore_census_rows(receipts[1].id) == (0, 0)
+    db.session.flush()
+    assert restore_census_rows(receipts[2].id) == (1, 0)
+    db.session.flush()
+    row = ResidentDay.query.one()
+    assert (row.service_type, row.import_receipt_id) == ("permanent", receipts[0].id)
+
+
+def test_census_without_a_service_type_warns_at_review(facility):
+    outcome = ImportOutcome("a", "f", False, {}, [])
+    _import_resident_days(facility, [census_row()], outcome)
+    assert "will not count as occupied bed days" in outcome.warnings[0]
+
+
+def test_mistyped_shift_times_are_refused():
+    from carelog.ingestion.mapping import MappingError
+    from carelog.ingestion.quality import validate_shifts
+    from datetime import time
+    row = {"staff_id": "A", "date": date(2026, 8, 1), "start_time": time(8), "end_time": time(7, 30)}
+    with pytest.raises(MappingError, match="mistyped"):
+        validate_shifts([row], today=date(2026, 8, 2))
+
+
+def test_a_rostered_file_name_alone_does_not_decide_the_evidence_class():
+    from carelog.ingestion.evidence import classify_shift_evidence
+    sheet = Sheet(name="Sheet1", headers=["Staff", "Date", "Start", "Finish"], rows=[])
+    assert classify_shift_evidence("roster_export.csv", sheet)[0] == "unverified"
+
+
+def test_headerless_files_and_sheet_names_disclose_nothing():
+    from carelog.ingestion.analyzer import _structure_payload
+    cells = ["Nguyen Thi", "Papadopoulos", "12/08/2026"]
+    sheet = Sheet(name="Eleni Papadopoulos", headers=cells, rows=[], raw_rows=[cells], header_row_index=0)
+    sent = _structure_payload([sheet])
+    for private in ("Nguyen", "Thi", "Papadopoulos", "Eleni"):
+        assert private not in sent, private

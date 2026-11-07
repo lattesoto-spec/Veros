@@ -111,6 +111,30 @@ def _quarter_of(d: date) -> tuple[int, int]:
 # ---------------------------------------------------------------------------
 
 
+def _latest_worked(facility_id: int, start: date, end: date):
+    return (
+        db.session.query(func.max(Shift.date))
+        .filter(
+            Shift.facility_id == facility_id,
+            Shift.evidence_type == "worked",
+            Shift.date >= start,
+            Shift.date <= end,
+        )
+        .scalar()
+    )
+
+
+def statement_end(facility_id: int, start: date, end: date) -> date:
+    """The last date a statement's figures are calculated through.
+
+    A review draft for an open quarter must not divide worked minutes to date
+    by future occupied-bed days, so figures stop at the last actual-worked date.
+    Readiness checks still assess the complete statement period.
+    """
+    latest_worked = _latest_worked(facility_id, start, end)
+    return min(latest_worked, end) if latest_worked else start
+
+
 def compute_quarter_stats(facility_id: int, year: int, quarter: int) -> dict:
     start, end = financial_quarter_bounds(year, quarter)
     from carelog.domain.compliance import (
@@ -123,21 +147,8 @@ def compute_quarter_stats(facility_id: int, year: int, quarter: int) -> dict:
     )
 
     facility = db.session.get(Facility, facility_id)
-    latest_worked = (
-        db.session.query(func.max(Shift.date))
-        .filter(
-            Shift.facility_id == facility_id,
-            Shift.evidence_type == "worked",
-            Shift.date >= start,
-            Shift.date <= end,
-        )
-        .scalar()
-    )
-    # A review draft for an open quarter must not divide worked minutes to
-    # date by future occupied-bed days. Calculate the figures through the last
-    # actual-worked date, while the readiness checks below continue to assess
-    # the complete statement period and prevent premature submission.
-    calculation_end = min(latest_worked, end) if latest_worked else start
+    latest_worked = _latest_worked(facility_id, start, end)
+    calculation_end = statement_end(facility_id, start, end)
     totals = quarter_totals(facility_id, start, calculation_end)
     tests = quarterly_tests(facility, start, calculation_end)
     evidence = evidence_summary(facility_id, start, end)

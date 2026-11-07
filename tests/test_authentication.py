@@ -5,6 +5,7 @@ from cryptography.fernet import Fernet
 
 from carelog import auth
 from carelog.models import (
+    AuditLog,
     AuthRateLimit,
     MfaRecoveryCode,
     Organization,
@@ -430,3 +431,27 @@ def test_https_proxy_accepts_only_configured_frontend_and_still_requires_token(m
     with app.app_context():
         db.session.remove()
         db.drop_all()
+
+
+def test_mfa_limit_holds_when_the_cookie_is_replayed(auth_app):
+    app, ids = auth_app
+    enable_mfa(app, ids["user"])
+    client = app.test_client()
+    password_step(client)
+    page = client.get("/api/mfa/challenge")
+    token, cookie = csrf_token(page), client.get_cookie("session").value
+    for _ in range(auth.MFA_ATTEMPT_LIMIT + 2):
+        client.set_cookie("session", cookie)
+        client.post("/api/mfa/challenge", data={"csrf_token": token, "code": "000000"})
+    with app.app_context():
+        user = db.session.get(User, ids["user"])
+        assert auth._mfa_blocked(user)
+        assert AuditLog.query.filter_by(action="mfa_challenge_failed").count() == auth.MFA_ATTEMPT_LIMIT
+
+    client.set_cookie("session", cookie)
+    with app.app_context():
+        code = pyotp.TOTP(auth._decrypt_secret(db.session.get(User, ids["user"]))).now()
+    refused = client.post("/api/mfa/challenge", data={"csrf_token": token, "code": code})
+    with client.session_transaction() as state:
+        assert "user_id" not in state
+    assert refused.status_code in (200, 302, 401)

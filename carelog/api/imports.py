@@ -3,6 +3,8 @@ import hmac
 import json
 import os
 from datetime import datetime, timedelta
+from urllib.parse import quote
+
 from sqlalchemy import or_, update
 
 from flask import (
@@ -42,6 +44,7 @@ from carelog.models import (
     ImportJob,
     ImportReceipt,
     Shift,
+    Staff,
     AuditLog,
     FormatMapping,
     PayCategoryRule,
@@ -662,7 +665,7 @@ def audit_file(receipt_id, filename):
     return Response(
         blob,
         mimetype="application/octet-stream",
-        headers={"Content-Disposition": f"attachment; filename={safe}"},
+        headers={"Content-Disposition": "attachment; filename*=UTF-8''" + quote(safe)},
     )
 
 
@@ -670,9 +673,14 @@ def _restore_superseded(receipt) -> int:
     """Return rows this import replaced, unless newer evidence now covers them."""
     restored = 0
     for row in Shift.query.filter_by(superseded_by_receipt_id=receipt.id).all():
+        person = db.session.get(Staff, row.staff_id).staff_id
+        versions = [
+            member.id
+            for member in Staff.query.filter_by(facility_id=row.facility_id, staff_id=person)
+        ]
         newer = Shift.query.filter(
             Shift.facility_id == row.facility_id,
-            Shift.staff_id == row.staff_id,
+            Shift.staff_id.in_(versions),
             Shift.date == row.date,
             Shift.evidence_type == row.prior_evidence_type,
             or_(

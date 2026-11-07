@@ -13,7 +13,7 @@ import anthropic
 import httpx
 
 from .mapping import apply_header_overrides, run_spec, validate_results
-from .masking import mask_header, mask_problem, mask_row, mask_value
+from .masking import header_like, mask_header, mask_problem, mask_row, mask_value
 from .reader import Sheet
 
 # Haiku keeps per-format learning cheap; the validate-and-retry loop below
@@ -137,10 +137,12 @@ def _structure_payload(sheets: list[Sheet]) -> str:
     from .inspect import infer_column_types
 
     doc = []
-    for s in sheets:
-        headers = {header: mask_header(header) for header in s.headers}
+    for number, s in enumerate(sheets, 1):
+        # A headerless export's "headers" are its first record.
+        hide = mask_header if header_like(s.headers) else mask_value
+        headers = {header: hide(header) for header in s.headers}
         doc.append({
-            "sheet": s.name,
+            "sheet": f"Sheet {number}",
             "detected_header_row": s.header_row_index,
             "headers": list(headers.values()),
             "column_types": {
@@ -155,7 +157,7 @@ def _structure_payload(sheets: list[Sheet]) -> str:
             # The top of the sheet with data values masked. `headers` above is
             # a guess made from this; if the guess is wrong, say so via header_row.
             "grid_preview": [
-                {"row": i, "cells": mask_row(cells, i <= s.header_row_index)}
+                {"row": i, "cells": mask_row(cells)}
                 for i, cells in enumerate(s.preview)
             ],
         })
@@ -304,6 +306,7 @@ def generate_mapping_spec(
     model = resolve_model()
 
     structure = _structure_payload(sheets)
+    aliases = {f"Sheet {number}": sheet.name for number, sheet in enumerate(sheets, 1)}
     messages = [{
         "role": "user",
         "content": (
@@ -370,6 +373,9 @@ def generate_mapping_spec(
 
         try:
             spec = _clean_spec(raw_spec)
+            # Sheet names can identify a person, so the model only sees aliases.
+            for target in spec["targets"]:
+                target["sheet"] = aliases.get(target.get("sheet"), target.get("sheet"))
             results = run_spec(spec, apply_header_overrides(spec, sheets))
             problems = validate_results(results)
         except Exception as e:

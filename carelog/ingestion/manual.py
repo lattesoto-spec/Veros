@@ -27,7 +27,8 @@ KINDS = {
             {"name": "end_time", "label": "Finish time", "rule": _TIME},
             {"name": "hours", "label": "Duration in hours", "rule": {**_NUMBER, "multiply": 60}, "stores": "minutes"},
             {"name": "minutes", "label": "Duration in minutes", "rule": _NUMBER},
-            {"name": "break_minutes", "label": "Unpaid break in minutes", "rule": _NUMBER},
+            {"name": "break_minutes", "label": "Unpaid break in minutes", "rule": _NUMBER,
+             "always": "These times already exclude unpaid breaks", "always_value": "0"},
             {"name": "is_direct_care", "label": "Direct care", "required": True, "rule": _BOOLEAN,
              "always": "Every row in this sheet is direct care"},
             {"name": "is_agency", "label": "Agency", "rule": _BOOLEAN},
@@ -65,7 +66,10 @@ KINDS = {
             {"name": "resident_name", "label": "Resident name"},
             {"name": "occupied", "label": "Occupied bed day", "required": True, "rule": _BOOLEAN,
              "always": "Every row in this sheet is an occupied bed day"},
-            {"name": "service_type", "label": "Service type"},
+            {"name": "service_type", "label": "Service type", "required": True,
+             "always": "Every resident in this sheet is a permanent AN-ACC resident",
+             "always_value": "permanent",
+             "help": "Rows without a service type do not count as occupied bed days."},
             {"name": "leave_type", "label": "Leave type"},
             {"name": "leave_day_number", "label": "Leave day number", "rule": _NUMBER},
             {"name": "ancc_class", "label": "AN-ACC class"},
@@ -162,8 +166,7 @@ def target_to_mapping(target, sheet) -> dict:
     fields, date_format = {}, ""
     for name, rule in target.get("fields", {}).items():
         if rule.get("source") == "constant":
-            if rule.get("value") in (True, "true", "True"):
-                fields[name] = ALWAYS_TRUE
+            fields[name] = ALWAYS_TRUE
             continue
         if name == "minutes" and rule.get("multiply") == 60:
             name = "hours"
@@ -191,6 +194,8 @@ def _shift_problems(chosen, label) -> list[str]:
         return [f"{label}: choose start and finish times, or a duration column."]
     if len(duration) == 2:
         return [f"{label}: choose either hours or minutes, not both."]
+    if start and not chosen.get("break_minutes"):
+        return [f"{label}: choose the unpaid break column, or confirm the times already exclude breaks."]
     return []
 
 
@@ -215,7 +220,9 @@ def _build_target(mapping, sheet, problems):
         if field is None:
             problems.append(f"{label}: {name} is not a field of this record type.")
         elif column == ALWAYS_TRUE and field.get("always"):
-            fields[name] = {"source": "constant", "value": "true", "parse": "boolean"}
+            fields[name] = {"source": "constant", "value": field.get("always_value", "true")}
+            if field.get("rule", {}).get("parse"):
+                fields[name]["parse"] = field["rule"]["parse"]
         elif column not in columns:
             problems.append(f"{label}: column {column!r} is not in the chosen header row.")
         else:

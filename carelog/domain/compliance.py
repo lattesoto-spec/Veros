@@ -205,8 +205,9 @@ def rn_coverage(
         .all()
     )
     intervals, withheld, unknown = [], [], False
+    evidenced_dates = {shift.date for shift, _ in shifts}
     for shift, staff in shifts:
-        if eligibility.bucket_for(staff.role) != "RN":
+        if eligibility.bucket_for(staff.role) != "RN" and not eligibility.could_be_rn(staff):
             continue
         if not shift.coverage_known or shift.start_time == shift.end_time:
             if shift.date == day:
@@ -260,14 +261,22 @@ def rn_coverage(
         left, right = max(cursor, day_start), min(start, day_end)
         if right > left:
             duration = int((start - cursor).total_seconds() / 60)
-            gaps.append(
-                {
-                    "start_minute": int((left - day_start).total_seconds() / 60),
-                    "end_minute": int((right - day_start).total_seconds() / 60),
-                    "minutes": int((right - left).total_seconds() / 60),
-                    "reportable": duration >= ignore_gap_minutes,
-                }
+            # With no evidence on the neighbouring date, a gap reaching midnight
+            # may simply continue into time that has not been imported.
+            open_edge = (
+                left == day_start and day - timedelta(days=1) not in evidenced_dates
+            ) or (
+                right == day_end and day + timedelta(days=1) not in evidenced_dates
             )
+            gap = {
+                "start_minute": int((left - day_start).total_seconds() / 60),
+                "end_minute": int((right - day_start).total_seconds() / 60),
+                "minutes": int((right - left).total_seconds() / 60),
+                "reportable": duration >= ignore_gap_minutes and not open_edge,
+            }
+            if open_edge:
+                gap["unassessed"] = True
+            gaps.append(gap)
         cursor = max(cursor, end)
     # An RN shift awaiting review is not an RN gap. It is not coverage either,
     # so the part of a gap it could fill stays unassessed until someone decides.
@@ -285,7 +294,9 @@ def rn_coverage(
         "withheld_minutes": withheld_minutes,
         "covered_minutes": covered,
         "coverage_pct": round(covered / 1440 * 100, 1),
-        "full_coverage": not unknown and not any(g["reportable"] for g in gaps),
+        "full_coverage": not unknown
+        and not any(g["reportable"] or g.get("unassessed") for g in gaps),
+        "unassessed_minutes": sum(g["minutes"] for g in gaps if g.get("unassessed")),
         "coverage_known": not unknown,
         "gaps": len(gaps),
         "timeline": timeline,
@@ -654,6 +665,14 @@ def quarterly_tests(facility, start: date, end: date) -> dict:
         limitations.append(
             "No approved target evidence is recorded for this quarter. Configure the quarter and source in Settings."
         )
+    from carelog.domain.targets import reconcile_configured_targets
+
+    reconciliation = reconcile_configured_targets(facility, start)
+    if configured and reconciliation["complete"] and not reconciliation["matched"]:
+        limitations.append(
+            "The approved target does not match the target derived from the reference "
+            "period. Check the published notice before relying on a verdict."
+        )
     if quarter_bounds(start)[0] != quarter_bounds(end)[0]:
         limitations.append(
             "This date range crosses quarters; assess each quarter against its own approved targets."
@@ -745,8 +764,6 @@ def quarterly_tests(facility, start: date, end: date) -> dict:
         ),
     ]
     decided = [x for x in tests if x["passed"] is not None]
-    from carelog.domain.targets import reconcile_configured_targets
-
     return {
         "totals": t,
         "tests": tests,
@@ -759,7 +776,7 @@ def quarterly_tests(facility, start: date, end: date) -> dict:
         "missing_worked_dates": [d.isoformat() for d in missing_dates],
         "limitations": limitations,
         "provisional": bool(limitations),
-        "target_reconciliation": reconcile_configured_targets(facility, start),
+        "target_reconciliation": reconciliation,
     }
 
 

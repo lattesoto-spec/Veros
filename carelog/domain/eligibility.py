@@ -166,6 +166,16 @@ def counts_toward_care(staff, on_day=None) -> bool:
     return True
 
 
+def could_be_rn(staff) -> bool:
+    """A pending title that may be a registered nurse, so its time is unresolved."""
+    title = (getattr(staff, "source_role", None) or staff.role or "").lower()
+    return (
+        getattr(staff, "eligibility_status", PENDING) == PENDING
+        and "enrolled" not in title
+        and bool(re.search(r"\b(rn|nurse|nursing)\b", title))
+    )
+
+
 def registration_problem(staff, on_day=None) -> str | None:
     """Nurses must hold a current registration for their minutes to be safe to
     report. Returns a description when that cannot be evidenced."""

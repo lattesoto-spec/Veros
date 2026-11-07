@@ -242,7 +242,9 @@ def ingest_file(
     }
     for r in results:
         if r.kind == "shifts":
-            r.records, r.pay_categories = split_records(r.records, rules, record_minutes)
+            r.records, ruled_out, r.pay_categories = split_records(
+                r.records, rules, record_minutes
+            )
             r.rows_filtered += sum(
                 item["rows"] for item in r.pay_categories if item["treatment"] != "worked"
             )
@@ -260,6 +262,11 @@ def ingest_file(
             r.evidence_basis = basis
             from .quality import validate_shifts
 
+            if {"start_time", "end_time"} <= set(target.get("fields", {})) and "break_minutes" not in target.get("fields", {}):
+                outcome.warnings.append(
+                    f"{r.sheet}: no unpaid break column was read, so full start-to-finish "
+                    "time will count. Check these times already exclude breaks."
+                )
             local_today = facility_today(facility)
             validate_shifts(r.records, evidence_type=auto_type, today=local_today)
             outcome.warnings.extend(check_shifts(r.records, today=local_today))
@@ -267,7 +274,9 @@ def ingest_file(
             outcome.warnings.extend(daylight_saving_warnings(
                 r.records, organization.timezone if organization else "Australia/Sydney"
             ))
-            _import_shifts(facility, r.records, outcome, evidence_type=auto_type)
+            _import_shifts(
+                facility, r.records, outcome, evidence_type=auto_type, ruled_out=ruled_out
+            )
         elif r.kind == "staff":
             continue
         elif r.kind == "residents":
@@ -421,7 +430,10 @@ def _read_pay_columns(spec, sheets):
         if target.get("kind") != "shifts" or "pay_category" in target.get("fields", {}):
             continue
         sheet = next((s for s in sheets if s.name == target.get("sheet")), sheets[0])
-        column = pay_column(sheet.headers)
+        mapped = {
+            rule.get("column") for rule in target.get("fields", {}).values()
+        } | {column for rule in target.get("fields", {}).values() for column in rule.get("columns", [])}
+        column = pay_column(sheet.headers, sheet.rows, mapped)
         row_filter = target.get("row_filter") or {}
         if column and not (row_filter.get("column") == column and row_filter.get("include_values")):
             target.setdefault("fields", {})["pay_category"] = {"column": column}
@@ -474,14 +486,17 @@ def _import_shifts(
     records: list[dict],
     outcome: ImportOutcome,
     evidence_type: str = "unverified",
+    ruled_out: tuple = (),
 ):
     if evidence_type not in ("worked", "rostered", "unverified"):
         evidence_type = "unverified"
 
     # Replace only the supplied staff/date groups in this evidence stream.
     # Separate months and files for other staff remain intact.
+    # A line now shown as leave still speaks for that person and date, so a
+    # corrected file replaces the worked row it used to be.
     dates_by_staff = {}
-    for rec in records:
+    for rec in [*records, *ruled_out]:
         dates_by_staff.setdefault(str(rec["staff_id"]).strip(), set()).add(rec["date"])
     directory = _staff_directory(facility)
     person_of = {m.id: sid for sid, versions in directory.items() for m in versions}
@@ -698,6 +713,12 @@ def _import_resident_days(facility, records: list[dict], outcome: ImportOutcome)
                 )
             )
         outcome.resident_days_imported += 1
+    unknown = sum(1 for rec in records if not str(rec.get("service_type") or "").strip())
+    if unknown:
+        outcome.warnings.append(
+            f"{unknown} census rows have no service type, so they will not count as "
+            "occupied bed days. Map the column, or state the service type for the sheet."
+        )
 
 
 def _update_census_row(row, values, lineage, outcome):
@@ -707,24 +728,22 @@ def _update_census_row(row, values, lineage, outcome):
         for name, value in values.items()
         if value is not None and value != getattr(row, name)
     }
-    if changes:
-        history = json.loads(row.revisions_json or "[]")
-        history.append({
-            name: getattr(row, name)
-            for name in (*values, *lineage)
+    if not changes:
+        return  # An identical row stays with the import that first supplied it.
+    history = json.loads(row.revisions_json or "[]")
+    history.append({name: getattr(row, name) for name in (*values, *lineage)})
+    row.revisions_json = json.dumps(history, default=str)
+    outcome.census_changed += 1
+    if len(outcome.census_changes) < 10:
+        outcome.census_changes.append({
+            "resident_id": row.resident_id,
+            "date": row.date.isoformat(),
+            "changes": [
+                {"field": name, "from": old, "to": new}
+                for name, (old, new) in changes.items()
+                if name != "resident_name"
+            ],
         })
-        row.revisions_json = json.dumps(history, default=str)
-        outcome.census_changed += 1
-        if len(outcome.census_changes) < 10:
-            outcome.census_changes.append({
-                "resident_id": row.resident_id,
-                "date": row.date.isoformat(),
-                "changes": [
-                    {"field": name, "from": old, "to": new}
-                    for name, (old, new) in changes.items()
-                    if name != "resident_name"
-                ],
-            })
     for name, (_, value) in changes.items():
         setattr(row, name, value)
     for name, value in lineage.items():
@@ -734,6 +753,15 @@ def _update_census_row(row, values, lineage, outcome):
 def restore_census_rows(receipt_id) -> tuple[int, int]:
     """Undo one import's census: earlier versions return, new rows go."""
     restored = removed = 0
+    # Versions from this import under a later one must not return later on.
+    for row in ResidentDay.query.filter(
+        ResidentDay.revisions_json.contains(f'"import_receipt_id": {receipt_id}')
+    ):
+        history = [
+            version for version in json.loads(row.revisions_json)
+            if version.get("import_receipt_id") != receipt_id
+        ]
+        row.revisions_json = json.dumps(history) if history else None
     for row in ResidentDay.query.filter_by(import_receipt_id=receipt_id).all():
         history = json.loads(row.revisions_json or "[]")
         if not history:

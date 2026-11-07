@@ -103,7 +103,7 @@ def debug_network():
     # The decisive probe: a real, authenticated 1-token POST /v1/messages —
     # the exact call an import makes, minus the payload. Uses the stored
     # key server-side; the key never appears in the output.
-    from ingestion.analyzer import resolve_api_key, resolve_model
+    from carelog.ingestion.analyzer import resolve_api_key, resolve_model
 
     api_key = resolve_api_key()
     if not api_key:

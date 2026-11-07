@@ -52,5 +52,5 @@ def classify_shift_evidence(filename: str, sheet, target=None) -> tuple[str, str
     if worked_source and not source_tokens & PLANNED_TERMS and support and (not target or len(mapped_times) == 2 or duration_actual):
         return WORKED_VALUES, f"{support[0].replace('_', ' ')} in a worked-time source"
     if source_tokens & PLANNED_TERMS:
-        return ROSTERED_VALUES, "planned staffing source without mapped actual-time evidence"
+        return UNVERIFIED_VALUES, "the file name suggests a roster, but its columns do not say; verify it before it counts"
     return UNVERIFIED_VALUES, "source does not contain enough explicit actual-worked evidence"

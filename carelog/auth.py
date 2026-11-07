@@ -116,6 +116,7 @@ PUBLIC_ENDPOINTS = {
 
 
 PREAUTH_LIFETIME = timedelta(minutes=10)
+MFA_LOCKOUT = timedelta(minutes=15)
 TRUSTED_DEVICE_LIFETIME = timedelta(days=30)
 TRUSTED_DEVICE_COOKIE = "caremin_trusted_device"
 REMEMBERED_EMAIL_COOKIE = "caremin_remembered_email"
@@ -412,20 +413,43 @@ def _preauth_user() -> User | None:
         return None
     user = db.session.get(User, user_id)
     if user is None or not user.is_active or \
-            session.get("preauth_auth_version") != user.auth_version:
+            session.get("preauth_auth_version") != user.auth_version or \
+            _mfa_blocked(user):
         _clear_preauth()
         return None
     return user
 
 
+def _mfa_bucket(user: User, create: bool = False):
+    key = _rate_key("mfa", str(user.id))
+    bucket = db.session.get(AuthRateLimit, key, with_for_update=True)
+    if bucket is None and create:
+        bucket = AuthRateLimit(key_hash=key, failures=0, window_started_at=datetime.utcnow())
+        db.session.add(bucket)
+    return bucket
+
+
+def _mfa_blocked(user: User) -> bool:
+    bucket = _mfa_bucket(user)
+    return bool(bucket and bucket.blocked_until and bucket.blocked_until > datetime.utcnow())
+
+
 def _increment_preauth_failure(user: User, action: str):
-    session["preauth_attempts"] = int(session.get("preauth_attempts", 0)) + 1
+    """Count on the server. A signed cookie can be replayed, so it cannot limit."""
+    bucket = _mfa_bucket(user, create=True)
+    now = datetime.utcnow()
+    if now - bucket.window_started_at > MFA_LOCKOUT:
+        bucket.failures, bucket.window_started_at, bucket.blocked_until = 0, now, None
+    bucket.failures += 1
+    bucket.updated_at = now
+    exhausted = bucket.failures >= MFA_ATTEMPT_LIMIT
+    if exhausted:
+        bucket.blocked_until = now + MFA_LOCKOUT
     record_auth(action, user)
     db.session.commit()
-    if session["preauth_attempts"] >= MFA_ATTEMPT_LIMIT:
+    if exhausted:
         session.clear()
-        return True
-    return False
+    return exhausted
 
 
 def _prepare_mfa_enrollment(user: User):
@@ -603,6 +627,9 @@ def _finalize_login(user: User, method: str, remember_device: bool = False):
     session.clear()
     session["user_id"] = user.id
     session["auth_version"] = user.auth_version
+    bucket = _mfa_bucket(user)
+    if bucket:
+        db.session.delete(bucket)
     session["last_activity_at"] = session["signed_in_at"] = time.time()
     session["session_epoch"] = user.session_epoch or 0
     session.permanent = True

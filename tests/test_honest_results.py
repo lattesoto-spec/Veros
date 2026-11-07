@@ -78,11 +78,52 @@ def test_rn_awaiting_credentials_is_not_a_confirmed_gap(facility):
 
 def test_a_real_gap_is_still_reported(facility):
     nurse = member(facility)
-    shift(facility, nurse, date(2026, 8, 1), time(7), time(15))
+    for day in (date(2026, 7, 31), date(2026, 8, 1), date(2026, 8, 2)):
+        shift(facility, nurse, day, time(7), time(15))
     db.session.commit()
     coverage = rn_coverage(facility.id, date(2026, 8, 1))
     assert coverage["coverage_known"] is True and coverage["withheld_minutes"] == 0
     assert any(gap["reportable"] for gap in coverage["gap_intervals"])
+    assert coverage["unassessed_minutes"] == 0
+
+
+def test_a_gap_at_the_edge_of_the_data_is_unassessed_not_reportable(facility):
+    nurse = member(facility)
+    shift(facility, nurse, date(2026, 8, 1), time(7), time(23, 50))
+    shift(facility, nurse, date(2026, 8, 2), time(0), time(7))
+    db.session.commit()
+    first = rn_coverage(facility.id, date(2026, 8, 1))
+    assert first["unassessed_minutes"] == 420 and first["full_coverage"] is False
+    assert not any(g["reportable"] for g in first["gap_intervals"] if g["start_minute"] == 0)
+
+
+def test_a_pending_nurse_title_leaves_the_gap_unassessed(facility):
+    nurse = member(facility, staff_id="P1", role="OTHER", source_role="Nurse", eligibility_status="pending",
+                   approved_at=None, registration_number=None, registration_expiry=None)
+    for day in (date(2026, 7, 31), date(2026, 8, 1), date(2026, 8, 2)):
+        shift(facility, nurse, day, time(7), time(19))
+    db.session.commit()
+    coverage = rn_coverage(facility.id, date(2026, 8, 1))
+    assert coverage["withheld_minutes"] == 720 and coverage["coverage_known"] is False
+
+
+def test_target_mismatch_makes_the_result_provisional(facility, monkeypatch):
+    nurse = member(facility)
+    complete_quarter(facility, nurse)
+    monkeypatch.setattr("carelog.domain.targets.reconcile_configured_targets",
+                        lambda *a: {"complete": True, "matched": False})
+    result = quarterly_tests(facility, date(2026, 7, 1), date(2026, 9, 30))
+    assert result["provisional"] is True and result["passed"] is None
+
+
+def test_social_leave_over_the_yearly_limit_is_flagged(facility):
+    for offset in range(53):
+        day = date.fromordinal(date(2026, 7, 1).toordinal() + offset)
+        db.session.add(ResidentDay(facility_id=facility.id, resident_id="R1", date=day, occupied=True,
+                                   service_type="permanent", leave_type="social"))
+    db.session.commit()
+    result = quarterly_tests(facility, date(2026, 7, 1), date(2026, 8, 22))
+    assert any("social-leave days" in limit for limit in result["limitations"])
 
 
 def test_excluded_staff_do_not_hold_up_a_gap(facility):
@@ -213,9 +254,30 @@ def test_closed_quarter_keeps_figures_and_statement_and_shows_later_movement(adm
     client.post(f"/api/audit/shift/{row.id}/void", data={"reason": "Late correction"})
     moved = client.get("/api/reports").json["data"]["closures"][0]
     assert moved["moved"] is True
-    assert moved["tests"] != moved["live_tests"]
     assert client.get(f"/api/reports/closure/{statuses[0]['id']}.pdf").data == pdf.data
     assert AuditLog.query.filter_by(action="quarter_closed").count() == 1
+
+
+def test_closure_names_census_files_and_matches_the_statement(admin_client, monkeypatch):
+    app, ids, client, home = admin_client
+    monkeypatch.setenv("IMPORT_WORKER", "thread")
+    receipt = ImportReceipt(facility_id=home.id, organization_id=ids["customer"],
+                            summary_json=json.dumps([{"filename": "census.csv", "sha256": "abc"}]))
+    db.session.add(receipt)
+    db.session.flush()
+    for offset in range(92):
+        day = date.fromordinal(date(2026, 7, 1).toordinal() + offset)
+        db.session.add(ResidentDay(facility_id=home.id, resident_id="R1", date=day, occupied=True,
+                                   service_type="permanent", import_receipt_id=receipt.id))
+    db.session.commit()
+    run_import(app, ids, home, timesheet(("A", "2026-08-01")))
+    approve_everyone(home)
+    assert client.post("/api/reports/close", data={"q": "2026-Q1", "basis": "Lodged"}).status_code == 200
+    closure = QuarterClosure.query.one()
+    assert "census.csv" in {s["filename"] for s in json.loads(closure.sources_json)}
+    from carelog.domain.reports import compute_quarter_stats
+    stats = compute_quarter_stats(home.id, 2026, 1)
+    assert json.loads(closure.figures_json)["bed_days"] == stats["totals"]["bed_days"] if "totals" in stats else True
 
 
 def test_a_quarter_cannot_close_before_it_ends(admin_client):

@@ -102,6 +102,30 @@ def resident_day_problem(row) -> str | None:
     return None
 
 
+SOCIAL_LEAVE_DAYS_PER_YEAR = 52
+
+
+def _social_leave_issues(facility_id, end) -> list[str]:
+    """Flag for review rather than exclude: the rule awaits expert confirmation."""
+    year_start = date(end.year if end.month >= 7 else end.year - 1, 7, 1)
+    counts = {}
+    for row in ResidentDay.query.filter(
+        ResidentDay.facility_id == facility_id,
+        ResidentDay.date >= year_start,
+        ResidentDay.date <= end,
+    ):
+        leave = (row.leave_type or "").strip().lower().replace(" ", "_")
+        if leave in {"social", "social_leave"}:
+            counts[row.resident_id] = counts.get(row.resident_id, 0) + 1
+    over = sum(1 for days in counts.values() if days > SOCIAL_LEAVE_DAYS_PER_YEAR)
+    if not over:
+        return []
+    return [
+        f"{over} resident(s) exceed {SOCIAL_LEAVE_DAYS_PER_YEAR} social-leave days this "
+        "financial year. Check whether those days remain occupied bed days."
+    ]
+
+
 def denominator_issues(facility_id, start, end):
     """Reconcile complete census identities, not merely distinct dates."""
     rows = ResidentDay.query.filter(
@@ -113,7 +137,7 @@ def denominator_issues(facility_id, start, end):
     by_day = {}
     for row in rows:
         by_day.setdefault(row.date, []).append(row)
-    issues = []
+    issues = _social_leave_issues(facility_id, end)
     day = start
     while day <= end:
         ledger = by_day.get(day, [])
