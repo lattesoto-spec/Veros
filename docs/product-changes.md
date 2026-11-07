@@ -2,6 +2,11 @@
 
 The complete UI-ordered feature inventory lives in `FEATURES.md` in the independent `caremin-frontend` repository. This file records backend behavior supporting those screens.
 
+## Reports: explain changes after quarter closure
+
+- The closed-quarter register flags changed evidence readiness, limitations, contributing source files and calculation versions as well as changed care-minute figures and target comparisons. Equal headline totals no longer hide a changed evidence basis.
+- Each flagged quarter lists the reasons for review and whether live evidence is provisional. Its issued statement and original figures remain available unchanged. No arithmetic outputs changed.
+
 ## 2026-11-07
 
 1. **Imports / Facilities / Settings:** explicitly validate both verified facility targets before any mutation. Non-finite, missing, non-positive or inconsistent targets are rejected. Synthetic two-file demo sources generate in temporary test directories.

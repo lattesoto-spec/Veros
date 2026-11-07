@@ -106,7 +106,7 @@ def close_quarter(facility, year, quarter, actor, basis) -> QuarterClosure:
 
 
 def closure_statuses(facility) -> list[dict]:
-    """The latest closure of each quarter, and whether live figures have moved."""
+    """The latest closure of each quarter, including changes to its evidence basis."""
     latest = {}
     for closure in QuarterClosure.query.filter_by(facility_id=facility.id).order_by(
         QuarterClosure.closed_at
@@ -117,6 +117,19 @@ def closure_statuses(facility) -> list[dict]:
         start, end = financial_quarter_bounds(year, quarter)
         closed = json.loads(closure.figures_json)
         live = json.loads(json.dumps(_figures(facility, start, end), default=str))
+        changes = []
+        if any(closed.get(key) != live.get(key) for key in (
+            "tests", "bed_days", "total_minutes", "rn_minutes", "rn_en_minutes",
+        )):
+            changes.append("Care-minute figures or target comparisons changed.")
+        if closed.get("provisional") != live.get("provisional") or sorted(
+            closed.get("limitations", [])
+        ) != sorted(live.get("limitations", [])):
+            changes.append("Evidence readiness or limitations changed.")
+        if json.loads(closure.sources_json) != _sources(facility, start, end):
+            changes.append("Contributing source files changed.")
+        if closure.calc_version != CALC_VERSION:
+            changes.append("The calculation version changed.")
         statuses.append(
             {
                 "id": closure.id,
@@ -129,9 +142,9 @@ def closure_statuses(facility) -> list[dict]:
                 "tests": closed["tests"],
                 "source_files": len(json.loads(closure.sources_json)),
                 "pdf_sha256": closure.pdf_sha256,
-                "moved": closed["tests"] != live["tests"]
-                or closed["bed_days"] != live["bed_days"]
-                or closed["total_minutes"] != live["total_minutes"],
+                "moved": bool(changes),
+                "changes": changes,
+                "live_provisional": live["provisional"],
                 "live_tests": live["tests"],
             }
         )

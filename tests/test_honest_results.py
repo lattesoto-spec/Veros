@@ -286,6 +286,47 @@ def test_a_quarter_cannot_close_before_it_ends(admin_client):
     assert response.status_code == 400 and "has ended" in response.json["error"]
 
 
+def test_closed_quarter_flags_readiness_changes_without_changed_minutes(admin_client, monkeypatch):
+    app, ids, client, home = admin_client
+    monkeypatch.setenv("IMPORT_WORKER", "thread")
+    nurse = member(home)
+    complete_quarter(home, nurse)
+    assert client.post("/api/reports/close", data={"q": "2026-Q1", "basis": "Board statement"}).status_code == 200
+    before = client.get("/api/reports").json["data"]["closures"][0]
+    issued = client.get(f"/api/reports/closure/{before['id']}.pdf").data
+    figures = QuarterClosure.query.one().figures_json
+
+    # Extra unverified time changes confidence, while every counted minute stays put.
+    shift(home, nurse, date(2026, 8, 1), time(0), time(8), evidence="unverified")
+    db.session.commit()
+    after = client.get("/api/reports").json["data"]["closures"][0]
+    assert before["moved"] is False and after["moved"] is True
+    assert "Evidence readiness or limitations changed." in after["changes"]
+    assert after["live_provisional"] is True
+    assert QuarterClosure.query.one().figures_json == figures
+    assert client.get(f"/api/reports/closure/{before['id']}.pdf").data == issued
+
+
+def test_closed_quarter_flags_new_sources_and_calculation_version(admin_client, monkeypatch):
+    app, ids, client, home = admin_client
+    monkeypatch.setenv("IMPORT_WORKER", "thread")
+    nurse = member(home)
+    complete_quarter(home, nurse)
+    assert client.post("/api/reports/close", data={"q": "2026-Q1", "basis": "Board statement"}).status_code == 200
+    before = client.get("/api/reports").json["data"]["closures"][0]
+    receipt = ImportReceipt(facility_id=home.id, organization_id=ids["customer"],
+                            summary_json=json.dumps([{"filename": "verified-census.csv", "sha256": "abc"}]))
+    db.session.add(receipt)
+    db.session.flush()
+    ResidentDay.query.filter_by(facility_id=home.id).update({"import_receipt_id": receipt.id})
+    db.session.commit()
+    after = client.get("/api/reports").json["data"]["closures"][0]
+    assert after["tests"] == before["tests"]
+    assert after["changes"] == ["Contributing source files changed."]
+    monkeypatch.setattr("carelog.services.closure.CALC_VERSION", "future-version")
+    assert "The calculation version changed." in client.get("/api/reports").json["data"]["closures"][0]["changes"]
+
+
 def test_closed_statement_is_facility_scoped(admin_client):
     app, ids, client, home = admin_client
     other = QuarterClosure(facility_id=ids["other_facility"], year=2026, quarter=1, basis="x",
