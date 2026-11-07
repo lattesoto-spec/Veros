@@ -76,8 +76,12 @@ def summary_xlsx(facility, start: date, end: date) -> bytes:
     wi = wb.create_sheet("Info")
     wi.append(["Facility", facility.name])
     wi.append(["Period", f"{start.isoformat()} to {end.isoformat()}"])
-    wi.append(["AN-ACC target (mins/resident/day)", facility.ancc_target])
-    wi.append(["RN target (mins/resident/day)", facility.rn_target])
+    from carelog.domain.targets import target_for_quarter
+    target_record = target_for_quarter(facility, start)
+    wi.append(["AN-ACC target (mins/resident/day)", target_record.ancc_target if target_record else "Not available"])
+    wi.append(["RN target (mins/resident/day)", target_record.rn_target if target_record else "Not available"])
+    wi.append(["Target quarter", target_record.quarter_start.isoformat() if target_record else "Not available"])
+    wi.append(["Target source", target_record.source if target_record else "Not available"])
     wi.append(["Calculation version", CALC_VERSION])
     wi.append(["Historical compliance source", "Eligible actual-worked rows only"])
 
@@ -131,12 +135,12 @@ def board_pdf(facility, today: date) -> bytes:
     if fc:
         kpi_rows = [
             ["Quarter-to-date average", f"{fc['qtd_avg']:.1f} mins/resident/day",
-             f"Target {facility.ancc_target:.0f}"],
+             f"Target {tests['tests'][0]['target']:.1f}"],
             ["Compliance", f"{pct:.1f}% of target" if pct is not None else "Not available", ""],
             ["RN-only quarter-to-date", f"{fc['qtd_rn_avg']:.1f} mins/bed-day",
-             f"Required {facility.rn_target * 0.9:.1f}"],
+             f"Required {tests['tests'][1]['target']:.1f}"],
             ["RN + EN quarter-to-date", f"{fc['qtd_rn_en_avg']:.1f} mins/bed-day",
-             f"Required {facility.rn_target:.1f}"],
+             f"Required {tests['tests'][2]['target']:.1f}"],
             ["Projected quarter-end average", f"{fc['projected_avg']:.1f}",
              "On track" if fc["on_track"] else "AT RISK"],
             ["RN 24/7 coverage (today)", f"{cov['coverage_pct']:.1f}%", ""],

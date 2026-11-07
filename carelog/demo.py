@@ -56,7 +56,7 @@ def build_demo_organization(*, name="Demo", admin_email="demo@caremin.care",
     db.session.add(org)
     db.session.flush()
 
-    auth.create_user(
+    administrator = auth.create_user(
         organization_id=org.id, email=admin_email, name="Demo Administrator",
         role="administrator", password=password, must_change_password=True,
     )
@@ -69,6 +69,14 @@ def build_demo_organization(*, name="Demo", admin_email="demo@caremin.care",
 
     today = date.today()
     start = today - timedelta(days=days - 1)
+    from carelog.models import FacilityTarget
+    quarter = date(start.year, ((start.month - 1) // 3) * 3 + 1, 1)
+    while quarter <= today:
+        db.session.add(FacilityTarget(facility_id=facility.id, quarter_start=quarter,
+                                     ancc_target=215, rn_target=44,
+                                     source="Synthetic demonstration configuration; not a provider notice",
+                                     approved_by_user_id=administrator.id))
+        quarter = date(quarter.year + 1, 1, 1) if quarter.month == 10 else date(quarter.year, quarter.month + 3, 1)
 
     used = set()
     resident_ids = []

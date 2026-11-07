@@ -1,7 +1,6 @@
 from datetime import date, datetime, timedelta
 
 from flask import (
-    flash,
     request,
     session,
     url_for,
@@ -14,6 +13,7 @@ from carelog.auth import (
     require,
 )
 from carelog.domain import eligibility as el
+from carelog.domain.targets import facility_for_period
 from carelog.domain.care_minutes import (
     active_residents_on,
     average,
@@ -83,7 +83,7 @@ def compliance_view():
     q_start, _ = quarter_bounds(today)
     return resource(
         "compliance",
-        facility=facility,
+        facility=facility_for_period(facility, today),
         today=today,
         tests=quarterly_tests(facility, q_start, today),
         forecast=fc,
@@ -172,7 +172,7 @@ def rn_coverage_view():
     )
     return resource(
         "rn_coverage",
-        facility=facility,
+        facility=facility_for_period(facility, today),
         start=start,
         end=end,
         month_value=start.strftime("%Y-%m"),
@@ -194,26 +194,24 @@ def scenarios():
     base = forecast_quarter(facility, today)
 
     params = {"rn_shifts_removed": 0, "agency_removed": False, "occupancy_delta": 0}
-    result = None
+    result, errors = None, []
     if request.method == "POST" and base:
         try:
-            params["rn_shifts_removed"] = max(
-                int(form_data().get("rn_shifts_removed") or 0), 0
-            )
+            params["rn_shifts_removed"] = int(form_data().get("rn_shifts_removed") or 0)
             params["occupancy_delta"] = int(form_data().get("occupancy_delta") or 0)
-        except ValueError:
-            flash("Scenario inputs must be whole numbers.")
-        params["agency_removed"] = form_data().get("agency_removed") == "on"
-        result = forecast_quarter(facility, today, adjustments=params)
-
+            if not 0 <= params["rn_shifts_removed"] <= 20 or not -50 <= params["occupancy_delta"] <= 50:
+                raise ValueError("Use 0–20 RN shifts and an occupancy change between -50 and 50.")
+            agency = form_data().get("agency_removed")
+            if agency not in (None, "", "on"):
+                raise ValueError("Choose an explicit agency-removal assumption.")
+            params["agency_removed"] = agency == "on"
+            result = forecast_quarter(facility, today, adjustments=params)
+        except (TypeError, ValueError) as error:
+            errors.append(str(error) or "Scenario inputs must be whole numbers.")
     return resource(
-        "scenarios",
-        facility=facility,
-        today=today,
-        base=base,
-        params=params,
-        result=result,
-    )
+        "scenarios", facility=facility_for_period(facility, today), today=today,
+        base=base, params=params, result=result, errors=errors,
+    ), 400 if errors else 200
 
 
 @bp.route("/dashboard")
@@ -256,6 +254,8 @@ def dashboard():
         round((q_gap / facility.ancc_target) * 100, 1) if facility.ancc_target else 0
     )
 
+    from carelog.domain.targets import target_for_quarter
+    approved_target = target_for_quarter(facility, today)
     chart_data = {
         "labels": [r["date"].strftime("%d %b") for r in last_14],
         "values": [
@@ -264,7 +264,7 @@ def dashboard():
             else None
             for r in last_14
         ],
-        "target": facility.ancc_target,
+        "target": approved_target.ancc_target if approved_target else None,
     }
 
     resident_count = active_residents_on(facility.id, today)
@@ -295,7 +295,7 @@ def dashboard():
         alerts=alerts,
         data_age_days=data_age_days,
         audit_readiness=audit_readiness,
-        facility=facility,
+        facility=facility_for_period(facility, today),
         today=today,
         today_stats=today_stats,
         last_14=list(reversed(last_14)),

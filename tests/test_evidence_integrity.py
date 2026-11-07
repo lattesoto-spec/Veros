@@ -3,12 +3,12 @@ from datetime import date, time, timedelta
 import pytest
 
 from carelog.domain.care_minutes import denominator_issues, resident_day_is_occupied
-from carelog.domain.compliance import quarterly_tests, rn_coverage
+from carelog.domain.compliance import quarterly_tests, rn_coverage, forecast_quarter
 from carelog.domain.eligibility import classify
 from carelog.ingestion.mapping import MappingError, parse_date_value
 from carelog.ingestion.pipeline import ImportOutcome, _import_shifts
 from carelog.ingestion.quality import validate_shifts
-from carelog.models import Resident, ResidentDay, Shift, Staff, db
+from carelog.models import FacilityTarget, Resident, ResidentDay, Shift, Staff, db
 from conftest import add_resident_days
 
 
@@ -26,6 +26,8 @@ def worker(facility, role="RN"):
 def test_all_three_verdicts_compare_exact_minutes(app, facility, index, threshold, delta):
     with app.app_context():
         facility.ancc_target = facility.rn_target = 47
+        target = FacilityTarget.query.filter_by(facility_id=facility.id, quarter_start=date(2026, 7, 1)).one()
+        target.ancc_target = target.rn_target = 47
         day = date(2026, 8, 1)
         add_resident_days(facility.id, day, 10)
         member = worker(facility)
@@ -41,6 +43,7 @@ def test_all_three_verdicts_compare_exact_minutes(app, facility, index, threshol
 def test_display_rounding_cannot_erase_a_shortfall(app, facility):
     with app.app_context():
         facility.ancc_target = 200
+        FacilityTarget.query.filter_by(facility_id=facility.id, quarter_start=date(2026, 7, 1)).one().ancc_target = 200
         day = date(2026, 8, 1)
         add_resident_days(facility.id, day, 25)
         member = worker(facility)
@@ -135,3 +138,28 @@ def test_ambiguous_dates_and_non_direct_titles_need_review():
     assert parse_date_value("04/05/2026", "%d/%m/%Y") == date(2026, 5, 4)
     for title in ("Non-RN carer", "Clinical Nurse Educator"):
         assert classify(title)[1] == "pending"
+
+
+def test_agency_scenarios_remove_the_observed_nursing_roles(app, facility):
+    with app.app_context():
+        day = date(2026, 8, 1)
+        add_resident_days(facility.id, day, 1)
+        member = worker(facility)
+        db.session.add(Shift(facility_id=facility.id, staff_id=member.id, date=day,
+                             start_time=time(8), end_time=time(16), is_agency=True, evidence_type="worked"))
+        db.session.commit()
+        baseline = forecast_quarter(facility, day)
+        scenario = forecast_quarter(facility, day, {"agency_removed": True})
+        combined = forecast_quarter(facility, day, {"agency_removed": True, "rn_shifts_removed": 1})
+        assert scenario["projected_rn_avg"] < baseline["projected_rn_avg"]
+        assert scenario["projected_rn_en_avg"] == scenario["projected_rn_avg"]
+        assert scenario["projected_avg"] == combined["projected_avg"]
+
+
+def test_a_quarter_without_target_evidence_cannot_pass(app, facility):
+    with app.app_context():
+        day = date(2025, 10, 1)
+        add_resident_days(facility.id, day, 1)
+        result = quarterly_tests(facility, day, day)
+        assert result["passed"] is None
+        assert any("target evidence" in reason for reason in result["limitations"])

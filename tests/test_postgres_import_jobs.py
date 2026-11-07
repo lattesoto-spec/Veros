@@ -129,3 +129,16 @@ def test_additive_duration_migration_keeps_existing_facility(pg_app):
     assert {"duration_minutes", "coverage_known"} <= {
         c["name"] for c in inspect(db.engine).get_columns("shifts")
     }
+
+
+def test_additive_target_history_migration_keeps_legacy_values_unapproved(pg_app):
+    from sqlalchemy import text, inspect
+    from carelog.models import FacilityTarget
+
+    _, facility, _ = pg_app
+    db.session.execute(text("DROP TABLE facility_targets"))
+    db.session.commit()
+    init_db()
+    assert "facility_targets" in inspect(db.engine).get_table_names()
+    assert db.session.get(Facility, facility.id).ancc_target == 215
+    assert FacilityTarget.query.count() == 0

@@ -4,7 +4,7 @@ from datetime import date, time
 import pytest
 
 from carelog import auth
-from carelog.models import Facility, Organization, ResidentDay, Shift, Staff, db
+from carelog.models import Facility, FacilityTarget, Organization, ResidentDay, Shift, Staff, db
 
 
 @pytest.fixture()
@@ -40,6 +40,11 @@ def web_app(monkeypatch):
             must_change_password=False,
         )
         db.session.add(Facility(organization_id=customer.id, name="Sunrise Home"))
+        db.session.flush()
+        for home in Facility.query.filter_by(organization_id=customer.id).all():
+            for month in (1, 4, 7, 10):
+                db.session.add(FacilityTarget(facility_id=home.id, quarter_start=date(2026, month, 1),
+                                             ancc_target=215, rn_target=44, source="Synthetic provider notice"))
         other_facility = Facility(organization_id=other.id, name="Other Home")
         db.session.add(other_facility)
         db.session.commit()
@@ -276,7 +281,56 @@ def test_targets_require_explicit_values_and_record_valid_updates(web_app):
     sign_in_as(client, ids["admin"])
     assert client.post("/api/facilities/create", data={"name": "No targets"}).status_code == 400
     assert client.post("/api/facility/targets", data={"ancc_target": "30", "rn_target": "44"}).status_code == 400
-    assert client.post("/api/facility/targets", data={"ancc_target": "220.5", "rn_target": "45"}).status_code == 200
+    assert client.post("/api/facility/targets", data={"ancc_target": "220.5", "rn_target": "45", "target_quarter": "2026-10-01", "target_source": "Corrected provider notice", "target_correction": "Updated notice received"}).status_code == 200
     with app.app_context():
         home = Facility.query.filter_by(organization_id=ids["customer"]).one()
         assert (home.ancc_target, home.rn_target) == (220.5, 45)
+
+
+def test_read_only_workspace_never_exposes_identifiable_records(web_app):
+    app, ids = web_app
+    with app.app_context():
+        user = db.session.get(auth.User, ids["admin"])
+        user.role = "read_only"
+        db.session.commit()
+    # The fixture holds an outer app context; invalidate its identity map after
+    # changing the role in the nested context used for setup.
+    db.session.expire_all()
+    client = app.test_client()
+    sign_in_as(client, ids["admin"])
+    assert client.get("/api/facility").status_code == 403
+    assert client.get("/api/eligibility").status_code == 403
+    assert client.get("/api/audit").status_code == 403
+    assert client.get("/api/facilities").status_code == 200
+    assert client.get("/api/dashboard").status_code == 200
+
+
+def test_url_connector_cannot_bypass_reviewed_imports(web_app):
+    app, ids = web_app
+    client = app.test_client()
+    sign_in_as(client, ids["admin"])
+    assert client.get("/api/integrations").json["data"]["platforms"] == []
+    response = client.post("/api/integrations", data={"action": "sync", "platform": "url_fetch"})
+    assert response.status_code == 409
+    assert "Imports" in response.json["error"]
+
+
+def test_quarter_targets_preserve_history_and_require_correction_basis(web_app):
+    app, ids = web_app
+    client = app.test_client()
+    sign_in_as(client, ids["admin"])
+    with app.app_context():
+        home = Facility.query.filter_by(organization_id=ids["customer"]).one()
+        home_id = home.id
+        july = FacilityTarget.query.filter_by(facility_id=home_id, quarter_start=date(2026, 7, 1)).one()
+        historical = (july.ancc_target, july.rn_target, july.source)
+    body = {"ancc_target": "225", "rn_target": "46", "target_quarter": "2026-10-01",
+            "target_source": "Corrected Q2 target notice"}
+    assert client.post("/api/facility/targets", data=body).status_code == 400
+    assert client.post("/api/facility/targets", data={**body, "target_correction": "Replacement notice received"}).status_code == 200
+    with app.app_context():
+        july = FacilityTarget.query.filter_by(facility_id=home_id, quarter_start=date(2026, 7, 1)).one()
+        assert (july.ancc_target, july.rn_target, july.source) == historical
+        october = FacilityTarget.query.filter_by(facility_id=home_id, quarter_start=date(2026, 10, 1)).one()
+        assert (october.ancc_target, october.rn_target) == (225, 46)
+        assert october.approved_by_user_id == ids["admin"]

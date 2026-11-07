@@ -53,6 +53,7 @@ from carelog.models import (
 # ------------------------------------------------------------------- roles
 
 PERMISSIONS = (
+    "view_records",       # identifiable resident and workforce records
     "view_dashboard",     # dashboard, compliance figures
     "run_scenarios",      # what-if modelling
     "export_data",        # CSV / Excel / PDF downloads
@@ -74,27 +75,27 @@ ROLES: dict[str, dict] = {
         "label": "Facility Manager",
         "description": "Runs the facility day to day: imports, targets, integrations.",
         "permissions": {
-            "view_dashboard", "run_scenarios", "export_data", "import_data",
+            "view_records", "view_dashboard", "run_scenarios", "export_data", "import_data",
             "view_audit", "download_evidence", "manage_facility", "manage_integrations",
         },
     },
     "clinical_manager": {
         "label": "Clinical Manager",
         "description": "Reviews care minutes and models staffing changes.",
-        "permissions": {"view_dashboard", "run_scenarios", "export_data", "view_audit"},
+        "permissions": {"view_records", "view_dashboard", "run_scenarios", "export_data", "view_audit"},
     },
     "compliance_officer": {
         "label": "Compliance Officer",
         "description": "Prepares evidence for regulators; can import and export.",
         "permissions": {
-            "view_dashboard", "export_data", "import_data", "view_audit",
+            "view_records", "view_dashboard", "export_data", "import_data", "view_audit",
             "download_evidence", "run_scenarios",
         },
     },
     "auditor": {
         "label": "Auditor",
         "description": "Read-only access to figures and their supporting evidence.",
-        "permissions": {"view_dashboard", "export_data", "view_audit", "download_evidence"},
+        "permissions": {"view_records", "view_dashboard", "export_data", "view_audit", "download_evidence"},
     },
     "read_only": {
         "label": "Read Only",

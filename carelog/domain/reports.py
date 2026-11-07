@@ -493,14 +493,15 @@ def _obd_table(stats: dict) -> Table:
 
 def _care_minutes_per_obd_table(stats: dict, facility) -> Table:
     data = [["Role", "Care minutes per OBD", "Target"]]
-    target_map = {"RN": facility.rn_target * 0.9, "EN": "-", "PCA": "-"}
+    approved = stats["tests"]["target_reconciliation"]["target_source"]
+    target_map = {"RN": stats["tests"]["tests"][1]["target"] if approved else "Not available", "EN": "-", "PCA": "-"}
     for role, label in ROLES:
         target = target_map.get(role, "Not applicable")
         target_str = f"{target:.1f}" if isinstance(target, (int, float)) else target
         data.append([label, f"{stats['care_minutes_per_obd'][role]:.1f}", target_str])
     data.append([
         "Total", f"{stats['total_care_minutes_per_obd']:.1f}",
-        f"{facility.ancc_target:.1f}",
+        f"{stats['tests']['tests'][0]['target']:.1f}" if approved else "Not available",
     ])
     t = Table(data, colWidths=[100 * mm, 40 * mm, 30 * mm])
     style = _base_table_style()

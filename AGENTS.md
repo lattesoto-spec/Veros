@@ -18,7 +18,7 @@ Read README.md and docs/architecture.md before changing architecture. This is re
 2. `domain/eligibility.py` alone decides whose minutes count. Unknown roles such as assistant/support stay pending and excluded. Direct-care flags never override an ineligible role.
 3. Care minutes are total eligible **worked** minutes divided by occupied bed days. Keep rostered/unverified time and care episodes separate. Preserve resident-day exclusions and nursing registration/effective dates.
 4. All three quarterly tests must pass: total target, RN-only 90% of RN target, RN+EN 100%. Exactly 30 minutes is a reportable RN gap.
-5. Bump `CALC_VERSION` (2026.11.1) whenever arithmetic outputs change. Never change test expectations simply to make changed totals pass.
+5. Bump `CALC_VERSION` (2026.11.2) whenever arithmetic outputs change. Never change test expectations simply to make changed totals pass.
 6. The analyzer must see the raw grid and be able to correct header detection. Preserve file/sheet/page/row provenance. Parser versions are part of cache identity.
 7. Xberg 1.3.9 extracts document tables; structured JSON/SQL/SQLite readers remain necessary. Do not silently accept extraction warnings or OCR transcription as care evidence.
 8. Care-data batches and their receipts commit atomically. Progress updates must use a separate session. Preserve original files even when an import fails.

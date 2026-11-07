@@ -12,7 +12,8 @@ from werkzeug.datastructures import MultiDict
 MODEL_FIELDS = {
     "Organization": "id name created_at timezone",
     "User": "id organization_id email name role is_active is_superuser created_at last_login_at must_change_password mfa_enabled mfa_enrolled_at",
-    "Facility": "id organization_id name ancc_target rn_target",
+    "Facility": "id organization_id name ancc_target rn_target target_history",
+    "FacilityTarget": "id quarter_start ancc_target rn_target source approved_by_user_id approved_at",
     "Resident": "id resident_id name ancc_class admitted_date discharged_date",
     "ResidentDay": "id resident_id resident_name date occupied service_type leave_type leave_day_number ancc_class exclusion_reason source_row source_file source_sheet source_page",
     "Staff": "id staff_id name role source_role eligibility_status eligibility_reason eligible_from eligible_to approved_by_user_id approved_at employment_type classification registration_number registration_expiry",

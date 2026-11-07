@@ -9,10 +9,11 @@ registered 12 December 2025 and in force during 2026.
 """
 
 import re
+from dataclasses import dataclass
 from datetime import date, timedelta
 
 from carelog.domain.care_minutes import resident_day_is_occupied
-from carelog.models import ResidentDay, db
+from carelog.models import FacilityTarget, ResidentDay, db
 
 
 DAILY_AMOUNTS = {
@@ -24,6 +25,30 @@ DAILY_AMOUNTS = {
     "respite class 1": (176, 37), "respite class 2": (223, 48),
     "respite class 3": (262, 51),
 }
+
+# Department guide, March 2026, table 3: allocations applying from 1 October 2025.
+# https://www.health.gov.au/sites/default/files/2026-03/care-minutes-and-24-7-registered-nurse-requirements-guides-for-registered-providers-of-residential-care-homes.pdf
+DAILY_AMOUNTS_EFFECTIVE_FROM = date(2025, 10, 1)
+
+
+def target_for_quarter(facility, period_start):
+    start = date(period_start.year, ((period_start.month - 1) // 3) * 3 + 1, 1)
+    return FacilityTarget.query.filter_by(facility_id=facility.id, quarter_start=start).first()
+
+
+@dataclass
+class PeriodFacility:
+    id: int
+    organization_id: int | None
+    name: str
+    ancc_target: float | None
+    rn_target: float | None
+
+
+def facility_for_period(facility, day):
+    target = target_for_quarter(facility, day)
+    return PeriodFacility(facility.id, facility.organization_id, facility.name,
+                          target.ancc_target if target else None, target.rn_target if target else None)
 
 
 def _add_months(value: date, months: int) -> date:
@@ -49,6 +74,9 @@ def normalize_classification(value: str | None) -> str | None:
 
 
 def reconcile_configured_targets(facility, quarter_start: date) -> dict:
+    configured = target_for_quarter(facility, quarter_start)
+    care_target = configured.ancc_target if configured else None
+    rn_target = configured.rn_target if configured else None
     start, end, calculation_day = reference_period(quarter_start)
     rows = ResidentDay.query.filter(
         ResidentDay.facility_id == facility.id,
@@ -72,11 +100,11 @@ def reconcile_configured_targets(facility, quarter_start: date) -> dict:
             combined_sum += combined
             rn_sum += rn
 
-    complete = bool(recognized) and not missing and ledger_dates == expected_dates
+    complete = bool(recognized) and not missing and ledger_dates == expected_dates and quarter_start >= DAILY_AMOUNTS_EFFECTIVE_FROM
     derived_care = round(combined_sum / len(recognized), 2) if complete else None
     derived_rn = round(rn_sum / len(recognized), 2) if complete else None
-    care_match = complete and abs(derived_care - float(facility.ancc_target or 0)) < 0.01
-    rn_match = complete and abs(derived_rn - float(facility.rn_target or 0)) < 0.01
+    care_match = complete and care_target is not None and abs(derived_care - care_target) < 0.01
+    rn_match = complete and rn_target is not None and abs(derived_rn - rn_target) < 0.01
     return {
         "reference_start": start,
         "reference_end": end,
@@ -88,8 +116,11 @@ def reconcile_configured_targets(facility, quarter_start: date) -> dict:
         "complete": complete,
         "derived_care_target": derived_care,
         "derived_rn_target": derived_rn,
-        "configured_care_target": facility.ancc_target,
-        "configured_rn_target": facility.rn_target,
+        "configured_care_target": care_target,
+        "configured_rn_target": rn_target,
+        "target_source": configured.source if configured else None,
+        "target_quarter": configured.quarter_start if configured else None,
+        "allocation_effective_from": DAILY_AMOUNTS_EFFECTIVE_FROM,
         "care_match": care_match,
         "rn_match": rn_match,
         "matched": care_match and rn_match,

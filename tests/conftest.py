@@ -7,7 +7,7 @@ from flask import Flask
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from carelog.models import Facility, ResidentDay, db
+from carelog.models import Facility, FacilityTarget, ResidentDay, db
 
 
 @pytest.fixture()
@@ -30,6 +30,10 @@ def app():
 def facility(app):
     row = Facility(name="Test Home", ancc_target=215.0, rn_target=44.0)
     db.session.add(row)
+    db.session.commit()
+    for month in (1, 4, 7, 10):
+        db.session.add(FacilityTarget(facility_id=row.id, quarter_start=date(2026, month, 1),
+                                     ancc_target=215, rn_target=44, source="Synthetic fixture target notice"))
     db.session.commit()
     db.session.refresh(row)
     db.session.expunge(row)

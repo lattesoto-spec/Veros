@@ -153,6 +153,8 @@ def _delete_facility_data(facility_ids):
     ImportReceipt.query.filter(ImportReceipt.facility_id.in_(facility_ids)).delete(
         synchronize_session=False
     )
+    from carelog.models import FacilityTarget
+    FacilityTarget.query.filter(FacilityTarget.facility_id.in_(facility_ids)).delete(synchronize_session=False)
     for model in (Staff, Resident):
         model.query.filter(model.facility_id.in_(facility_ids)).delete(
             synchronize_session=False

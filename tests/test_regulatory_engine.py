@@ -12,7 +12,7 @@ from carelog.domain.reports import compute_quarter_stats
 from carelog.ingestion.mapping import run_spec
 from carelog.ingestion.pipeline import ImportOutcome, _import_shifts
 from carelog.ingestion.reader import Sheet
-from carelog.models import ImportReceipt, ResidentDay, Shift, Staff, db
+from carelog.models import FacilityTarget, ImportReceipt, ResidentDay, Shift, Staff, db
 from carelog.domain.care_minutes import active_residents_on
 from carelog.domain.targets import reconcile_configured_targets, reference_period
 
@@ -96,6 +96,8 @@ def test_weighted_quarter_result_not_mean_of_daily_ratios(app, facility):
     with app.app_context():
         facility.ancc_target = 220
         facility.rn_target = 0
+        target = FacilityTarget.query.filter_by(facility_id=facility.id, quarter_start=date(2026, 7, 1)).one()
+        target.ancc_target, target.rn_target = 220, 0
         worker = add_staff(facility.id, "P1", "PCW")
         d1, d2 = date(2026, 7, 1), date(2026, 7, 2)
         add_resident_days(facility.id, d1, 1)
@@ -223,6 +225,7 @@ def test_configured_targets_reconcile_to_reference_period_classifications(app, f
         db.session.commit()
         facility.ancc_target = 215
         facility.rn_target = 46
+        FacilityTarget.query.filter_by(facility_id=facility.id, quarter_start=quarter_start).one().rn_target = 46
         result = reconcile_configured_targets(facility, quarter_start)
         assert calculation_day == date(2026, 6, 15)
         assert result["derived_care_target"] == 215

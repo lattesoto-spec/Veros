@@ -13,7 +13,7 @@ from carelog.domain.care_minutes import _minutes_between, active_residents_on, q
 from carelog.domain import eligibility
 from carelog.models import CareEpisode, ResidentDay, Shift, Staff, db
 
-CALC_VERSION = "2026.11.1"
+CALC_VERSION = "2026.11.2"
 
 # Canonical reporting buckets. The mapping engine normalizes to PCW; the
 # government statement calls the bucket PCA — they are the same bucket.
@@ -48,6 +48,7 @@ def day_breakdown(facility_id: int, day: date, evidence_type: str = "worked") ->
     )
     roles = {"RN": 0, "EN": 0, "PCA": 0}
     agency = 0
+    agency_roles = {"RN": 0, "EN": 0, "PCA": 0}
     excluded = 0            # eligible-looking rows whose staff is not approved
     ineligible = 0          # roles that can never count
     for s, st in shifts:
@@ -56,6 +57,7 @@ def day_breakdown(facility_id: int, day: date, evidence_type: str = "worked") ->
             roles[bucket_role(st.role)] += m
             if s.is_agency:
                 agency += m
+                agency_roles[bucket_role(st.role)] += m
         elif bucket_role(st.role) in eligibility.ELIGIBLE_BUCKETS:
             excluded += m   # right role, unapproved — surfaced as an exception
         else:
@@ -75,6 +77,8 @@ def day_breakdown(facility_id: int, day: date, evidence_type: str = "worked") ->
         "ineligible_minutes": ineligible,
         "other_minutes": ineligible,   # retained for existing report templates
         "agency_minutes": agency,
+        "agency_rn_minutes": agency_roles["RN"],
+        "agency_en_minutes": agency_roles["EN"],
         "evidence_type": evidence_type,
         "care_per_resident": round(total / residents, 1) if residents else 0.0,
         "rn_per_resident": round(roles["RN"] / residents, 1) if residents else 0.0,
@@ -192,18 +196,22 @@ def detect_gaps(facility, today: date) -> list[dict]:
     """Alert list: [{severity: 'high'|'medium'|'info', message: str}]."""
     alerts = []
     fid = facility.id
+    from carelog.domain.targets import target_for_quarter
+    approved = target_for_quarter(facility, today)
+    care_target = approved.ancc_target if approved else 0
+    rn_target = approved.rn_target if approved else 0
 
     # Quarter-to-date position
     fc = forecast_quarter(facility, today)
     if fc and fc["qtd_days"] > 0:
-        if fc["qtd_avg"] < facility.ancc_target:
+        if fc["qtd_avg"] < care_target:
             alerts.append({
                 "severity": "high",
                 "message": (f"Facility is below its AN-ACC target: averaging "
-                            f"{fc['qtd_avg']:.0f} of {facility.ancc_target:.0f} "
+                            f"{fc['qtd_avg']:.0f} of {care_target:.0f} "
                             f"mins/resident/day this quarter."),
             })
-        elif fc["projected_avg"] < facility.ancc_target:
+        elif fc["projected_avg"] < care_target:
             when = (f"in {fc['days_until_breach']} day(s)" if fc["days_until_breach"]
                     else "by quarter end")
             alerts.append({
@@ -211,20 +219,20 @@ def detect_gaps(facility, today: date) -> list[dict]:
                 "message": (f"Predicted breach: at current staffing the quarter average "
                             f"falls below target {when} "
                             f"(projected {fc['projected_avg']:.0f} vs target "
-                            f"{facility.ancc_target:.0f})."),
+                            f"{care_target:.0f})."),
             })
-        if fc["qtd_rn_avg"] < facility.rn_target * RN_ONLY_FRACTION:
+        if fc["qtd_rn_avg"] < rn_target * RN_ONLY_FRACTION:
             alerts.append({
                 "severity": "high",
                 "message": (f"RN minutes below target: averaging {fc['qtd_rn_avg']:.0f} "
-                            f"of {facility.rn_target * RN_ONLY_FRACTION:.1f} required "
+                            f"of {rn_target * RN_ONLY_FRACTION:.1f} required "
                             f"RN-only mins/bed-day this quarter."),
             })
-        if fc["qtd_rn_en_avg"] < facility.rn_target:
+        if fc["qtd_rn_en_avg"] < rn_target:
             alerts.append({
                 "severity": "high",
                 "message": (f"RN + EN minutes below target: averaging "
-                            f"{fc['qtd_rn_en_avg']:.0f} of {facility.rn_target:.0f} "
+                            f"{fc['qtd_rn_en_avg']:.0f} of {rn_target:.0f} "
                             f"mins/bed-day this quarter."),
             })
 
@@ -233,25 +241,25 @@ def detect_gaps(facility, today: date) -> list[dict]:
     has_future = db.session.query(Shift.id).filter(
         Shift.facility_id == fid, Shift.date >= tomorrow
     ).first() is not None
-    if has_future:
+    if has_future and approved:
         has_roster = db.session.query(Shift.id).filter_by(
             facility_id=fid, date=tomorrow, evidence_type="rostered"
         ).first() is not None
         b = day_breakdown(fid, tomorrow, evidence_type="rostered" if has_roster else "worked")
         residents = b["residents"] or active_residents_on(fid, today)
-        rn_needed = facility.rn_target * RN_ONLY_FRACTION * residents
+        rn_needed = rn_target * RN_ONLY_FRACTION * residents
         if b["rn_minutes"] < rn_needed:
             alerts.append({
                 "severity": "high",
-                "message": (f"Tomorrow you're short {rn_needed - b['rn_minutes']:.0f} RN "
+                "message": (f"Roster on {tomorrow.isoformat()} is short {rn_needed - b['rn_minutes']:.0f} RN "
                             f"minutes ({b['rn_minutes']:.0f} rostered vs "
                             f"{rn_needed:.0f} needed for {residents} residents)."),
             })
-        care_needed = facility.ancc_target * residents
+        care_needed = care_target * residents
         if b["total_minutes"] < care_needed:
             alerts.append({
                 "severity": "medium",
-                "message": (f"Tomorrow's roster is {care_needed - b['total_minutes']:.0f} "
+                "message": (f"Roster on {tomorrow.isoformat()} is {care_needed - b['total_minutes']:.0f} "
                             f"care minutes below target "
                             f"({b['total_minutes']:.0f} of {care_needed:.0f})."),
             })
@@ -261,14 +269,14 @@ def detect_gaps(facility, today: date) -> list[dict]:
     if not cov["full_coverage"] and cov["covered_minutes"] > 0:
         alerts.append({
             "severity": "medium",
-            "message": (f"RN 24/7 coverage today is {cov['coverage_pct']}% "
+            "message": (f"RN coverage on {today.isoformat()} is {cov['coverage_pct']}% "
                         f"({1440 - cov['covered_minutes']} uncovered minutes)."),
         })
     elif cov["covered_minutes"] == 0:
-        alerts.append({"severity": "high", "message": "No RN rostered today."})
+        alerts.append({"severity": "high", "message": f"No clocked RN coverage is evidenced on {today.isoformat()}."})
 
     if not alerts:
-        alerts.append({"severity": "info", "message": "No compliance risks detected."})
+        alerts.append({"severity": "info", "message": f"No additional risks detected by the available checks through {today.isoformat()}; review evidence limitations."})
     return alerts
 
 
@@ -287,6 +295,8 @@ def _trailing_baseline(facility_id: int, today: date, days: int = 14) -> dict | 
         "rn_minutes": sum(r["rn_minutes"] for r in rows) / n,
         "en_minutes": sum(r["en_minutes"] for r in rows) / n,
         "agency_minutes": sum(r["agency_minutes"] for r in rows) / n,
+        "agency_rn_minutes": sum(r["agency_rn_minutes"] for r in rows) / n,
+        "agency_en_minutes": sum(r["agency_en_minutes"] for r in rows) / n,
         "residents": sum(r["residents"] for r in rows) / n,
     }
 
@@ -298,6 +308,10 @@ def forecast_quarter(facility, today: date, adjustments: dict | None = None) -> 
       occupancy_delta: int     — residents added (+) or discharged (−) go-forward
     """
     q_start, _ = quarter_bounds(today)
+    from carelog.domain.targets import target_for_quarter
+    configured = target_for_quarter(facility, today)
+    if configured is None:
+        return None
     q_end = _calendar_quarter_end(today)
     qtd = [r for r in range_breakdown(facility.id, q_start, today)
            if r["residents"] > 0]
@@ -319,17 +333,22 @@ def forecast_quarter(facility, today: date, adjustments: dict | None = None) -> 
     fut_rn = baseline["rn_minutes"]
     fut_en = baseline["en_minutes"]
     fut_res = baseline["residents"]
-    if adj.get("rn_shifts_removed"):
-        removed = adj["rn_shifts_removed"] * 8 * 60
-        fut_total -= removed
-        fut_rn -= removed
     if adj.get("agency_removed"):
         fut_total -= baseline["agency_minutes"]
-    if adj.get("occupancy_delta"):
-        fut_res += adj["occupancy_delta"]
+        fut_rn -= baseline["agency_rn_minutes"]
+        fut_en -= baseline["agency_en_minutes"]
+    if adj.get("rn_shifts_removed"):
+        # Additional RN reductions apply after agency removal, bounded by the
+        # remaining RN time so the same minutes cannot be removed twice.
+        removed = min(adj["rn_shifts_removed"] * 8 * 60, fut_rn)
+        fut_total -= removed
+        fut_rn -= removed
+    fut_res += adj.get("occupancy_delta", 0)
+    if fut_res <= 0:
+        raise ValueError("The scenario must retain at least one resident.")
     fut_total = max(fut_total, 0)
-    fut_rn = max(min(fut_rn, fut_total), 0)
-    fut_res = max(fut_res, 1)
+    fut_rn = max(fut_rn, 0)
+    fut_en = max(fut_en, 0)
 
     fut_per_res = fut_total / fut_res
     fut_rn_per_res = fut_rn / fut_res
@@ -341,7 +360,7 @@ def forecast_quarter(facility, today: date, adjustments: dict | None = None) -> 
     projected_rn_en = (qtd_rn + qtd_en + (fut_rn + fut_en) * m) / projected_bed_days
 
     days_until_breach = None
-    target = facility.ancc_target
+    target = configured.ancc_target
     if qtd_avg >= target and fut_per_res < target:
         for k in range(1, m + 1):
             if (qtd_total + fut_total * k) / (qtd_bed_days + fut_res * k) < target:
@@ -362,8 +381,8 @@ def forecast_quarter(facility, today: date, adjustments: dict | None = None) -> 
         "days_until_breach": days_until_breach,
         "on_track": projected >= target,
         "rn_on_track": (
-            projected_rn >= facility.rn_target * RN_ONLY_FRACTION
-            and projected_rn_en >= facility.rn_target
+            projected_rn >= configured.rn_target * RN_ONLY_FRACTION
+            and projected_rn_en >= configured.rn_target
         ),
         "baseline_residents": round(fut_res, 1),
     }
@@ -380,9 +399,11 @@ def _calendar_quarter_end(d: date) -> date:
 def compliance_pct(facility, today: date) -> float | None:
     """QTD average as a percentage of target — the headline dashboard number."""
     fc = forecast_quarter(facility, today)
-    if not fc or not facility.ancc_target:
+    from carelog.domain.targets import target_for_quarter
+    target = target_for_quarter(facility, today)
+    if not fc or not target or not target.ancc_target:
         return None
-    return round(fc["qtd_avg"] / facility.ancc_target * 100, 1)
+    return round(fc["qtd_avg"] / target.ancc_target * 100, 1)
 
 
 # ------------------------------------------------- legislated quarterly tests
@@ -431,11 +452,17 @@ def quarterly_tests(facility, start: date, end: date) -> dict:
     """
     t = quarter_totals(facility.id, start, end)
     bd = t["bed_days"]
-    care_target = facility.ancc_target or 0
-    rn_target = facility.rn_target or 0
+    from carelog.domain.targets import target_for_quarter
+    configured = target_for_quarter(facility, start)
+    care_target = configured.ancc_target if configured else 0
+    rn_target = configured.rn_target if configured else 0
 
     from carelog.domain.care_minutes import denominator_issues
     limitations = denominator_issues(facility.id, start, end)
+    if configured is None:
+        limitations.append("No approved target evidence is recorded for this quarter. Configure the quarter and source in Settings.")
+    if quarter_bounds(start)[0] != quarter_bounds(end)[0]:
+        limitations.append("This date range crosses quarters; assess each quarter against its own approved targets.")
     if not bd:
         limitations.append("No occupied bed days are available.")
 

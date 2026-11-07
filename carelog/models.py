@@ -103,6 +103,24 @@ class Facility(db.Model):
     ancc_target = db.Column(db.Float, nullable=False, default=215.0)
     rn_target = db.Column(db.Float, nullable=False, default=44.0)
 
+    @property
+    def target_history(self):
+        return FacilityTarget.query.filter_by(facility_id=self.id).order_by(FacilityTarget.quarter_start.desc()).all()
+
+
+class FacilityTarget(db.Model):
+    """Approved target evidence for one quarter; corrections remain audited."""
+    __tablename__ = "facility_targets"
+    __table_args__ = (db.UniqueConstraint("facility_id", "quarter_start", name="uq_facility_target_quarter"),)
+    id = db.Column(db.Integer, primary_key=True)
+    facility_id = db.Column(db.Integer, db.ForeignKey("facilities.id"), nullable=False)
+    quarter_start = db.Column(db.Date, nullable=False)
+    ancc_target = db.Column(db.Float, nullable=False)
+    rn_target = db.Column(db.Float, nullable=False)
+    source = db.Column(db.Text, nullable=False)
+    approved_by_user_id = db.Column(db.Integer, db.ForeignKey("users.id"))
+    approved_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
 
 class Resident(db.Model):
     __tablename__ = "residents"

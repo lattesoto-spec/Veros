@@ -32,7 +32,7 @@ from carelog.models import (
     Staff,
     db,
 )
-from carelog.services.targets import parse_targets
+from carelog.services.targets import parse_targets, save_target, target_details
 from carelog.services.workspace import (
     _confirmed,
     _delete_facility_data,
@@ -56,7 +56,7 @@ def settings():
             flash("Facility name is required.")
             return navigate(url_for("api.settings"))
         try:
-            care_target, rn_target = parse_targets(form_data())
+            care_target, rn_target, _, _ = target_details(form_data())
         except ValueError as error:
             flash(str(error))
             return navigate(url_for("api.settings")), 400
@@ -64,8 +64,13 @@ def settings():
             facility = Facility(name=name, organization_id=current_organization_id())
             db.session.add(facility)
             db.session.flush()
+        try:
+            save_target(facility, form_data(), auth.current_user())
+        except ValueError as error:
+            db.session.rollback()
+            flash(str(error))
+            return navigate(url_for("api.settings")), 400
         facility.name = name
-        facility.ancc_target, facility.rn_target = care_target, rn_target
         auth.record(
             "facility_updated",
             "facility",
@@ -84,7 +89,7 @@ def settings():
 
 
 @bp.route("/facility", methods=["GET"])
-@require("view_dashboard")
+@require("view_records")
 def facility_view():
     facility = current_facility()
     if not facility:
@@ -118,7 +123,12 @@ def update_targets():
     except ValueError as error:
         flash(str(error))
         return navigate(url_for("api.dashboard")), 400
-    facility.ancc_target, facility.rn_target = care_target, rn_target
+    try:
+        save_target(facility, form_data(), auth.current_user())
+    except ValueError as error:
+        db.session.rollback()
+        flash(str(error))
+        return navigate(url_for("api.facilities_view")), 400
     auth.record("facility_updated", "facility", facility.id,
                 f"targets {care_target}/{rn_target}")
     db.session.commit()
@@ -231,6 +241,12 @@ def facility_create():
                         ancc_target=care_target, rn_target=rn_target)
     db.session.add(facility)
     db.session.flush()
+    try:
+        save_target(facility, form_data(), auth.current_user())
+    except ValueError as error:
+        db.session.rollback()
+        flash(str(error))
+        return navigate(url_for("api.facilities_view")), 400
     auth.record("facility_created", "facility", facility.id, name)
     db.session.commit()
     session["facility_id"] = facility.id
@@ -254,7 +270,12 @@ def facility_update(facility_id):
         return navigate(url_for("api.facilities_view")), 400
     if name:
         facility.name = name
-    facility.ancc_target, facility.rn_target = care_target, rn_target
+    try:
+        save_target(facility, form_data(), auth.current_user())
+    except ValueError as error:
+        db.session.rollback()
+        flash(str(error))
+        return navigate(url_for("api.facilities_view")), 400
     auth.record(
         "facility_updated",
         "facility",

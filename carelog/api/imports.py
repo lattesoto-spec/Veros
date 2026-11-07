@@ -37,7 +37,7 @@ from carelog.models import (
     Shift,
     db,
 )
-from carelog.services.targets import parse_targets
+from carelog.services.targets import target_details, save_target
 from carelog.services.workspace import (
     ROOT,
     _confirmed,
@@ -84,7 +84,7 @@ def universal_import():
         if not has_permission("manage_facility"):
             errors.append("Ask your administrator to create a facility before importing.")
         try:
-            targets = parse_targets(form_data())
+            targets = target_details(form_data())
         except ValueError as error:
             errors.append(str(error))
     if not files:
@@ -102,6 +102,7 @@ def universal_import():
                             ancc_target=targets[0], rn_target=targets[1])
         db.session.add(facility)
         db.session.flush()
+        save_target(facility, form_data(), current_user())
         session["facility_id"] = facility.id
     # Commit now: the background worker needs the facility id, and the
     # request must not hold an open transaction while the job runs.

@@ -22,6 +22,7 @@ from carelog.domain.compliance import (
     evidence_summary,
 )
 from carelog.domain.reports import available_quarters, build_quarterly_pdf
+from carelog.domain.targets import facility_for_period
 from carelog.services.workspace import current_facility
 
 
@@ -85,7 +86,7 @@ def reports_view():
     q_start, _ = quarter_bounds(latest)
     return resource(
         "reports",
-        facility=facility,
+        facility=facility_for_period(facility, latest),
         latest=latest,
         quarters=available_quarters(facility.id),
         calc_version=CALC_VERSION,

@@ -110,6 +110,7 @@ def test_demo_api_from_organisation_to_pdf(monkeypatch, tmp_path):
     assert client.post("/api/platform/act", data={"organization_id": org_id}).status_code == 200
     made_facility = client.post("/api/facilities/create", data={
         "name": "Banksia Grove Residential Care", "ancc_target": "215", "rn_target": "44",
+        "target_quarter": "2026-10-01", "target_source": "Synthetic provider target notice",
     })
     assert made_facility.status_code == 200
     with app.app_context():
