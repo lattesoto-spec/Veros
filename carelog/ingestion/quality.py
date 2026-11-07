@@ -22,15 +22,26 @@ def validate_shifts(records, evidence_type="worked"):
         span = _span(rec)
         minutes = _minutes(rec)
         problem = None
-        if evidence_type == "worked" and rec["date"] > date.today():
+        if rec["date"].year < 2000:
+            problem = "date is outside the supported care-evidence period"
+        elif evidence_type == "worked" and rec["date"] > date.today():
             problem = "actual-worked date is in the future"
         elif rec.get("break_minutes", 0) < 0:
             problem = "negative break"
-        elif rec.get("start_time") == rec.get("end_time") and rec.get("start_time") is not None:
+        elif (
+            rec.get("start_time") == rec.get("end_time")
+            and rec.get("start_time") is not None
+        ):
             problem = "identical start and finish"
         elif minutes is None or not isfinite(minutes) or not 0 < minutes <= 1440:
             problem = "worked duration must be positive and no more than 24 hours"
-        key = (rec["staff_id"], rec["date"], rec.get("start_time"), rec.get("end_time"), rec.get("minutes"))
+        key = (
+            rec["staff_id"],
+            rec["date"],
+            rec.get("start_time"),
+            rec.get("end_time"),
+            rec.get("minutes"),
+        )
         if key in seen:
             problem = "duplicate shift"
         seen.add(key)
@@ -40,7 +51,9 @@ def validate_shifts(records, evidence_type="worked"):
                 problem = "overlapping shifts for the same staff member"
             previous.append(span)
         if problem:
-            raise MappingError(f"{where}: {problem}; nothing was imported. Correct the source and upload again.")
+            raise MappingError(
+                f"{where}: {problem}; nothing was imported. Correct the source and upload again."
+            )
 
 
 def _span(rec) -> tuple[datetime, datetime] | None:
@@ -86,9 +99,15 @@ def check_shifts(records: list[dict], today: date | None = None) -> list[str]:
         mins = _minutes(rec)
         if mins is not None:
             if mins <= 0:
-                warn("negative_hours", f"{sid} on {d}: non-positive worked time ({mins:.0f}m after breaks)")
+                warn(
+                    "negative_hours",
+                    f"{sid} on {d}: non-positive worked time ({mins:.0f}m after breaks)",
+                )
             elif mins > 16 * 60:
-                warn("long_shift", f"{sid} on {d}: unusually long shift ({mins / 60:.1f}h)")
+                warn(
+                    "long_shift",
+                    f"{sid} on {d}: unusually long shift ({mins / 60:.1f}h)",
+                )
 
         key = (sid, d, rec.get("start_time"), rec.get("end_time"), rec.get("minutes"))
         if key in seen:
@@ -109,17 +128,21 @@ def check_shifts(records: list[dict], today: date | None = None) -> list[str]:
         for (s1, e1), (s2, e2) in zip(spans, spans[1:]):
             if s2 < e1:
                 overlap_minutes += int((min(e1, e2) - s2).total_seconds() // 60)
-                warn("overlapping_shifts",
-                     f"{sid}: overlapping shifts ({s1:%d %b %H:%M}-{e1:%H:%M} and {s2:%H:%M}-{e2:%H:%M})")
+                warn(
+                    "overlapping_shifts",
+                    f"{sid}: overlapping shifts ({s1:%d %b %H:%M}-{e1:%H:%M} and {s2:%H:%M}-{e2:%H:%M})",
+                )
     if overlap_minutes:
         # One person cannot be in two places, so overlapping rows inflate the
         # worked total. Episode-level exports (one row per care activity) are
         # the usual source.
-        warn("overlap_impact",
-             f"Overlapping rows add roughly {overlap_minutes} double-counted minutes. "
-             "If this file lists individual care episodes rather than shifts, the "
-             "care-minute total will be overstated until the episodes are "
-             "reconciled into worked time.")
+        warn(
+            "overlap_impact",
+            f"Overlapping rows add roughly {overlap_minutes} double-counted minutes. "
+            "If this file lists individual care episodes rather than shifts, the "
+            "care-minute total will be overstated until the episodes are "
+            "reconciled into worked time.",
+        )
 
     if unknown_roles:
         from carelog.domain.eligibility import classify
@@ -129,19 +152,25 @@ def check_shifts(records: list[dict], today: date | None = None) -> list[str]:
             _, status, _ = classify(role)
             (excluded if status == "excluded" else pending).append(role or "(blank)")
         if excluded:
-            warn("ineligible_role",
-                 "Not counted toward care minutes. These roles are not eligible "
-                 "direct care: " + ", ".join(excluded[:8]))
+            warn(
+                "ineligible_role",
+                "Not counted toward care minutes. These roles are not eligible "
+                "direct care: " + ", ".join(excluded[:8]),
+            )
         if pending:
-            warn("unknown_classification",
-                 "Held out of the figures until someone confirms them: "
-                 + ", ".join(pending[:8])
-                 + ". Decide on the Eligibility page. Unresolved roles are "
-                   "excluded rather than assumed to count.")
+            warn(
+                "unknown_classification",
+                "Held out of the figures until someone confirms them: "
+                + ", ".join(pending[:8])
+                + ". Decide on the Eligibility page. Unresolved roles are "
+                "excluded rather than assumed to count.",
+            )
 
     out = []
     for kind, msgs in warnings.items():
         out.extend(msgs[:MAX_WARNINGS_PER_KIND])
         if len(msgs) > MAX_WARNINGS_PER_KIND:
-            out.append(f"{len(msgs) - MAX_WARNINGS_PER_KIND} additional {kind} warning(s)")
+            out.append(
+                f"{len(msgs) - MAX_WARNINGS_PER_KIND} additional {kind} warning(s)"
+            )
     return out

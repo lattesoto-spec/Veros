@@ -1,4 +1,5 @@
 import os
+from datetime import date
 
 from flask import (
     session,
@@ -51,15 +52,10 @@ def workspace_context(facility: Facility | None) -> dict:
         return {}
     latest = (
         Shift.query.filter_by(facility_id=facility.id, evidence_type="worked")
+        .filter(Shift.date <= date.today())
         .order_by(Shift.date.desc())
         .first()
     )
-    if latest is None:
-        latest = (
-            Shift.query.filter_by(facility_id=facility.id)
-            .order_by(Shift.date.desc())
-            .first()
-        )
     latest_day = latest.date if latest else None
     receipt = (
         ImportReceipt.query.filter_by(facility_id=facility.id)
@@ -154,7 +150,10 @@ def _delete_facility_data(facility_ids):
         synchronize_session=False
     )
     from carelog.models import FacilityTarget
-    FacilityTarget.query.filter(FacilityTarget.facility_id.in_(facility_ids)).delete(synchronize_session=False)
+
+    FacilityTarget.query.filter(FacilityTarget.facility_id.in_(facility_ids)).delete(
+        synchronize_session=False
+    )
     for model in (Staff, Resident):
         model.query.filter(model.facility_id.in_(facility_ids)).delete(
             synchronize_session=False
@@ -172,16 +171,30 @@ def _purge_evidence(receipts, facility_ids=None) -> int:
         if not receipt.source_path:
             continue
         store = _storage_for(receipt)
-        prefix = os.path.basename(receipt.source_path.rstrip("/")) if os.path.isabs(receipt.source_path) else receipt.source_path
+        prefix = (
+            os.path.basename(receipt.source_path.rstrip("/"))
+            if os.path.isabs(receipt.source_path)
+            else receipt.source_path
+        )
         removed += store.delete([item.key for item in store.list(prefix)])
         handled.add(receipt.source_path)
-    jobs = ImportJob.query.filter(ImportJob.facility_id.in_(facility_ids)).all() if facility_ids is not None else (
-        ImportJob.query.filter(ImportJob.receipt_id.in_([r.id for r in receipts])).all() if receipts else []
+    jobs = (
+        ImportJob.query.filter(ImportJob.facility_id.in_(facility_ids)).all()
+        if facility_ids is not None
+        else (
+            ImportJob.query.filter(
+                ImportJob.receipt_id.in_([r.id for r in receipts])
+            ).all()
+            if receipts
+            else []
+        )
     )
     store = _storage()
     for job in jobs:
         if job.storage_prefix and job.storage_prefix not in handled:
-            removed += store.delete([item.key for item in store.list(job.storage_prefix)])
+            removed += store.delete(
+                [item.key for item in store.list(job.storage_prefix)]
+            )
             handled.add(job.storage_prefix)
     return removed
 

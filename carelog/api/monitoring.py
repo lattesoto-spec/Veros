@@ -1,6 +1,7 @@
 from datetime import date, datetime, timedelta
 
 from flask import (
+    abort,
     request,
     session,
     url_for,
@@ -60,15 +61,10 @@ def index():
 def _latest_data_date(facility):
     latest = (
         Shift.query.filter_by(facility_id=facility.id, evidence_type="worked")
+        .filter(Shift.date <= date.today())
         .order_by(Shift.date.desc())
         .first()
     )
-    if latest is None:
-        latest = (
-            Shift.query.filter_by(facility_id=facility.id)
-            .order_by(Shift.date.desc())
-            .first()
-        )
     return latest.date if latest else date.today()
 
 
@@ -113,7 +109,9 @@ def rn_coverage_view():
             .replace(day=1)
         )
     except ValueError:
-        selected_month = today.replace(day=1)
+        abort(400, description="Choose a valid reporting month using YYYY-MM.")
+    if not 2000 <= selected_month.year <= 2100:
+        abort(400, description="Choose a reporting month between 2000 and 2100.")
     next_month = (
         date(selected_month.year + 1, 1, 1)
         if selected_month.month == 12
@@ -199,8 +197,13 @@ def scenarios():
         try:
             params["rn_shifts_removed"] = int(form_data().get("rn_shifts_removed") or 0)
             params["occupancy_delta"] = int(form_data().get("occupancy_delta") or 0)
-            if not 0 <= params["rn_shifts_removed"] <= 20 or not -50 <= params["occupancy_delta"] <= 50:
-                raise ValueError("Use 0–20 RN shifts and an occupancy change between -50 and 50.")
+            if (
+                not 0 <= params["rn_shifts_removed"] <= 20
+                or not -50 <= params["occupancy_delta"] <= 50
+            ):
+                raise ValueError(
+                    "Use 0–20 RN shifts and an occupancy change between -50 and 50."
+                )
             agency = form_data().get("agency_removed")
             if agency not in (None, "", "on"):
                 raise ValueError("Choose an explicit agency-removal assumption.")
@@ -209,8 +212,19 @@ def scenarios():
         except (TypeError, ValueError) as error:
             errors.append(str(error) or "Scenario inputs must be whole numbers.")
     return resource(
-        "scenarios", facility=facility_for_period(facility, today), today=today,
-        base=base, params=params, result=result, errors=errors,
+        "scenarios",
+        facility=facility_for_period(facility, today),
+        today=today,
+        base=base,
+        params=params,
+        result=result,
+        errors=errors,
+        thresholds={
+            row["key"]: row["target"]
+            for row in quarterly_tests(facility, quarter_bounds(today)[0], today)[
+                "tests"
+            ]
+        },
     ), 400 if errors else 200
 
 
@@ -223,17 +237,11 @@ def dashboard():
 
     latest_worked_shift = (
         Shift.query.filter_by(facility_id=facility.id, evidence_type="worked")
+        .filter(Shift.date <= date.today())
         .order_by(Shift.date.desc())
         .first()
     )
-    latest_shift = latest_worked_shift
-    if latest_shift is None:
-        latest_shift = (
-            Shift.query.filter_by(facility_id=facility.id)
-            .order_by(Shift.date.desc())
-            .first()
-        )
-    today = latest_shift.date if latest_shift else date.today()
+    today = latest_worked_shift.date if latest_worked_shift else date.today()
 
     today_stats = daily_stats(
         facility.id, today, facility.ancc_target, facility.rn_target
@@ -255,6 +263,7 @@ def dashboard():
     )
 
     from carelog.domain.targets import target_for_quarter
+
     approved_target = target_for_quarter(facility, today)
     chart_data = {
         "labels": [r["date"].strftime("%d %b") for r in last_14],
@@ -286,6 +295,44 @@ def dashboard():
     receipts = ImportReceipt.query.filter_by(facility_id=facility.id).all()
     with_files = sum(1 for r in receipts if _receipt_files(r))
     audit_readiness = round(with_files / len(receipts) * 100) if receipts else None
+    evidence = evidence_summary(facility.id, q_start, today)
+    tests = quarterly_tests(facility, q_start, today)
+    nurses = Staff.query.filter(
+        Staff.facility_id == facility.id, Staff.role.in_(["RN", "EN"])
+    ).all()
+    credential_issues = sum(
+        bool(el.registration_problem(member, today)) for member in nurses
+    )
+    setup_checks = [
+        {
+            "label": "Quarterly targets",
+            "ready": approved_target is not None,
+            "detail": "Record the quarter and provider target notice.",
+            "href": "/settings",
+            "permission": "manage_facility",
+        },
+        {
+            "label": "Actual-worked hours",
+            "ready": latest_worked_shift is not None,
+            "detail": "Import approved time-and-attendance records.",
+            "href": "/import",
+            "permission": "import_data",
+        },
+        {
+            "label": "Resident-day census",
+            "ready": evidence["resident_day_ledger_complete"],
+            "detail": "Verify every date and resident against the source census.",
+            "href": "/audit",
+            "permission": "view_audit",
+        },
+        {
+            "label": "Nursing credentials",
+            "ready": bool(nurses) and credential_issues == 0,
+            "detail": f"{len(nurses)} nursing profiles; {credential_issues} registration issue(s). Import staff identifiers, Ahpra numbers and expiry dates.",
+            "href": "/eligibility",
+            "permission": "view_audit",
+        },
+    ]
 
     return resource(
         "dashboard",
@@ -297,6 +344,11 @@ def dashboard():
         audit_readiness=audit_readiness,
         facility=facility_for_period(facility, today),
         today=today,
+        has_worked_data=latest_worked_shift is not None,
+        worked_data_age_days=(date.today() - today).days
+        if latest_worked_shift
+        else None,
+        setup_checks=setup_checks,
         today_stats=today_stats,
         last_14=list(reversed(last_14)),
         chart_data=chart_data,
@@ -307,8 +359,8 @@ def dashboard():
         q_end=q_end,
         resident_count=resident_count,
         last_receipt=_latest_receipt(facility),
-        evidence=evidence_summary(facility.id, q_start, today),
-        tests=quarterly_tests(facility, q_start, today),
+        evidence=evidence,
+        tests=tests,
         pending_eligibility=Staff.query.filter_by(
             facility_id=facility.id, eligibility_status=el.PENDING
         ).count(),

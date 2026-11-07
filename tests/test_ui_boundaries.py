@@ -4,7 +4,15 @@ from datetime import date, time
 import pytest
 
 from carelog import auth
-from carelog.models import Facility, FacilityTarget, Organization, ResidentDay, Shift, Staff, db
+from carelog.models import (
+    Facility,
+    FacilityTarget,
+    Organization,
+    ResidentDay,
+    Shift,
+    Staff,
+    db,
+)
 
 
 @pytest.fixture()
@@ -25,32 +33,52 @@ def web_app(monkeypatch):
         db.session.add_all([customer, other])
         db.session.flush()
         owner = auth.create_user(
-            organization_id=customer.id, email="owner@example.com",
-            name="Platform Owner", role="administrator", password="Password123!",
-            is_superuser=True, must_change_password=False,
+            organization_id=customer.id,
+            email="owner@example.com",
+            name="Platform Owner",
+            role="administrator",
+            password="Password123!",
+            is_superuser=True,
+            must_change_password=False,
         )
         admin = auth.create_user(
-            organization_id=customer.id, email="admin@example.com",
-            name="Customer Admin", role="administrator", password="Password123!",
+            organization_id=customer.id,
+            email="admin@example.com",
+            name="Customer Admin",
+            role="administrator",
+            password="Password123!",
             must_change_password=False,
         )
         outsider = auth.create_user(
-            organization_id=other.id, email="other@example.com",
-            name="Other Admin", role="administrator", password="Password123!",
+            organization_id=other.id,
+            email="other@example.com",
+            name="Other Admin",
+            role="administrator",
+            password="Password123!",
             must_change_password=False,
         )
         db.session.add(Facility(organization_id=customer.id, name="Sunrise Home"))
         db.session.flush()
         for home in Facility.query.filter_by(organization_id=customer.id).all():
             for month in (1, 4, 7, 10):
-                db.session.add(FacilityTarget(facility_id=home.id, quarter_start=date(2026, month, 1),
-                                             ancc_target=215, rn_target=44, source="Synthetic provider notice"))
+                db.session.add(
+                    FacilityTarget(
+                        facility_id=home.id,
+                        quarter_start=date(2026, month, 1),
+                        ancc_target=215,
+                        rn_target=44,
+                        source="Synthetic provider notice",
+                    )
+                )
         other_facility = Facility(organization_id=other.id, name="Other Home")
         db.session.add(other_facility)
         db.session.commit()
         ids = {
-            "owner": owner.id, "admin": admin.id, "outsider": outsider.id,
-            "customer": customer.id, "other": other.id,
+            "owner": owner.id,
+            "admin": admin.id,
+            "outsider": outsider.id,
+            "customer": customer.id,
+            "other": other.id,
             "other_facility": other_facility.id,
         }
         yield app, ids
@@ -70,7 +98,9 @@ def test_api_errors_and_login_are_json(web_app):
     client = app.test_client()
     page = client.get("/api/login")
     assert page.json["view"] == "login"
-    failed = client.post("/api/login", data={"email": "admin@example.com", "password": "wrong"})
+    failed = client.post(
+        "/api/login", data={"email": "admin@example.com", "password": "wrong"}
+    )
     assert failed.status_code == 401
     assert failed.json["data"]["email"] == "admin@example.com"
     sign_in_as(client, ids["admin"])
@@ -103,8 +133,10 @@ def test_platform_owner_defaults_to_platform_only_ui(web_app):
         assert response.json["navigate"].endswith("/platform")
 
     for path in (
-        "/api/platform", f"/api/platform/organizations/{ids['customer']}",
-        "/api/platform/activity", "/api/platform/system",
+        "/api/platform",
+        f"/api/platform/organizations/{ids['customer']}",
+        "/api/platform/activity",
+        "/api/platform/system",
     ):
         response = client.get(path)
         assert response.status_code == 200
@@ -117,7 +149,9 @@ def test_support_workspace_requires_explicit_account_entry(web_app):
     client = app.test_client()
     sign_in_as(client, ids["owner"])
 
-    entered = client.post("/api/platform/act", data={"organization_id": ids["customer"]})
+    entered = client.post(
+        "/api/platform/act", data={"organization_id": ids["customer"]}
+    )
     assert entered.status_code == 200
     workspace = client.get("/api/import")
     assert workspace.status_code == 200
@@ -133,8 +167,12 @@ def test_customer_ui_hides_platform_internals_and_cross_tenant_controls(web_app)
     sign_in_as(client, ids["admin"])
 
     forbidden_copy = (
-        b"anthropic", b"claude", b"ai connection", b"learned parser",
-        b"mapping spec", b"fingerprint",
+        b"anthropic",
+        b"claude",
+        b"ai connection",
+        b"learned parser",
+        b"mapping spec",
+        b"fingerprint",
     )
     for path in ("/api/settings", "/api/import", "/api/audit"):
         response = client.get(path)
@@ -143,20 +181,32 @@ def test_customer_ui_hides_platform_internals_and_cross_tenant_controls(web_app)
             assert phrase not in response.data.lower()
 
     assert client.get("/api/platform").status_code == 404
-    assert client.post(
-        f"/api/platform/organizations/{ids['other']}/update",
-        data={"name": "Changed by customer", "timezone": "Australia/Sydney"},
-    ).status_code == 404
+    assert (
+        client.post(
+            f"/api/platform/organizations/{ids['other']}/update",
+            data={"name": "Changed by customer", "timezone": "Australia/Sydney"},
+        ).status_code
+        == 404
+    )
     assert client.get("/api/admin/security-log").status_code == 404
-    assert client.post(
-        f"/api/admin/users/{ids['owner']}/update", data={"action": "deactivate"}
-    ).status_code == 404
-    assert client.post(
-        f"/api/admin/users/{ids['outsider']}/update", data={"action": "deactivate"}
-    ).status_code == 404
-    assert client.post(
-        f"/api/facilities/{ids['other_facility']}/update", data={"name": "Changed"}
-    ).status_code == 404
+    assert (
+        client.post(
+            f"/api/admin/users/{ids['owner']}/update", data={"action": "deactivate"}
+        ).status_code
+        == 404
+    )
+    assert (
+        client.post(
+            f"/api/admin/users/{ids['outsider']}/update", data={"action": "deactivate"}
+        ).status_code
+        == 404
+    )
+    assert (
+        client.post(
+            f"/api/facilities/{ids['other_facility']}/update", data={"name": "Changed"}
+        ).status_code
+        == 404
+    )
 
     users_page = client.get("/api/admin/users")
     assert users_page.status_code == 200
@@ -185,9 +235,18 @@ def test_redesigned_provider_workspace_routes_render_with_sparse_data(web_app):
     sign_in_as(client, ids["admin"])
 
     for path in (
-        "/api/dashboard", "/api/compliance", "/api/rn-coverage", "/api/scenarios",
-        "/api/reports", "/api/audit", "/api/eligibility", "/api/facility",
-        "/api/facilities", "/api/integrations", "/api/admin/users", "/api/settings",
+        "/api/dashboard",
+        "/api/compliance",
+        "/api/rn-coverage",
+        "/api/scenarios",
+        "/api/reports",
+        "/api/audit",
+        "/api/eligibility",
+        "/api/facility",
+        "/api/facilities",
+        "/api/integrations",
+        "/api/admin/users",
+        "/api/settings",
         "/api/import/guide",
     ):
         response = client.get(path)
@@ -199,7 +258,7 @@ def test_redesigned_provider_workspace_routes_render_with_sparse_data(web_app):
     coverage = client.get("/api/rn-coverage").json["data"]
     assert coverage["available_days"] == 0
     assert coverage["period_pct"] is None
-    assert client.get("/api/rn-coverage?month=not-a-month").status_code == 200
+    assert client.get("/api/rn-coverage?month=not-a-month").status_code == 400
     assert client.get("/api/facilities").json["data"]["summary"]
 
 
@@ -208,39 +267,71 @@ def test_redesigned_reporting_routes_render_calculated_data(web_app):
     with app.app_context():
         facility = Facility.query.filter_by(organization_id=ids["customer"]).one()
         rn = Staff(
-            facility_id=facility.id, staff_id="RN-1", name="Registered Nurse",
-            role="RN", source_role="Registered Nurse", eligibility_status="approved",
-            registration_number="AHPRA-RN-1", registration_expiry=date(2027, 8, 1),
+            facility_id=facility.id,
+            staff_id="RN-1",
+            name="Registered Nurse",
+            role="RN",
+            source_role="Registered Nurse",
+            eligibility_status="approved",
+            registration_number="AHPRA-RN-1",
+            registration_expiry=date(2027, 8, 1),
         )
         pcw = Staff(
-            facility_id=facility.id, staff_id="PCW-1", name="Care Worker",
-            role="PCW", source_role="Personal Care Worker",
+            facility_id=facility.id,
+            staff_id="PCW-1",
+            name="Care Worker",
+            role="PCW",
+            source_role="Personal Care Worker",
             eligibility_status="approved",
         )
         db.session.add_all([rn, pcw])
         db.session.flush()
         for day in (date(2026, 8, 1), date(2026, 8, 2)):
-            db.session.add(ResidentDay(
-                facility_id=facility.id, resident_id=f"R-{day}",
-                resident_name="Resident", date=day, occupied=True,
-                service_type="permanent",
-            ))
+            db.session.add(
+                ResidentDay(
+                    facility_id=facility.id,
+                    resident_id=f"R-{day}",
+                    resident_name="Resident",
+                    date=day,
+                    occupied=True,
+                    service_type="permanent",
+                )
+            )
             for start, end in ((time(0), time(12)), (time(12), time(0))):
-                db.session.add(Shift(
-                    facility_id=facility.id, staff_id=rn.id, date=day,
-                    start_time=start, end_time=end, break_minutes=0,
-                    is_direct_care=True, evidence_type="worked",
-                ))
-            db.session.add(Shift(
-                facility_id=facility.id, staff_id=pcw.id, date=day,
-                start_time=time(8), end_time=time(16), break_minutes=0,
-                is_direct_care=True, evidence_type="worked",
-            ))
+                db.session.add(
+                    Shift(
+                        facility_id=facility.id,
+                        staff_id=rn.id,
+                        date=day,
+                        start_time=start,
+                        end_time=end,
+                        break_minutes=0,
+                        is_direct_care=True,
+                        evidence_type="worked",
+                    )
+                )
+            db.session.add(
+                Shift(
+                    facility_id=facility.id,
+                    staff_id=pcw.id,
+                    date=day,
+                    start_time=time(8),
+                    end_time=time(16),
+                    break_minutes=0,
+                    is_direct_care=True,
+                    evidence_type="worked",
+                )
+            )
         db.session.commit()
 
     client = app.test_client()
     sign_in_as(client, ids["admin"])
-    for path in ("/api/dashboard", "/api/compliance", "/api/rn-coverage?month=2026-08", "/api/facilities"):
+    for path in (
+        "/api/dashboard",
+        "/api/compliance",
+        "/api/rn-coverage?month=2026-08",
+        "/api/facilities",
+    ):
         response = client.get(path)
         assert response.status_code == 200, path
 
@@ -249,7 +340,9 @@ def test_redesigned_reporting_routes_render_calculated_data(web_app):
     tests = client.get("/api/dashboard").json["data"]["tests"]
     assert tests["passed"] is None
     assert tests["provisional"] is True
-    assert client.get("/api/rn-coverage?month=2026-08").json["data"]["available_days"] == 2
+    assert (
+        client.get("/api/rn-coverage?month=2026-08").json["data"]["available_days"] == 2
+    )
     summaries = client.get("/api/facilities").json["data"]["summary"]
     assert next(iter(summaries.values()))["period_status"] is None
 
@@ -261,15 +354,32 @@ def test_invalid_targets_never_change_facility_state(web_app, invalid):
     sign_in_as(client, ids["admin"])
     with app.app_context():
         home_id = Facility.query.filter_by(organization_id=ids["customer"]).one().id
-    for route in ("/api/settings", "/api/facility/targets", f"/api/facilities/{home_id}/update"):
-        response = client.post(route, data={
-            "facility_name": "Changed", "name": "Changed", "ancc_target": "220", "rn_target": invalid,
-        })
+    for route in (
+        "/api/settings",
+        "/api/facility/targets",
+        f"/api/facilities/{home_id}/update",
+    ):
+        response = client.post(
+            route,
+            data={
+                "facility_name": "Changed",
+                "name": "Changed",
+                "ancc_target": "220",
+                "rn_target": invalid,
+            },
+        )
         assert response.status_code == 400
         with app.app_context():
             home = db.session.get(Facility, home_id)
-            assert (home.name, home.ancc_target, home.rn_target) == ("Sunrise Home", 215, 44)
-    response = client.post("/api/facilities/create", data={"name": "Invalid Home", "ancc_target": "220", "rn_target": invalid})
+            assert (home.name, home.ancc_target, home.rn_target) == (
+                "Sunrise Home",
+                215,
+                44,
+            )
+    response = client.post(
+        "/api/facilities/create",
+        data={"name": "Invalid Home", "ancc_target": "220", "rn_target": invalid},
+    )
     assert response.status_code == 400
     with app.app_context():
         assert Facility.query.filter_by(name="Invalid Home").count() == 0
@@ -279,9 +389,29 @@ def test_targets_require_explicit_values_and_record_valid_updates(web_app):
     app, ids = web_app
     client = app.test_client()
     sign_in_as(client, ids["admin"])
-    assert client.post("/api/facilities/create", data={"name": "No targets"}).status_code == 400
-    assert client.post("/api/facility/targets", data={"ancc_target": "30", "rn_target": "44"}).status_code == 400
-    assert client.post("/api/facility/targets", data={"ancc_target": "220.5", "rn_target": "45", "target_quarter": "2026-10-01", "target_source": "Corrected provider notice", "target_correction": "Updated notice received"}).status_code == 200
+    assert (
+        client.post("/api/facilities/create", data={"name": "No targets"}).status_code
+        == 400
+    )
+    assert (
+        client.post(
+            "/api/facility/targets", data={"ancc_target": "30", "rn_target": "44"}
+        ).status_code
+        == 400
+    )
+    assert (
+        client.post(
+            "/api/facility/targets",
+            data={
+                "ancc_target": "220.5",
+                "rn_target": "45",
+                "target_quarter": "2026-10-01",
+                "target_source": "Corrected provider notice",
+                "target_correction": "Updated notice received",
+            },
+        ).status_code
+        == 200
+    )
     with app.app_context():
         home = Facility.query.filter_by(organization_id=ids["customer"]).one()
         assert (home.ancc_target, home.rn_target) == (220.5, 45)
@@ -310,7 +440,9 @@ def test_url_connector_cannot_bypass_reviewed_imports(web_app):
     client = app.test_client()
     sign_in_as(client, ids["admin"])
     assert client.get("/api/integrations").json["data"]["platforms"] == []
-    response = client.post("/api/integrations", data={"action": "sync", "platform": "url_fetch"})
+    response = client.post(
+        "/api/integrations", data={"action": "sync", "platform": "url_fetch"}
+    )
     assert response.status_code == 409
     assert "Imports" in response.json["error"]
 
@@ -322,16 +454,32 @@ def test_quarter_targets_preserve_history_and_require_correction_basis(web_app):
     with app.app_context():
         home = Facility.query.filter_by(organization_id=ids["customer"]).one()
         home_id = home.id
-        july = FacilityTarget.query.filter_by(facility_id=home_id, quarter_start=date(2026, 7, 1)).one()
+        july = FacilityTarget.query.filter_by(
+            facility_id=home_id, quarter_start=date(2026, 7, 1)
+        ).one()
         historical = (july.ancc_target, july.rn_target, july.source)
-    body = {"ancc_target": "225", "rn_target": "46", "target_quarter": "2026-10-01",
-            "target_source": "Corrected Q2 target notice"}
+    body = {
+        "ancc_target": "225",
+        "rn_target": "46",
+        "target_quarter": "2026-10-01",
+        "target_source": "Corrected Q2 target notice",
+    }
     assert client.post("/api/facility/targets", data=body).status_code == 400
-    assert client.post("/api/facility/targets", data={**body, "target_correction": "Replacement notice received"}).status_code == 200
+    assert (
+        client.post(
+            "/api/facility/targets",
+            data={**body, "target_correction": "Replacement notice received"},
+        ).status_code
+        == 200
+    )
     with app.app_context():
-        july = FacilityTarget.query.filter_by(facility_id=home_id, quarter_start=date(2026, 7, 1)).one()
+        july = FacilityTarget.query.filter_by(
+            facility_id=home_id, quarter_start=date(2026, 7, 1)
+        ).one()
         assert (july.ancc_target, july.rn_target, july.source) == historical
-        october = FacilityTarget.query.filter_by(facility_id=home_id, quarter_start=date(2026, 10, 1)).one()
+        october = FacilityTarget.query.filter_by(
+            facility_id=home_id, quarter_start=date(2026, 10, 1)
+        ).one()
         assert (october.ancc_target, october.rn_target) == (225, 46)
         assert october.approved_by_user_id == ids["admin"]
 
@@ -342,13 +490,36 @@ def test_source_trace_and_evidence_decisions_are_scoped_and_reversible(web_app):
     app, ids = web_app
     with app.app_context():
         home = Facility.query.filter_by(organization_id=ids["customer"]).one()
-        member = Staff(facility_id=home.id, staff_id="P1", name="Care Worker", role="PCW", eligibility_status="approved")
-        receipt = ImportReceipt(facility_id=home.id, organization_id=ids["customer"], evidence_type="unverified", shifts_imported=1)
+        member = Staff(
+            facility_id=home.id,
+            staff_id="P1",
+            name="Care Worker",
+            role="PCW",
+            eligibility_status="approved",
+        )
+        receipt = ImportReceipt(
+            facility_id=home.id,
+            organization_id=ids["customer"],
+            evidence_type="unverified",
+            shifts_imported=1,
+        )
         db.session.add_all([member, receipt])
         db.session.flush()
         receipt_id = receipt.id
-        db.session.add(Shift(facility_id=home.id, staff_id=member.id, date=date(2026, 8, 1), start_time=time(8), end_time=time(16),
-                             evidence_type="unverified", import_receipt_id=receipt.id, source_file="source.csv", source_sheet="Worked", source_row=7))
+        db.session.add(
+            Shift(
+                facility_id=home.id,
+                staff_id=member.id,
+                date=date(2026, 8, 1),
+                start_time=time(8),
+                end_time=time(16),
+                evidence_type="unverified",
+                import_receipt_id=receipt.id,
+                source_file="source.csv",
+                source_sheet="Worked",
+                source_row=7,
+            )
+        )
         db.session.commit()
     client = app.test_client()
     sign_in_as(client, ids["admin"])
@@ -358,22 +529,115 @@ def test_source_trace_and_evidence_decisions_are_scoped_and_reversible(web_app):
     assert row["shift"]["source_row"] == 7
     assert row["minutes"] == 480
     assert row["counted"] is False
-    assert client.post(f"/api/audit/receipt/{receipt_id}/evidence", data={"evidence_type": "worked"}).status_code == 400
+    assert (
+        client.post(
+            f"/api/audit/receipt/{receipt_id}/evidence",
+            data={"evidence_type": "worked"},
+        ).status_code
+        == 400
+    )
     for evidence in ("worked", "unverified"):
-        assert client.post(f"/api/audit/receipt/{receipt_id}/evidence", data={"evidence_type": evidence, "reason": "Source verified against approved attendance export"}).status_code == 200
+        assert (
+            client.post(
+                f"/api/audit/receipt/{receipt_id}/evidence",
+                data={
+                    "evidence_type": evidence,
+                    "reason": "Source verified against approved attendance export",
+                },
+            ).status_code
+            == 200
+        )
         with app.app_context():
-            assert Shift.query.filter_by(import_receipt_id=receipt_id).one().evidence_type == evidence
+            assert (
+                Shift.query.filter_by(import_receipt_id=receipt_id).one().evidence_type
+                == evidence
+            )
     decisions = client.get("/api/audit").json["data"]["decisions"]
     assert any(row["action"] == "evidence_classified" for row in decisions)
     sign_in_as(client, ids["outsider"])
-    assert client.post(f"/api/audit/receipt/{receipt_id}/evidence", data={"evidence_type": "worked", "reason": "Not owned"}).status_code == 404
-    assert client.get("/api/audit/records?start=2026-08-01&end=2026-08-01").json["data"]["total"] == 0
+    assert (
+        client.post(
+            f"/api/audit/receipt/{receipt_id}/evidence",
+            data={"evidence_type": "worked", "reason": "Not owned"},
+        ).status_code
+        == 404
+    )
+    assert (
+        client.get("/api/audit/records?start=2026-08-01&end=2026-08-01").json["data"][
+            "total"
+        ]
+        == 0
+    )
 
 
-@pytest.mark.parametrize("query", ["start=bad", "start=2026-08-02&end=2026-08-01", "start=2020-01-01&end=2026-08-01"])
+@pytest.mark.parametrize(
+    "query",
+    ["start=bad", "start=2026-08-02&end=2026-08-01", "start=2020-01-01&end=2026-08-01"],
+)
 def test_invalid_reporting_ranges_are_rejected_visibly(web_app, query):
     app, ids = web_app
     client = app.test_client()
     sign_in_as(client, ids["admin"])
-    for route in ("/api/export/daily.csv", "/api/export/summary.xlsx", "/api/audit/records"):
+    for route in (
+        "/api/export/daily.csv",
+        "/api/export/summary.xlsx",
+        "/api/audit/records",
+    ):
         assert client.get(f"{route}?{query}").status_code == 400
+
+
+def test_bulk_eligibility_is_atomic_and_requires_effective_approval_dates(web_app):
+    app, ids = web_app
+    with app.app_context():
+        home = Facility.query.filter_by(organization_id=ids["customer"]).one()
+        members = [
+            Staff(
+                facility_id=home.id,
+                staff_id="P1",
+                name="Care Worker",
+                role="PCW",
+                source_role="Personal Care Worker",
+                eligibility_status="pending",
+            ),
+            Staff(
+                facility_id=home.id,
+                staff_id="N1",
+                name="Unverified Nurse",
+                role="RN",
+                source_role="Registered Nurse",
+                eligibility_status="pending",
+            ),
+        ]
+        db.session.add_all(members)
+        db.session.commit()
+        selected = [member.id for member in members]
+    client = app.test_client()
+    sign_in_as(client, ids["admin"])
+    body = {
+        "staff_ids": selected,
+        "decision": "approved",
+        "reason": "Verified eligible source roles and effective assignment",
+    }
+    assert client.post("/api/eligibility/bulk", data=body).status_code == 400
+    assert (
+        client.post(
+            "/api/eligibility/bulk", data={**body, "eligible_from": "2026-08-01"}
+        ).status_code
+        == 400
+    )
+    with app.app_context():
+        assert {
+            member.eligibility_status
+            for member in Staff.query.filter(Staff.id.in_(selected))
+        } == {"pending"}
+    assert (
+        client.post(
+            "/api/eligibility/bulk", data={**body, "decision": "excluded"}
+        ).status_code
+        == 200
+    )
+    with app.app_context():
+        assert {
+            member.eligibility_status
+            for member in Staff.query.filter(Staff.id.in_(selected))
+        } == {"excluded"}

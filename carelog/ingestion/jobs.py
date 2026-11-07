@@ -60,14 +60,31 @@ def _touch(job: ImportJob, **fields):
     db.session.commit()
 
 
-def start_job(app, facility_id: int, payloads: list[tuple[str, bytes]], storage,
-              organization_id: int | None = None, user_id: int | None = None) -> str:
+def start_job(
+    app,
+    facility_id: int,
+    payloads: list[tuple[str, bytes]],
+    storage,
+    organization_id: int | None = None,
+    user_id: int | None = None,
+) -> str:
     """Persist the uploads as audit evidence, record the job, dispatch it."""
     names = [os.path.basename(name) for name, _ in payloads]
-    if not names or any(not name or any(ord(c) < 32 for c in name) or "\\" in name for name in names) or len(set(names)) != len(names):
-        raise FileReadError("Each uploaded file needs a distinct filename; no files were imported.")
+    if (
+        not names
+        or any(
+            not name or any(ord(c) < 32 for c in name) or "\\" in name for name in names
+        )
+        or len(set(names)) != len(names)
+    ):
+        raise FileReadError(
+            "Each uploaded file needs a distinct filename; no files were imported."
+        )
+    payloads = [(name, data) for name, (_, data) in zip(names, payloads)]
     if worker_mode() == "invoke" and not os.environ.get("WORKER_SECRET"):
-        raise FileReadError("The import worker is not configured. Contact platform support.")
+        raise FileReadError(
+            "The import worker is not configured. Contact platform support."
+        )
     job_id = uuid.uuid4().hex[:12]
     prefix = f"imports/job-{job_id}"
     job = ImportJob(
@@ -89,7 +106,10 @@ def start_job(app, facility_id: int, payloads: list[tuple[str, bytes]], storage,
         for fname, data in payloads:
             storage.put(f"{prefix}/{os.path.basename(fname)}", data)
     except Exception:
-        _fail(job_id, "Some source files could not be retained. No care data was imported. Retry the upload.")
+        _fail(
+            job_id,
+            "Some source files could not be retained. No care data was imported. Retry the upload.",
+        )
         raise
     _touch(job, status="queued")
     dispatch_job(app, job_id)
@@ -101,7 +121,6 @@ def dispatch_job(app, job_id):
         _dispatch_http(job_id)
     else:
         threading.Thread(target=_run_in_app, args=(app, job_id), daemon=True).start()
-
 
 
 def _dispatch_http(job_id: str):
@@ -125,16 +144,24 @@ def _dispatch_http(job_id: str):
             timeout=httpx.Timeout(5.0, connect=5.0),
         )
         if response.status_code >= 400:
-            _fail(job_id, "The import worker could not be started. Contact platform support.")
+            _fail(
+                job_id,
+                "The import worker could not be started. Contact platform support.",
+            )
     except httpx.ReadTimeout:
         # A read timeout can mean the worker is still processing the request.
         pass
     except httpx.HTTPError:
-        _fail(job_id, "The import worker could not be reached. Your files are retained. Retry from import history.")
+        _fail(
+            job_id,
+            "The import worker could not be reached. Your files are retained. Retry from import history.",
+        )
 
 
 def _self_url() -> str:
-    host = os.environ.get("VERCEL_URL") or os.environ.get("VERCEL_PROJECT_PRODUCTION_URL")
+    host = os.environ.get("VERCEL_URL") or os.environ.get(
+        "VERCEL_PROJECT_PRODUCTION_URL"
+    )
     if host:
         return f"https://{host}"
     return os.environ.get("APP_BASE_URL", "http://127.0.0.1:8080")
@@ -149,28 +176,39 @@ def run_job(job_id: str):
     """Execute a queued job. Safe to call twice: the status check makes the
     second caller a no-op, so a retried dispatch cannot double-import."""
     if not _RUN_LOCK.acquire(timeout=60):
-        db.session.execute(update(ImportJob).where(
-            ImportJob.id == job_id, ImportJob.status == "queued"
-        ).values(status="failed", error="Another import is still running. Retry this upload shortly.",
-                 updated_at=datetime.utcnow()))
+        db.session.execute(
+            update(ImportJob)
+            .where(ImportJob.id == job_id, ImportJob.status == "queued")
+            .values(
+                status="failed",
+                error="Another import is still running. Retry this upload shortly.",
+                updated_at=datetime.utcnow(),
+            )
+        )
         db.session.commit()
         return
     try:
         # Compare-and-set prevents a duplicate serverless invocation claiming
         # the same job. Progress uses another session, never the care transaction.
-        claimed = db.session.execute(update(ImportJob).where(
-            ImportJob.id == job_id, ImportJob.status == "queued"
-        ).values(status="running", updated_at=datetime.utcnow()))
+        claimed = db.session.execute(
+            update(ImportJob)
+            .where(ImportJob.id == job_id, ImportJob.status == "queued")
+            .values(status="running", updated_at=datetime.utcnow())
+        )
         db.session.commit()
         if claimed.rowcount != 1:
             return
         job = db.session.get(ImportJob, job_id)
         # Serialize replacement imports for one facility across processes.
-        db.session.execute(select(Facility).where(Facility.id == job.facility_id).with_for_update())
+        db.session.execute(
+            select(Facility).where(Facility.id == job.facility_id).with_for_update()
+        )
         baseline = state_fingerprint(job.facility_id)
         review = json.loads(job.review_json) if job.review_json else None
         if job.approved_at and (not review or review["state_fingerprint"] != baseline):
-            raise FileReadError("Facility evidence changed since this review. Nothing was imported. Retry to review the current effect.")
+            raise FileReadError(
+                "Facility evidence changed since this review. Nothing was imported. Retry to review the current effect."
+            )
         prepared = _process(job, review=review if job.approved_at else None)
         if not job.approved_at:
             files = json.loads(job.files_json)
@@ -179,11 +217,19 @@ def run_job(job_id: str):
             db.session.rollback()
             job = db.session.get(ImportJob, job_id)
             prepared["state_fingerprint"] = baseline
-            _touch(job, status="review", review_json=json.dumps(prepared), files_json=json.dumps(files), receipt_id=None)
+            _touch(
+                job,
+                status="review",
+                review_json=json.dumps(prepared),
+                files_json=json.dumps(files),
+                receipt_id=None,
+            )
         else:
             # A recovery action may have superseded a stalled worker. Lock and
             # re-check its state before committing any care data.
-            status = db.session.execute(select(ImportJob.status).where(ImportJob.id == job_id).with_for_update()).scalar_one()
+            status = db.session.execute(
+                select(ImportJob.status).where(ImportJob.id == job_id).with_for_update()
+            ).scalar_one()
             if status != "running":
                 db.session.rollback()
                 return
@@ -192,7 +238,9 @@ def run_job(job_id: str):
         # Provider users need an actionable result, not platform vendor names,
         # credentials or model diagnostics. The detailed cause remains in the
         # server log for the platform owner.
-        current_app.logger.warning("Import mapping service failed for %s: %s", job_id, e)
+        current_app.logger.warning(
+            "Import mapping service failed for %s: %s", job_id, e
+        )
         db.session.rollback()
         _fail(
             job_id,
@@ -226,7 +274,9 @@ def _process(job: ImportJob, review=None):
     # Receipt is created first so every shift row can carry its id (lineage).
     from carelog.models import User
 
-    actor = db.session.get(User, job.started_by_user_id) if job.started_by_user_id else None
+    actor = (
+        db.session.get(User, job.started_by_user_id) if job.started_by_user_id else None
+    )
     receipt = ImportReceipt(
         organization_id=job.organization_id,
         facility_id=facility.id,
@@ -241,14 +291,21 @@ def _process(job: ImportJob, review=None):
     outcomes = []
     reviewed = {o["filename"]: o["spec"] for o in review["outcomes"]} if review else {}
     for state in files:
+
         def progress(stage, state=state):
             state["stage"] = stage
             _progress(job.id, files)
 
         progress("reading file")
-        data = storage.get(f"{job.storage_prefix}/{os.path.basename(state['filename'])}")
+        data = storage.get(
+            f"{job.storage_prefix}/{os.path.basename(state['filename'])}"
+        )
         outcome = ingest_file(
-            facility, state["filename"], data, receipt=receipt, progress=progress,
+            facility,
+            state["filename"],
+            data,
+            receipt=receipt,
+            progress=progress,
             reviewed_spec=reviewed.get(state["filename"]),
         )
         outcomes.append(outcome)
@@ -258,7 +315,11 @@ def _process(job: ImportJob, review=None):
             f"{outcome.residents_imported} residents, "
             f"{outcome.resident_days_imported} resident days, "
             f"{outcome.care_episodes_imported} care episodes"
-            + (f", {len(outcome.row_errors)} rows skipped" if outcome.row_errors else "")
+            + (
+                f", {len(outcome.row_errors)} rows skipped"
+                if outcome.row_errors
+                else ""
+            )
         )
         _progress(job.id, files)
 
@@ -269,17 +330,24 @@ def _process(job: ImportJob, review=None):
     receipt.care_episodes_imported = sum(o.care_episodes_imported for o in outcomes)
     receipt.shifts_skipped = sum(len(o.row_errors) for o in outcomes)
     shift_types = {
-        r.evidence_type for o in outcomes for r in o.results
+        r.evidence_type
+        for o in outcomes
+        for r in o.results
         if r.kind == "shifts" and r.evidence_type
     }
     receipt.evidence_type = (
-        next(iter(shift_types)) if len(shift_types) == 1
+        next(iter(shift_types))
+        if len(shift_types) == 1
         else ("mixed" if shift_types else "not applicable")
     )
     job.evidence_type = receipt.evidence_type
     receipt.original_evidence_type = receipt.evidence_type
-    receipt.first_shift_date = min((o.first_shift_date for o in outcomes if o.first_shift_date), default=None)
-    receipt.last_shift_date = max((o.last_shift_date for o in outcomes if o.last_shift_date), default=None)
+    receipt.first_shift_date = min(
+        (o.first_shift_date for o in outcomes if o.first_shift_date), default=None
+    )
+    receipt.last_shift_date = max(
+        (o.last_shift_date for o in outcomes if o.last_shift_date), default=None
+    )
     receipt.source_path = job.storage_prefix
     receipt.mapping_ids = ",".join(str(o.mapping_id) for o in outcomes if o.mapping_id)
     receipt.summary_json = json.dumps(_summarize(outcomes))
@@ -287,23 +355,33 @@ def _process(job: ImportJob, review=None):
     job.files_json = json.dumps(files)
     # run_job either rolls this entire transaction back for review, or commits
     # receipt, care rows, mapping changes and done status together.
-    return {"outcomes": _summarize(outcomes), "impact": {
-        "shifts_imported": receipt.shifts_imported,
-        "shifts_replaced": sum(o.shifts_replaced for o in outcomes),
-        "residents_imported": receipt.residents_imported,
-        "resident_days_imported": receipt.resident_days_imported,
-        "care_episodes_imported": receipt.care_episodes_imported,
-        "care_episodes_replaced": sum(o.care_episodes_replaced for o in outcomes),
-        "first_date": receipt.first_shift_date.isoformat() if receipt.first_shift_date else None,
-        "last_date": receipt.last_shift_date.isoformat() if receipt.last_shift_date else None,
-    }}
+    return {
+        "outcomes": _summarize(outcomes),
+        "impact": {
+            "shifts_imported": receipt.shifts_imported,
+            "shifts_replaced": sum(o.shifts_replaced for o in outcomes),
+            "residents_imported": receipt.residents_imported,
+            "resident_days_imported": receipt.resident_days_imported,
+            "care_episodes_imported": receipt.care_episodes_imported,
+            "care_episodes_replaced": sum(o.care_episodes_replaced for o in outcomes),
+            "first_date": receipt.first_shift_date.isoformat()
+            if receipt.first_shift_date
+            else None,
+            "last_date": receipt.last_shift_date.isoformat()
+            if receipt.last_shift_date
+            else None,
+        },
+    }
 
 
 def _progress(job_id, files):
     # A separate connection keeps status visible without committing care rows.
     with Session(db.engine) as progress_session:
-        progress_session.execute(update(ImportJob).where(ImportJob.id == job_id).values(
-            files_json=json.dumps(files), updated_at=datetime.utcnow()))
+        progress_session.execute(
+            update(ImportJob)
+            .where(ImportJob.id == job_id)
+            .values(files_json=json.dumps(files), updated_at=datetime.utcnow())
+        )
         progress_session.commit()
 
 

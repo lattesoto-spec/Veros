@@ -17,41 +17,81 @@ def active_residents_on(facility_id: int, day: date) -> int:
     ledger = ResidentDay.query.filter_by(facility_id=facility_id, date=day)
     if ledger.first() is not None:
         return sum(1 for row in ledger.all() if resident_day_is_occupied(row))
-    return db.session.query(Resident).filter(
-        Resident.facility_id == facility_id,
-        Resident.admitted_date <= day,
-        or_(Resident.discharged_date == None, Resident.discharged_date > day),  # noqa: E711
-    ).count()
+    return (
+        db.session.query(Resident)
+        .filter(
+            Resident.facility_id == facility_id,
+            Resident.admitted_date <= day,
+            or_(Resident.discharged_date == None, Resident.discharged_date > day),  # noqa: E711
+        )
+        .count()
+    )
 
 
 def resident_day_is_occupied(row: ResidentDay) -> bool:
     """Apply the QFR occupied-bed-day exclusions to one ledger row."""
     if not row.occupied:
         return False
-    service = (row.service_type or "").strip().lower().replace("-", "_").replace(" ", "_")
+    service = (
+        (row.service_type or "").strip().lower().replace("-", "_").replace(" ", "_")
+    )
     if resident_day_problem(row):
         return False
     if service in {
-        "private", "private_resident", "transition_care", "transition_care_program",
-        "tcp", "other_program", "non_an_acc",
-        "private_/_non_subsidised", "transition_care_programme",
+        "private",
+        "private_resident",
+        "transition_care",
+        "transition_care_program",
+        "tcp",
+        "other_program",
+        "non_an_acc",
+        "private_/_non_subsidised",
+        "transition_care_programme",
     }:
         return False
     leave = (row.leave_type or "").strip().lower().replace("-", "_").replace(" ", "_")
-    if leave in {"hospital", "hospital_leave", "hospital_transition"} and \
-            row.leave_day_number is not None and row.leave_day_number >= 29:
+    if (
+        leave in {"hospital", "hospital_leave", "hospital_transition"}
+        and row.leave_day_number is not None
+        and row.leave_day_number >= 29
+    ):
         return False
     return True
 
 
 def resident_day_problem(row) -> str | None:
-    service = (row.service_type or "").strip().lower().replace("-", "_").replace(" ", "_")
-    if service not in {"permanent", "respite", "an_acc", "an_acc_permanent", "an_acc_respite", "residential", "private", "private_resident",
-                       "transition_care", "transition_care_program", "transition_care_programme", "private_/_non_subsidised",
-                       "tcp", "other_program", "non_an_acc"}:
+    service = (
+        (row.service_type or "").strip().lower().replace("-", "_").replace(" ", "_")
+    )
+    if service not in {
+        "permanent",
+        "respite",
+        "an_acc",
+        "an_acc_permanent",
+        "an_acc_respite",
+        "residential",
+        "private",
+        "private_resident",
+        "transition_care",
+        "transition_care_program",
+        "transition_care_programme",
+        "private_/_non_subsidised",
+        "tcp",
+        "other_program",
+        "non_an_acc",
+    }:
         return "missing or unrecognised resident service type"
     leave = (row.leave_type or "").strip().lower().replace("-", "_").replace(" ", "_")
-    if leave not in {"", "none", "no", "hospital", "hospital_leave", "hospital_transition", "social", "social_leave"}:
+    if leave not in {
+        "",
+        "none",
+        "no",
+        "hospital",
+        "hospital_leave",
+        "hospital_transition",
+        "social",
+        "social_leave",
+    }:
         return "unrecognised leave type"
     if leave in {"hospital", "hospital_leave", "hospital_transition"} and (
         row.leave_day_number is None or row.leave_day_number < 1
@@ -62,8 +102,11 @@ def resident_day_problem(row) -> str | None:
 
 def denominator_issues(facility_id, start, end):
     """Reconcile complete census identities, not merely distinct dates."""
-    rows = ResidentDay.query.filter(ResidentDay.facility_id == facility_id,
-                                   ResidentDay.date >= start - timedelta(days=1), ResidentDay.date <= end).all()
+    rows = ResidentDay.query.filter(
+        ResidentDay.facility_id == facility_id,
+        ResidentDay.date >= start - timedelta(days=1),
+        ResidentDay.date <= end,
+    ).all()
     residents = Resident.query.filter_by(facility_id=facility_id).all()
     by_day = {}
     for row in rows:
@@ -76,26 +119,36 @@ def denominator_issues(facility_id, start, end):
             issues.append(f"{day}: no verified resident-day census")
         else:
             ids = {row.resident_id for row in ledger}
-            expected = {r.resident_id for r in residents if r.admitted_date and r.admitted_date <= day
-                        and (r.discharged_date is None or r.discharged_date > day)}
+            expected = {
+                r.resident_id
+                for r in residents
+                if r.admitted_date
+                and r.admitted_date <= day
+                and (r.discharged_date is None or r.discharged_date > day)
+            }
             missing = expected - ids
             if missing:
                 issues.append(f"{day}: census omits {len(missing)} active resident(s)")
             previous = {r.resident_id for r in by_day.get(day - timedelta(days=1), [])}
-            discharged = {r.resident_id for r in residents if r.discharged_date and r.discharged_date <= day}
+            discharged = {
+                r.resident_id
+                for r in residents
+                if r.discharged_date and r.discharged_date <= day
+            }
             if previous - ids - discharged and (residents or len(ids) < len(previous)):
-                issues.append(f"{day}: census identities dropped without recorded discharge")
+                issues.append(
+                    f"{day}: census identities dropped without recorded discharge"
+                )
             invalid = sum(bool(resident_day_problem(row)) for row in ledger)
             if invalid:
-                issues.append(f"{day}: {invalid} resident-day row(s) have unverified service or leave evidence")
+                issues.append(
+                    f"{day}: {invalid} resident-day row(s) have unverified service or leave evidence"
+                )
         day += timedelta(days=1)
     return issues
 
 
-def daily_stats(facility_id: int, day: date, ancc_target: float, rn_target: float) -> dict:
-    from carelog.domain.compliance import day_breakdown
-
-    breakdown = day_breakdown(facility_id, day)
+def _stats_from_breakdown(breakdown, ancc_target, rn_target):
     residents = breakdown["residents"]
     total_minutes = breakdown["total_minutes"]
     rn_minutes = breakdown["rn_minutes"]
@@ -103,7 +156,7 @@ def daily_stats(facility_id: int, day: date, ancc_target: float, rn_target: floa
     rn_per_res = breakdown["rn_per_resident"]
 
     return {
-        "date": day,
+        "date": breakdown["date"],
         "active_residents": residents,
         "total_minutes": total_minutes,
         "rn_minutes": rn_minutes,
@@ -112,6 +165,16 @@ def daily_stats(facility_id: int, day: date, ancc_target: float, rn_target: floa
         "status": status_for(per_res, ancc_target),
         "rn_status": status_for(rn_per_res, rn_target),
     }
+
+
+def daily_stats(
+    facility_id: int, day: date, ancc_target: float, rn_target: float
+) -> dict:
+    from carelog.domain.compliance import day_breakdown
+
+    return _stats_from_breakdown(
+        day_breakdown(facility_id, day), ancc_target, rn_target
+    )
 
 
 def status_for(value: float, target: float) -> str:
@@ -125,13 +188,15 @@ def status_for(value: float, target: float) -> str:
     return "behind"
 
 
-def range_stats(facility_id: int, start: date, end: date, ancc_target: float, rn_target: float) -> list[dict]:
-    days = []
-    d = start
-    while d <= end:
-        days.append(daily_stats(facility_id, d, ancc_target, rn_target))
-        d += timedelta(days=1)
-    return days
+def range_stats(
+    facility_id: int, start: date, end: date, ancc_target: float, rn_target: float
+) -> list[dict]:
+    from carelog.domain.compliance import range_breakdown
+
+    return [
+        _stats_from_breakdown(row, ancc_target, rn_target)
+        for row in range_breakdown(facility_id, start, end)
+    ]
 
 
 def average(rows: list[dict]) -> dict:

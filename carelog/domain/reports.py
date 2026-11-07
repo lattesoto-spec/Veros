@@ -14,15 +14,19 @@ Australian financial-year quarters:
   Q3: 1 Jan – 31 Mar
   Q4: 1 Apr – 30 Jun
 """
+
 from calendar import monthrange
 from datetime import date, timedelta
 from io import BytesIO
+from xml.sax.saxutils import escape
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
-from reportlab.platypus import (    Paragraph,
+from reportlab.platypus import (
+    Paragraph,
+    KeepTogether,
     SimpleDocTemplate,
     Spacer,
     Table,
@@ -43,6 +47,7 @@ ROLES = [
 # ---------------------------------------------------------------------------
 # Quarter helpers
 # ---------------------------------------------------------------------------
+
 
 def financial_quarter_bounds(year: int, quarter: int) -> tuple[date, date]:
     """Return (start, end) calendar dates for an AU FY quarter.
@@ -87,7 +92,7 @@ def available_quarters(facility_id: int) -> list[dict]:
             "end": end,
             "label": _fy_label(year, quarter),
         }
-    return sorted(out.values(), key=lambda q: (q["start"]), reverse=True)
+    return sorted(out.values(), key=lambda q: q["start"], reverse=True)
 
 
 def _quarter_of(d: date) -> tuple[int, int]:
@@ -105,6 +110,7 @@ def _quarter_of(d: date) -> tuple[int, int]:
 # Metric computation
 # ---------------------------------------------------------------------------
 
+
 def compute_quarter_stats(facility_id: int, year: int, quarter: int) -> dict:
     start, end = financial_quarter_bounds(year, quarter)
     from carelog.domain.compliance import (
@@ -117,12 +123,16 @@ def compute_quarter_stats(facility_id: int, year: int, quarter: int) -> dict:
     )
 
     facility = db.session.get(Facility, facility_id)
-    latest_worked = db.session.query(func.max(Shift.date)).filter(
-        Shift.facility_id == facility_id,
-        Shift.evidence_type == "worked",
-        Shift.date >= start,
-        Shift.date <= end,
-    ).scalar()
+    latest_worked = (
+        db.session.query(func.max(Shift.date))
+        .filter(
+            Shift.facility_id == facility_id,
+            Shift.evidence_type == "worked",
+            Shift.date >= start,
+            Shift.date <= end,
+        )
+        .scalar()
+    )
     # A review draft for an open quarter must not divide worked minutes to
     # date by future occupied-bed days. Calculate the figures through the last
     # actual-worked date, while the readiness checks below continue to assess
@@ -133,9 +143,13 @@ def compute_quarter_stats(facility_id: int, year: int, quarter: int) -> dict:
     evidence = evidence_summary(facility_id, start, end)
 
     labour = {
-        role: {"employee_minutes": 0, "agency_minutes": 0,
-               "employee_cost": 0.0, "agency_cost": 0.0,
-               "missing_cost_rows": 0}
+        role: {
+            "employee_minutes": 0,
+            "agency_minutes": 0,
+            "employee_cost": 0.0,
+            "agency_cost": 0.0,
+            "missing_cost_rows": 0,
+        }
         for role, _ in ROLES
     }
     shifts = (
@@ -164,7 +178,9 @@ def compute_quarter_stats(facility_id: int, year: int, quarter: int) -> dict:
             labour[role][f"{stream}_cost"] += float(s.labour_cost)
 
     worked_minutes = {
-        "RN": totals["rn_minutes"], "EN": totals["en_minutes"], "PCA": totals["pca_minutes"]
+        "RN": totals["rn_minutes"],
+        "EN": totals["en_minutes"],
+        "PCA": totals["pca_minutes"],
     }
     obd = totals["bed_days"]
     # Monthly 24/7 RN coverage %.
@@ -174,7 +190,8 @@ def compute_quarter_stats(facility_id: int, year: int, quarter: int) -> dict:
         month_last = min(end, date(y, m, monthrange(y, m)[1]))
         data_last = (
             min(month_last, latest_worked)
-            if latest_worked and latest_worked >= month_first else None
+            if latest_worked and latest_worked >= month_first
+            else None
         )
         covered = 0
         days_count = 0
@@ -185,17 +202,21 @@ def compute_quarter_stats(facility_id: int, year: int, quarter: int) -> dict:
             d += timedelta(days=1)
         pct = covered / (days_count * 1440) * 100 if days_count else None
         basis = (
-            "Complete month" if data_last == month_last
-            else f"Through {data_last.strftime('%d %b')}" if data_last
+            "Complete month"
+            if data_last == month_last
+            else f"Through {data_last.strftime('%d %b')}"
+            if data_last
             else "No actual-worked data"
         )
-        monthly_rn.append({
-            "year": y,
-            "month": m,
-            "label": date(y, m, 1).strftime("%B %Y"),
-            "coverage_pct": round(pct, 2) if pct is not None else None,
-            "basis": basis,
-        })
+        monthly_rn.append(
+            {
+                "year": y,
+                "month": m,
+                "label": date(y, m, 1).strftime("%B %Y"),
+                "coverage_pct": round(pct, 2) if pct is not None else None,
+                "basis": basis,
+            }
+        )
 
     # Care minutes per occupied bed day = worked_hours / OBD * 60 = worked_minutes / OBD.
     per_obd = {}
@@ -215,7 +236,9 @@ def compute_quarter_stats(facility_id: int, year: int, quarter: int) -> dict:
     if not worked_minutes or sum(worked_minutes.values()) == 0:
         blockers.append("No eligible actual-worked direct-care minutes are available.")
     if totals["excluded_minutes"]:
-        blockers.append(f"{totals['excluded_minutes']} worked minutes are withheld by eligibility checks.")
+        blockers.append(
+            f"{totals['excluded_minutes']} worked minutes are withheld by eligibility checks."
+        )
     if evidence["unverified_minutes"]:
         blockers.append(f"{evidence['unverified_minutes']} minutes remain unverified.")
     if not evidence["resident_day_ledger_complete"]:
@@ -230,7 +253,9 @@ def compute_quarter_stats(facility_id: int, year: int, quarter: int) -> dict:
         )
     missing_cost_rows = sum(x["missing_cost_rows"] for x in labour.values())
     if missing_cost_rows:
-        blockers.append(f"Labour cost is missing for {missing_cost_rows} eligible worked shift row(s).")
+        blockers.append(
+            f"Labour cost is missing for {missing_cost_rows} eligible worked shift row(s)."
+        )
     target_check = tests["target_reconciliation"]
     if not target_check["complete"]:
         blockers.append(
@@ -240,7 +265,7 @@ def compute_quarter_stats(facility_id: int, year: int, quarter: int) -> dict:
         )
     elif not target_check["matched"]:
         blockers.append(
-            f"Configured targets {facility.ancc_target}/{facility.rn_target} do not match the "
+            f"Configured targets {target_check['configured_care_target']}/{target_check['configured_rn_target']} do not match the "
             f"classification-derived values {target_check['derived_care_target']}/"
             f"{target_check['derived_rn_target']}."
         )
@@ -293,6 +318,7 @@ def _months_in_range(start: date, end: date) -> list[tuple[int, int]]:
 # PDF rendering
 # ---------------------------------------------------------------------------
 
+
 def build_quarterly_pdf(facility, year: int, quarter: int) -> bytes:
     stats = compute_quarter_stats(facility.id, year, quarter)
 
@@ -310,89 +336,139 @@ def build_quarterly_pdf(facility, year: int, quarter: int) -> bytes:
 
     styles = getSampleStyleSheet()
     h1 = ParagraphStyle("h1", parent=styles["Heading1"], fontSize=16, spaceAfter=4)
-    h2 = ParagraphStyle("h2", parent=styles["Heading2"], fontSize=11, spaceBefore=10, spaceAfter=4)
+    h2 = ParagraphStyle(
+        "h2", parent=styles["Heading2"], fontSize=11, spaceBefore=10, spaceAfter=4
+    )
     body = ParagraphStyle("body", parent=styles["BodyText"], fontSize=9, leading=12)
     muted = ParagraphStyle("muted", parent=body, textColor=colors.HexColor("#666"))
 
     story = []
     story.append(Paragraph("Care Minutes Performance Statement", h1))
-    story.append(Paragraph(
-        f"{facility.name} | {stats['label']} | "
-        f"{stats['start'].strftime('%d %b %Y')} - {stats['end'].strftime('%d %b %Y')}",
-        body,
-    ))
+    story.append(
+        Paragraph(
+            f"{escape(facility.name)} | {stats['label']} | "
+            f"{stats['start'].strftime('%d %b %Y')} - {stats['end'].strftime('%d %b %Y')}",
+            body,
+        )
+    )
     if stats["readiness"]["ready"]:
-        story.append(Paragraph(
-            "RECONCILED DRAFT - all automated evidence checks passed. Figures derive only from "
-            "eligible actual-worked direct-care rows and the occupied-bed-day ledger. Provider "
-            "review and any required independent assurance remain external approval steps.", muted))
+        story.append(
+            Paragraph(
+                "RECONCILED DRAFT - all automated evidence checks passed. Figures derive only from "
+                "eligible actual-worked direct-care rows and the occupied-bed-day ledger. Provider "
+                "review and any required independent assurance remain external approval steps.",
+                muted,
+            )
+        )
     else:
-        story.append(Paragraph(
-            "NOT READY FOR SUBMISSION - automated evidence checks found unresolved items. The "
-            "figures below remain a review draft until every blocker is resolved.",
-            ParagraphStyle("warning", parent=body, textColor=colors.HexColor("#a61b1b"),
-                           backColor=colors.HexColor("#fdeaea"), borderPadding=6),
-        ))
+        story.append(
+            Paragraph(
+                "NOT READY FOR SUBMISSION - automated evidence checks found unresolved items. The "
+                "figures below remain a review draft until every blocker is resolved.",
+                ParagraphStyle(
+                    "warning",
+                    parent=body,
+                    textColor=colors.HexColor("#a61b1b"),
+                    backColor=colors.HexColor("#fdeaea"),
+                    borderPadding=6,
+                ),
+            )
+        )
         for i, blocker in enumerate(stats["readiness"]["blockers"], 1):
             story.append(Paragraph(f"{i}. {blocker}", body))
     story.append(Spacer(1, 6))
 
     story.append(Paragraph("1. Labour worked hours - eligible direct care", h2))
     story.append(_labour_hours_table(stats))
-    story.append(Paragraph(
-        "Employee and agency hours derive from eligible actual-worked rows after unpaid breaks. "
-        "Rostered, unverified and delivered-care episode minutes are not added to these hours.",
-        muted,
-    ))
+    story.append(
+        Paragraph(
+            "Employee and agency hours derive from eligible actual-worked rows after unpaid breaks. "
+            "Rostered, unverified and delivered-care episode minutes are not added to these hours.",
+            muted,
+        )
+    )
 
     story.append(Paragraph("2. Labour costs - direct care", h2))
     story.append(_labour_costs_table(stats))
-    story.append(Paragraph(
-        "Costs are included only where the source row supplied an attributable direct-care labour "
-        "cost. Missing cost rows appear in the submission blockers above.",
-        muted,
-    ))
+    story.append(
+        Paragraph(
+            "Costs are included only where the source row supplied an attributable direct-care labour "
+            "cost. Missing cost rows appear in the submission blockers above.",
+            muted,
+        )
+    )
 
     story.append(Paragraph("3. 24/7 RN coverage - monthly", h2))
     story.append(_rn_coverage_table(stats))
-    story.append(Paragraph(
-        "Coverage = (minutes in month - RN-on-site gaps of 30 minutes or more) / minutes in "
-        "month. Computed from RN shift intervals merged across gaps shorter than 30 minutes.",
-        muted,
-    ))
+    story.append(
+        Paragraph(
+            "Coverage percentages use actual clocked RN intervals. Continuity disregards gaps shorter "
+            "than 30 minutes; exactly 30 continuous minutes is reportable, including across midnight.",
+            muted,
+        )
+    )
 
-    story.append(Paragraph("4. Occupied bed days used in this draft", h2))
-    story.append(_obd_table(stats))
-    story.append(Paragraph(
-        ("Occupied bed days come from a complete imported daily resident ledger."
-         if stats["evidence"]["resident_day_ledger_complete"] else
-         "The resident-day ledger is partial; uncovered dates use the admission/discharge "
-         "fallback. Complete the ledger before treating this statement as submission-ready."),
-        muted,
-    ))
+    story.append(
+        KeepTogether(
+            [
+                Paragraph("4. Occupied bed days used in this draft", h2),
+                _obd_table(stats),
+                Paragraph(
+                    (
+                        "Occupied bed days come from a complete imported daily resident ledger."
+                        if stats["evidence"]["resident_day_ledger_complete"]
+                        else "The resident-day ledger is partial; uncovered dates use the admission/discharge "
+                        "fallback. Complete the ledger before treating this statement as submission-ready."
+                    ),
+                    muted,
+                ),
+            ]
+        )
+    )
 
     through = (
         f" through {stats['calculation_end'].strftime('%d %b %Y')}"
-        if stats["calculation_is_partial"] else ""
+        if stats["calculation_is_partial"]
+        else ""
     )
-    story.append(Paragraph(
-        f"5. Direct care minutes (worked) per occupied bed day{through}", h2
-    ))
-    story.append(_care_minutes_per_obd_table(stats, facility))
-    story.append(Paragraph(
-        "Per-OBD minutes = eligible actual-worked minutes / occupied bed days. The three tests "
-        "below are assessed independently and all must pass.",
-        muted,
-    ))
+    story.append(
+        KeepTogether(
+            [
+                Paragraph(
+                    f"5. Direct care minutes (worked) per occupied bed day{through}", h2
+                ),
+                _care_minutes_per_obd_table(stats, facility),
+                Paragraph(
+                    "Per-OBD minutes = eligible actual-worked minutes / occupied bed days. The three tests "
+                    "below are assessed independently and all must pass. Overnight worked minutes are attributed "
+                    "to the shift start date; RN continuity uses the actual calendar interval.",
+                    muted,
+                ),
+            ]
+        )
+    )
 
     test_scope = "Quarter-to-date" if stats["calculation_is_partial"] else "Quarterly"
     story.append(Paragraph(f"6. {test_scope} compliance tests", h2))
+    target = stats["tests"]["target_reconciliation"]
+    story.append(
+        Paragraph(
+            f"Target quarter: {target['target_quarter'] or 'not approved'}. "
+            f"Source: {escape(target['target_source'] or 'No approved quarterly target evidence')}. "
+            "Verdicts compare exact minutes before display rounding.",
+            muted,
+        )
+    )
     story.append(_compliance_tests_table(stats))
     story.append(Paragraph("7. Evidence reconciliation", h2))
     story.append(_evidence_table(stats))
-    story.append(Paragraph(
-        "Delivered-care minutes are reconciliation evidence only. They are never added to staffing "
-        "worked hours because concurrent and overlapping episodes can double count time.", muted))
+    story.append(
+        Paragraph(
+            "Delivered-care minutes are reconciliation evidence only. They are never added to staffing "
+            "worked hours because concurrent and overlapping episodes can double count time.",
+            muted,
+        )
+    )
 
     story.append(Paragraph("Variance summary", h2))
     story.append(_variance_paragraph(stats, facility, body))
@@ -401,7 +477,9 @@ def build_quarterly_pdf(facility, year: int, quarter: int) -> bytes:
         canvas.saveState()
         canvas.setFont("Helvetica", 8)
         canvas.setFillColor(colors.HexColor("#666666"))
-        canvas.drawString(18 * mm, 9 * mm, f"CareMin calculation {stats['tests']['calc_version']}")
+        canvas.drawString(
+            18 * mm, 9 * mm, f"CareMin calculation {stats['tests']['calc_version']}"
+        )
         canvas.drawRightString(A4[0] - 18 * mm, 9 * mm, f"Page {document.page}")
         canvas.restoreState()
 
@@ -417,19 +495,21 @@ _ROW_ALT = colors.HexColor("#f5f5f5")
 
 
 def _base_table_style(header_rows: int = 1) -> TableStyle:
-    return TableStyle([
-        ("BACKGROUND", (0, 0), (-1, header_rows - 1), _HEADER_BG),
-        ("TEXTCOLOR", (0, 0), (-1, header_rows - 1), _HEADER_FG),
-        ("FONTNAME", (0, 0), (-1, header_rows - 1), "Helvetica-Bold"),
-        ("FONTSIZE", (0, 0), (-1, -1), 9),
-        ("ALIGN", (1, 0), (-1, -1), "RIGHT"),
-        ("ALIGN", (0, 0), (0, -1), "LEFT"),
-        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-        ("TOPPADDING", (0, 0), (-1, -1), 5),
-        ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#cccccc")),
-        ("ROWBACKGROUNDS", (0, header_rows), (-1, -1), [colors.white, _ROW_ALT]),
-    ])
+    return TableStyle(
+        [
+            ("BACKGROUND", (0, 0), (-1, header_rows - 1), _HEADER_BG),
+            ("TEXTCOLOR", (0, 0), (-1, header_rows - 1), _HEADER_FG),
+            ("FONTNAME", (0, 0), (-1, header_rows - 1), "Helvetica-Bold"),
+            ("FONTSIZE", (0, 0), (-1, -1), 9),
+            ("ALIGN", (1, 0), (-1, -1), "RIGHT"),
+            ("ALIGN", (0, 0), (0, -1), "LEFT"),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ("TOPPADDING", (0, 0), (-1, -1), 5),
+            ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#cccccc")),
+            ("ROWBACKGROUNDS", (0, header_rows), (-1, -1), [colors.white, _ROW_ALT]),
+        ]
+    )
 
 
 def _labour_hours_table(stats: dict) -> Table:
@@ -438,11 +518,19 @@ def _labour_hours_table(stats: dict) -> Table:
         row = stats["labour"][role]
         employee = row["employee_minutes"] / 60
         agency = row["agency_minutes"] / 60
-        data.append([label, f"{employee:,.1f}", f"{agency:,.1f}", f"{employee + agency:,.1f}"])
+        data.append(
+            [label, f"{employee:,.1f}", f"{agency:,.1f}", f"{employee + agency:,.1f}"]
+        )
     employee_total = sum(x["employee_minutes"] for x in stats["labour"].values()) / 60
     agency_total = sum(x["agency_minutes"] for x in stats["labour"].values()) / 60
-    data.append(["Total", f"{employee_total:,.1f}", f"{agency_total:,.1f}",
-                 f"{employee_total + agency_total:,.1f}"])
+    data.append(
+        [
+            "Total",
+            f"{employee_total:,.1f}",
+            f"{agency_total:,.1f}",
+            f"{employee_total + agency_total:,.1f}",
+        ]
+    )
     t = Table(data, colWidths=[80 * mm, 30 * mm, 30 * mm, 30 * mm])
     style = _base_table_style()
     style.add("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold")
@@ -457,11 +545,19 @@ def _labour_costs_table(stats: dict) -> Table:
         row = stats["labour"][role]
         employee = row["employee_cost"]
         agency = row["agency_cost"]
-        data.append([label, f"{employee:,.2f}", f"{agency:,.2f}", f"{employee + agency:,.2f}"])
+        data.append(
+            [label, f"{employee:,.2f}", f"{agency:,.2f}", f"{employee + agency:,.2f}"]
+        )
     employee_total = sum(x["employee_cost"] for x in stats["labour"].values())
     agency_total = sum(x["agency_cost"] for x in stats["labour"].values())
-    data.append(["Total", f"{employee_total:,.2f}", f"{agency_total:,.2f}",
-                 f"{employee_total + agency_total:,.2f}"])
+    data.append(
+        [
+            "Total",
+            f"{employee_total:,.2f}",
+            f"{agency_total:,.2f}",
+            f"{employee_total + agency_total:,.2f}",
+        ]
+    )
     t = Table(data, colWidths=[80 * mm, 30 * mm, 30 * mm, 30 * mm])
     t.setStyle(_base_table_style())
     return t
@@ -470,7 +566,11 @@ def _labour_costs_table(stats: dict) -> Table:
 def _rn_coverage_table(stats: dict) -> Table:
     data = [["Month", "RN coverage (%)", "Basis"]]
     for row in stats["monthly_rn_coverage"]:
-        pct = f"{row['coverage_pct']:.2f}%" if row["coverage_pct"] is not None else "No worked data"
+        pct = (
+            f"{row['coverage_pct']:.2f}%"
+            if row["coverage_pct"] is not None
+            else "No worked data"
+        )
         data.append([row["label"], pct, row["basis"]])
     t = Table(data, colWidths=[60 * mm, 45 * mm, 65 * mm])
     t.setStyle(_base_table_style())
@@ -494,15 +594,24 @@ def _obd_table(stats: dict) -> Table:
 def _care_minutes_per_obd_table(stats: dict, facility) -> Table:
     data = [["Role", "Care minutes per OBD", "Target"]]
     approved = stats["tests"]["target_reconciliation"]["target_source"]
-    target_map = {"RN": stats["tests"]["tests"][1]["target"] if approved else "Not available", "EN": "-", "PCA": "-"}
+    target_map = {
+        "RN": stats["tests"]["tests"][1]["target"] if approved else "Not available",
+        "EN": "-",
+        "PCA": "-",
+    }
     for role, label in ROLES:
         target = target_map.get(role, "Not applicable")
         target_str = f"{target:.1f}" if isinstance(target, (int, float)) else target
         data.append([label, f"{stats['care_minutes_per_obd'][role]:.1f}", target_str])
-    data.append([
-        "Total", f"{stats['total_care_minutes_per_obd']:.1f}",
-        f"{stats['tests']['tests'][0]['target']:.1f}" if approved else "Not available",
-    ])
+    data.append(
+        [
+            "Total",
+            f"{stats['total_care_minutes_per_obd']:.1f}",
+            f"{stats['tests']['tests'][0]['target']:.1f}"
+            if approved
+            else "Not available",
+        ]
+    )
     t = Table(data, colWidths=[100 * mm, 40 * mm, 30 * mm])
     style = _base_table_style()
     style.add("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold")
@@ -514,11 +623,32 @@ def _care_minutes_per_obd_table(stats: dict, facility) -> Table:
 def _compliance_tests_table(stats: dict) -> Table:
     data = [["Test", "Achieved", "Required", "Result", "Shortfall total"]]
     for row in stats["tests"]["tests"]:
-        result = "PASS" if row["passed"] else "FAIL" if row["passed"] is not None else "PROVISIONAL / NO TARGET"
-        data.append([
-            row["label"], f"{row['achieved']:.1f}", f"{row['target']:.1f}", result,
-            f"{row['shortfall_minutes']:,.0f} min" if row["shortfall_minutes"] else "-",
-        ])
+        result = (
+            "PASS"
+            if row["passed"]
+            else "FAIL"
+            if row["passed"] is not None
+            else "PROVISIONAL"
+        )
+        shortfall = row["shortfall_minutes"]
+        shortfall_text = (
+            "<0.001 min"
+            if shortfall and shortfall < 0.001
+            else (
+                f"{shortfall:,.3f}".rstrip("0").rstrip(".") + " min"
+                if shortfall
+                else "-"
+            )
+        )
+        data.append(
+            [
+                row["label"],
+                f"{row['achieved']:.1f}",
+                f"{row['target']:.1f}" if row["target"] else "Not approved",
+                result,
+                shortfall_text,
+            ]
+        )
     table = Table(data, colWidths=[60 * mm, 27 * mm, 27 * mm, 25 * mm, 31 * mm])
     table.setStyle(_base_table_style())
     return table
@@ -527,11 +657,24 @@ def _compliance_tests_table(stats: dict) -> Table:
 def _evidence_table(stats: dict) -> Table:
     e = stats["evidence"]
     data = [
-        ["Actual worked", "Rostered", "Unverified", "Delivered care", "Resident-day ledger"],
-        [f"{e['worked_minutes']:,} min", f"{e['rostered_minutes']:,} min",
-         f"{e['unverified_minutes']:,} min", f"{e['delivered_minutes']:,} min",
-         (f"{e['resident_day_dates']}/{e['resident_day_expected_dates']} days"
-          if e["uses_resident_day_ledger"] else "Fallback")],
+        [
+            "Actual worked",
+            "Rostered",
+            "Unverified",
+            "Delivered care",
+            "Resident-day ledger",
+        ],
+        [
+            f"{e['worked_minutes']:,} min",
+            f"{e['rostered_minutes']:,} min",
+            f"{e['unverified_minutes']:,} min",
+            f"{e['delivered_minutes']:,} min",
+            (
+                f"{e['resident_day_dates']}/{e['resident_day_expected_dates']} days"
+                if e["uses_resident_day_ledger"]
+                else "Fallback"
+            ),
+        ],
     ]
     table = Table(data, colWidths=[34 * mm] * 5)
     table.setStyle(_base_table_style())
@@ -543,11 +686,17 @@ def _variance_paragraph(stats: dict, facility, body) -> Paragraph:
     for row in stats["tests"]["tests"]:
         if row["passed"]:
             variance = round(row["achieved"] - row["target"], 1)
-            parts.append(f"{row['label']}: <b>{variance}</b> mins/OBD above requirement")
+            parts.append(
+                f"{row['label']}: <b>{variance}</b> mins/OBD above requirement"
+            )
         elif row["passed"] is False:
-            parts.append(f"{row['label']}: <b>{row['shortfall']}</b> mins/OBD below requirement")
+            parts.append(
+                f"{row['label']}: <b>{row['shortfall']}</b> mins/OBD below requirement"
+            )
         else:
-            parts.append(f"{row['label']}: no target configured")
+            parts.append(
+                f"{row['label']}: provisional; resolve evidence and target limitations"
+            )
     return Paragraph(
         ".<br/>".join(parts) + ".",
         body,

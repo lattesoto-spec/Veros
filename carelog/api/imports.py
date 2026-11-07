@@ -64,7 +64,14 @@ def universal_import():
             facility=facility,
             facilities=org_facilities(),
             errors=[],
-            jobs=[job.as_dict() for job in ImportJob.query.filter_by(facility_id=facility.id).order_by(ImportJob.created_at.desc()).limit(30)] if facility else [],
+            jobs=[
+                job.as_dict()
+                for job in ImportJob.query.filter_by(facility_id=facility.id)
+                .order_by(ImportJob.created_at.desc())
+                .limit(30)
+            ]
+            if facility
+            else [],
         )
 
     errors = []
@@ -73,6 +80,12 @@ def universal_import():
     # With several homes in one organization, the upload must say which one
     # it belongs to rather than silently landing in whichever is active.
     target_id = form_data().get("facility_id", type=int)
+    if form_data().get("facility_id") and target_id is None:
+        errors.append("Select a valid destination facility; nothing was imported.")
+    if len(org_facilities()) > 1 and not target_id:
+        errors.append(
+            "Select the destination facility explicitly when the organisation has multiple facilities."
+        )
     if target_id:
         facility = Facility.query.filter_by(
             id=target_id, organization_id=current_organization_id()
@@ -86,7 +99,9 @@ def universal_import():
     targets = None
     if not facility:
         if not has_permission("manage_facility"):
-            errors.append("Ask your administrator to create a facility before importing.")
+            errors.append(
+                "Ask your administrator to create a facility before importing."
+            )
         try:
             targets = target_details(form_data())
         except ValueError as error:
@@ -102,8 +117,12 @@ def universal_import():
         ), 400
 
     if not facility:
-        facility = Facility(name=name, organization_id=current_organization_id(),
-                            ancc_target=targets[0], rn_target=targets[1])
+        facility = Facility(
+            name=name,
+            organization_id=current_organization_id(),
+            ancc_target=targets[0],
+            rn_target=targets[1],
+        )
         db.session.add(facility)
         db.session.flush()
         save_target(facility, form_data(), current_user())
@@ -180,14 +199,27 @@ def import_status(job_id):
 @require("import_data")
 def import_confirm(job_id):
     job = owned_or_404(import_jobs.get_job(job_id))
-    changed = db.session.execute(update(ImportJob).where(
-        ImportJob.id == job.id, ImportJob.status == "review"
-    ).values(status="queued", approved_at=datetime.utcnow(), reviewed_by_user_id=current_user().id,
-             updated_at=datetime.utcnow()))
+    changed = db.session.execute(
+        update(ImportJob)
+        .where(ImportJob.id == job.id, ImportJob.status == "review")
+        .values(
+            status="queued",
+            approved_at=datetime.utcnow(),
+            reviewed_by_user_id=current_user().id,
+            updated_at=datetime.utcnow(),
+        )
+    )
     if changed.rowcount != 1:
         db.session.rollback()
-        return {"error": "This import is no longer awaiting review. Reload its status."}, 409
-    auth.record("import_approved", "import_job", job.id, "Reviewed column mapping, evidence class, dates and replacement scope")
+        return {
+            "error": "This import is no longer awaiting review. Reload its status."
+        }, 409
+    auth.record(
+        "import_approved",
+        "import_job",
+        job.id,
+        "Reviewed column mapping, evidence class, dates and replacement scope",
+    )
     db.session.commit()
     import_jobs.dispatch_job(current_app._get_current_object(), job.id)
     return navigate(url_for("api.import_status", job_id=job.id))
@@ -197,13 +229,20 @@ def import_confirm(job_id):
 @require("import_data")
 def import_cancel(job_id):
     job = owned_or_404(import_jobs.get_job(job_id))
-    changed = db.session.execute(update(ImportJob).where(
-        ImportJob.id == job.id, ImportJob.status == "review"
-    ).values(status="cancelled", updated_at=datetime.utcnow()))
+    changed = db.session.execute(
+        update(ImportJob)
+        .where(ImportJob.id == job.id, ImportJob.status == "review")
+        .values(status="cancelled", updated_at=datetime.utcnow())
+    )
     if changed.rowcount != 1:
         db.session.rollback()
         return {"error": "Only an import awaiting review can be cancelled."}, 409
-    auth.record("import_cancelled", "import_job", job.id, "No care data committed; sources retained")
+    auth.record(
+        "import_cancelled",
+        "import_job",
+        job.id,
+        "No care data committed; sources retained",
+    )
     db.session.commit()
     return navigate(url_for("api.import_status", job_id=job.id))
 
@@ -214,21 +253,51 @@ def import_retry(job_id):
     job = owned_or_404(import_jobs.get_job(job_id))
     cutoff = datetime.utcnow() - timedelta(minutes=15)
     if job.status not in {"failed", "cancelled"}:
-        changed = db.session.execute(update(ImportJob).where(
-            ImportJob.id == job.id, ImportJob.status.in_(["queued", "running"]), ImportJob.updated_at < cutoff
-        ).values(status="failed", error="Superseded by a recovery attempt; original sources retained."))
+        changed = db.session.execute(
+            update(ImportJob)
+            .where(
+                ImportJob.id == job.id,
+                ImportJob.status.in_(["queued", "running"]),
+                ImportJob.updated_at < cutoff,
+            )
+            .values(
+                status="failed",
+                error="Superseded by a recovery attempt; original sources retained.",
+            )
+        )
         if changed.rowcount != 1:
             db.session.rollback()
-            return {"error": "This import is still active or already completed. Reload its status."}, 409
+            return {
+                "error": "This import is still active or already completed. Reload its status."
+            }, 409
         db.session.commit()
     try:
         files = json.loads(job.files_json)
-        payloads = [(os.path.basename(f["filename"]), _storage().get(f"{job.storage_prefix}/{os.path.basename(f['filename'])}")) for f in files]
-        new_id = import_jobs.start_job(current_app._get_current_object(), job.facility_id, payloads, _storage(),
-                                       organization_id=current_organization_id(), user_id=current_user().id)
+        payloads = [
+            (
+                os.path.basename(f["filename"]),
+                _storage().get(
+                    f"{job.storage_prefix}/{os.path.basename(f['filename'])}"
+                ),
+            )
+            for f in files
+        ]
+        new_id = import_jobs.start_job(
+            current_app._get_current_object(),
+            job.facility_id,
+            payloads,
+            _storage(),
+            organization_id=current_organization_id(),
+            user_id=current_user().id,
+        )
     except (FileReadError, StorageError) as error:
         return {"error": str(error)}, 400
-    auth.record("import_retried", "import_job", new_id, f"Retained sources from {job.id}; review required again")
+    auth.record(
+        "import_retried",
+        "import_job",
+        new_id,
+        f"Retained sources from {job.id}; review required again",
+    )
     db.session.commit()
     return navigate(url_for("api.import_status", job_id=new_id))
 
@@ -243,10 +312,18 @@ def audit_job_file(job_id, filename):
     try:
         contents = _storage().get(f"{job.storage_prefix}/{filename}")
     except StorageError:
-        return {"error": "The retained file could not be retrieved. Retry or contact support with this import reference."}, 502
+        return {
+            "error": "The retained file could not be retrieved. Retry or contact support with this import reference."
+        }, 502
     from io import BytesIO
     from flask import send_file
-    return send_file(BytesIO(contents), as_attachment=True, download_name=filename, mimetype="application/octet-stream")
+
+    return send_file(
+        BytesIO(contents),
+        as_attachment=True,
+        download_name=filename,
+        mimetype="application/octet-stream",
+    )
 
 
 @bp.route("/import/status/<job_id>.json")
@@ -295,10 +372,29 @@ def audit():
         files_by_receipt=files_by_receipt,
         readiness=round(with_files / len(receipts) * 100) if receipts else None,
         calc_version=CALC_VERSION,
-        jobs=[job.as_dict() for job in ImportJob.query.filter_by(facility_id=facility.id).order_by(ImportJob.created_at.desc()).limit(100)],
-        decisions=AuditLog.query.filter(AuditLog.organization_id == current_organization_id(), AuditLog.action.in_([
-            "target_approved", "target_corrected", "eligibility_decided", "import_approved", "import_cancelled", "import_retried", "evidence_classified"
-        ])).order_by(AuditLog.created_at.desc()).limit(100).all(),
+        jobs=[
+            job.as_dict()
+            for job in ImportJob.query.filter_by(facility_id=facility.id)
+            .order_by(ImportJob.created_at.desc())
+            .limit(100)
+        ],
+        decisions=AuditLog.query.filter(
+            AuditLog.organization_id == current_organization_id(),
+            AuditLog.action.in_(
+                [
+                    "target_approved",
+                    "target_corrected",
+                    "eligibility_decided",
+                    "import_approved",
+                    "import_cancelled",
+                    "import_retried",
+                    "evidence_classified",
+                ]
+            ),
+        )
+        .order_by(AuditLog.created_at.desc())
+        .limit(100)
+        .all(),
     )
 
 
@@ -327,6 +423,9 @@ def audit_file(receipt_id, filename):
 def delete_receipt(receipt_id):
     """Delete one import: its rows, its receipt and its retained files."""
     receipt = owned_or_404(db.session.get(ImportReceipt, receipt_id))
+    Facility.query.filter_by(
+        id=receipt.facility_id, organization_id=current_organization_id()
+    ).with_for_update().first()
     if not _confirmed(request):
         flash('Type "delete" to confirm. Nothing was deleted.')
         return navigate(url_for("api.audit"))
@@ -334,7 +433,9 @@ def delete_receipt(receipt_id):
     try:
         files = _purge_evidence([receipt])
     except StorageError:
-        return {"error": "Evidence storage could not confirm deletion. The receipt was kept; investigate storage and retry."}, 502
+        return {
+            "error": "Evidence storage could not confirm deletion. The receipt was kept; investigate storage and retry."
+        }, 502
     shifts = Shift.query.filter_by(import_receipt_id=receipt.id).delete(
         synchronize_session=False
     )

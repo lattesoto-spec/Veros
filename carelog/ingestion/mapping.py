@@ -26,35 +26,83 @@ from datetime import date, datetime, time
 from .reader import Sheet
 
 SHIFT_FIELDS = [
-    "staff_id", "staff_name", "role", "source_role", "date",
-    "start_time", "end_time", "minutes", "break_minutes",
-    "is_direct_care", "is_agency", "labour_cost",
+    "staff_id",
+    "staff_name",
+    "role",
+    "source_role",
+    "date",
+    "start_time",
+    "end_time",
+    "minutes",
+    "break_minutes",
+    "is_direct_care",
+    "is_agency",
+    "labour_cost",
 ]
 STAFF_FIELDS = [
-    "staff_id", "staff_name", "role", "source_role", "employment_type",
-    "classification", "registration_number", "registration_expiry",
+    "staff_id",
+    "staff_name",
+    "role",
+    "source_role",
+    "employment_type",
+    "classification",
+    "registration_number",
+    "registration_expiry",
 ]
 RESIDENT_FIELDS = [
-    "resident_id", "name", "ancc_class", "admitted_date", "discharged_date",
+    "resident_id",
+    "name",
+    "ancc_class",
+    "admitted_date",
+    "discharged_date",
 ]
 RESIDENT_DAY_FIELDS = [
-    "date", "resident_id", "resident_name", "occupied", "service_type",
-    "leave_type", "leave_day_number", "ancc_class", "exclusion_reason",
+    "date",
+    "resident_id",
+    "resident_name",
+    "occupied",
+    "service_type",
+    "leave_type",
+    "leave_day_number",
+    "ancc_class",
+    "exclusion_reason",
 ]
 CARE_EPISODE_FIELDS = [
-    "date", "resident_id", "resident_name", "care_type", "care_category",
-    "staff_id", "staff_name", "role", "source_role", "start_time",
-    "end_time", "minutes",
+    "date",
+    "resident_id",
+    "resident_name",
+    "care_type",
+    "care_category",
+    "staff_id",
+    "staff_name",
+    "role",
+    "source_role",
+    "start_time",
+    "end_time",
+    "minutes",
 ]
 
 DATE_FORMATS = [
-    "%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y", "%d/%m/%y",
-    "%Y/%m/%d", "%d %b %Y", "%d %B %Y", "%b %d, %Y", "%m/%d/%Y",
+    "%Y-%m-%d",
+    "%d/%m/%Y",
+    "%d-%m-%Y",
+    "%d.%m.%Y",
+    "%d/%m/%y",
+    "%Y/%m/%d",
+    "%d %b %Y",
+    "%d %B %Y",
+    "%b %d, %Y",
+    "%m/%d/%Y",
 ]
 TIME_FORMATS = ["%H:%M", "%H:%M:%S", "%I:%M %p", "%I:%M%p", "%I %p", "%H%M"]
 DATETIME_FORMATS = [
-    "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M",
-    "%d/%m/%Y %H:%M", "%d/%m/%Y %I:%M %p", "%d/%m/%Y %H:%M:%S",
+    "%Y-%m-%d %H:%M:%S",
+    "%Y-%m-%d %H:%M",
+    "%Y-%m-%dT%H:%M:%S",
+    "%Y-%m-%dT%H:%M",
+    "%d/%m/%Y %H:%M",
+    "%d/%m/%Y %I:%M %p",
+    "%d/%m/%Y %H:%M:%S",
 ]
 
 TRUE_WORDS = {"true", "1", "yes", "y", "t", "direct", "direct care"}
@@ -85,7 +133,9 @@ def parse_date_value(s: str, fmt: str | None = None) -> date:
     if not fmt and re.fullmatch(r"\d{1,2}/\d{1,2}/\d{2,4}", s):
         first, second, _ = s.split("/")
         if int(first) <= 12 and int(second) <= 12 and first != second:
-            raise ValueError("ambiguous date: specify the source date format or use YYYY-MM-DD")
+            raise ValueError(
+                "ambiguous date: specify the source date format or use YYYY-MM-DD"
+            )
     formats = [fmt] if fmt else DATE_FORMATS + DATETIME_FORMATS
     for f in formats:
         try:
@@ -127,7 +177,15 @@ def normalize_role(raw: str) -> str:
     if tokens & {"en", "een"} or "enrolled" in s:
         return "EN"
     if tokens & {"pca", "pcw", "ain", "cs"} or any(
-        w in s for w in ("assistant", "aide", "carer", "care worker", "personal care", "support")
+        w in s
+        for w in (
+            "assistant",
+            "aide",
+            "carer",
+            "care worker",
+            "personal care",
+            "support",
+        )
     ):
         return "PCW"
     return raw.strip().upper()
@@ -182,6 +240,8 @@ def _extract_field(fs: dict, row: dict, headers: list[str]):
             return vm[key]
 
     if raw == "":
+        if fs.get("parse") == "boolean":
+            raise ValueError("boolean evidence is blank; an explicit value is required")
         if fs.get("required"):
             raise ValueError("required value is blank")
         return fs.get("default")
@@ -216,7 +276,9 @@ def _passes_filter(target: dict, row: dict, headers: list[str]) -> bool:
     try:
         val = _resolve_column(row, headers, rf.get("column", "")).strip().lower()
     except MappingError:
-        raise MappingError("The configured row-filter column is missing; nothing was imported.") from None
+        raise MappingError(
+            "The configured row-filter column is missing; nothing was imported."
+        ) from None
     include = rf.get("include_values")
     exclude = rf.get("exclude_values")
     if include is not None:
@@ -255,7 +317,11 @@ def run_target(target: dict, sheets: list[Sheet]) -> TargetResult:
 
     result = TargetResult(kind=kind, sheet=sheet.name, records=[])
     for offset, row in enumerate(sheet.rows):
-        idx = sheet.source_rows[offset] if sheet.source_rows else sheet.header_row_index + 2 + offset
+        idx = (
+            sheet.source_rows[offset]
+            if sheet.source_rows
+            else sheet.header_row_index + 2 + offset
+        )
         result.rows_seen += 1
         if not _passes_filter(target, row, sheet.headers):
             result.rows_filtered += 1
@@ -298,7 +364,9 @@ def _check_record(kind: str, r: dict) -> str | None:
             return "staff_id is blank"
         if not isinstance(r.get("date"), date):
             return "date missing"
-        has_times = isinstance(r.get("start_time"), time) and isinstance(r.get("end_time"), time)
+        has_times = isinstance(r.get("start_time"), time) and isinstance(
+            r.get("end_time"), time
+        )
         has_minutes = isinstance(r.get("minutes"), (int, float)) and r["minutes"] > 0
         if not has_times and not has_minutes:
             return "no start/end times and no duration"
@@ -306,7 +374,9 @@ def _check_record(kind: str, r: dict) -> str | None:
             return "start and finish are identical; a worked interval is required"
         for key in ("minutes", "break_minutes", "labour_cost"):
             value = r.get(key)
-            if value is not None and (not isinstance(value, (int, float)) or not isfinite(value) or value < 0):
+            if value is not None and (
+                not isinstance(value, (int, float)) or not isfinite(value) or value < 0
+            ):
                 return f"{key} must be a finite non-negative number"
         for key in ("is_direct_care", "is_agency"):
             if key in r and not isinstance(r[key], bool):
@@ -329,7 +399,9 @@ def _check_record(kind: str, r: dict) -> str | None:
             return "resident_id is blank"
         if not isinstance(r.get("date"), date):
             return "date missing"
-        has_times = isinstance(r.get("start_time"), time) and isinstance(r.get("end_time"), time)
+        has_times = isinstance(r.get("start_time"), time) and isinstance(
+            r.get("end_time"), time
+        )
         has_minutes = isinstance(r.get("minutes"), (int, float)) and r["minutes"] > 0
         if not has_times and not has_minutes:
             return "no start/end times and no duration"

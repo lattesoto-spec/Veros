@@ -2,7 +2,7 @@
 
 import json
 import os
-from datetime import datetime
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
 import pytest
@@ -159,27 +159,53 @@ def test_additive_review_migration_preserves_jobs(pg_app):
     from sqlalchemy import text
 
     _, facility, _ = pg_app
-    db.session.add(ImportJob(id="retained-job", facility_id=facility.id, storage_prefix="imports/job-retained"))
+    db.session.add(
+        ImportJob(
+            id="retained-job",
+            facility_id=facility.id,
+            storage_prefix="imports/job-retained",
+        )
+    )
     db.session.commit()
     for column in ("review_json", "approved_at", "reviewed_by_user_id"):
         db.session.execute(text(f"ALTER TABLE import_jobs DROP COLUMN {column}"))
-    db.session.execute(text("ALTER TABLE import_receipts DROP COLUMN original_evidence_type"))
+    db.session.execute(
+        text("ALTER TABLE import_receipts DROP COLUMN original_evidence_type")
+    )
     db.session.commit()
-    assert set(init_db()) == {"import_jobs.review_json", "import_jobs.approved_at", "import_jobs.reviewed_by_user_id", "import_receipts.original_evidence_type"}
-    assert db.session.get(ImportJob, "retained-job").storage_prefix == "imports/job-retained"
+    assert set(init_db()) == {
+        "import_jobs.review_json",
+        "import_jobs.approved_at",
+        "import_jobs.reviewed_by_user_id",
+        "import_receipts.original_evidence_type",
+    }
+    assert (
+        db.session.get(ImportJob, "retained-job").storage_prefix
+        == "imports/job-retained"
+    )
 
 
 def test_review_cannot_commit_after_facility_evidence_changes(pg_app):
     from carelog.models import Resident
 
     app, facility, storage = pg_app
-    source = Path(__file__).parents[1] / "sample_data/demo_video/caremin_demo_actual_worked_export.xlsx"
-    job_id = jobs.start_job(app, facility.id, [(source.name, source.read_bytes())], storage,
-                            organization_id=facility.organization_id)
+    source = (
+        Path(__file__).parents[1]
+        / "sample_data/demo_video/caremin_demo_actual_worked_export.xlsx"
+    )
+    job_id = jobs.start_job(
+        app,
+        facility.id,
+        [(source.name, source.read_bytes())],
+        storage,
+        organization_id=facility.organization_id,
+    )
     jobs.run_job(job_id)
     job = db.session.get(ImportJob, job_id)
     assert job.status == "review"
-    db.session.add(Resident(facility_id=facility.id, resident_id="NEW", name="New resident"))
+    db.session.add(
+        Resident(facility_id=facility.id, resident_id="NEW", name="New resident")
+    )
     job.status, job.approved_at = "queued", datetime.utcnow()
     db.session.commit()
     jobs.run_job(job_id)
@@ -189,3 +215,98 @@ def test_review_cannot_commit_after_facility_evidence_changes(pg_app):
     assert "changed since" in job.error
     assert Shift.query.count() == ImportReceipt.query.count() == 0
     assert storage.get(f"imports/job-{job_id}/{source.name}") == source.read_bytes()
+
+
+def test_period_queries_stay_bounded_as_more_dates_are_added(pg_app):
+    from time import perf_counter
+    from sqlalchemy import event, inspect, text
+    from carelog import auth
+    from carelog.models import FacilityTarget, ResidentDay, Staff
+
+    app, facility, _ = pg_app
+    user = auth.create_user(
+        organization_id=facility.organization_id,
+        email="performance@example.test",
+        name="Manager",
+        role="administrator",
+        password="TestPassword123!",
+        must_change_password=False,
+    )
+    member = Staff(
+        facility_id=facility.id,
+        staff_id="RN1",
+        name="Nurse",
+        role="RN",
+        source_role="RN",
+        eligibility_status="approved",
+        registration_number="TEST-RN",
+        registration_expiry=date(2027, 1, 1),
+    )
+    db.session.add_all(
+        [
+            member,
+            FacilityTarget(
+                facility_id=facility.id,
+                quarter_start=date(2026, 7, 1),
+                ancc_target=215,
+                rn_target=44,
+                source="Synthetic notice",
+            ),
+        ]
+    )
+    db.session.commit()
+    client = app.test_client()
+    with client.session_transaction() as session:
+        session["user_id"], session["auth_version"] = user.id, 1
+    measurements = []
+    for start, stop in [(0, 31), (31, 61)]:
+        for offset in range(start, stop):
+            day = date(2026, 7, 1) + timedelta(days=offset)
+            db.session.add(
+                ResidentDay(
+                    facility_id=facility.id,
+                    resident_id="R1",
+                    date=day,
+                    occupied=True,
+                    service_type="permanent",
+                )
+            )
+            db.session.add(
+                Shift(
+                    facility_id=facility.id,
+                    staff_id=member.id,
+                    date=day,
+                    start_time=time(8),
+                    end_time=time(16),
+                    evidence_type="worked",
+                )
+            )
+        db.session.commit()
+        queries = []
+
+        def count(*args):
+            queries.append(1)
+
+        event.listen(db.engine, "before_cursor_execute", count)
+        started = perf_counter()
+        try:
+            assert client.get("/api/dashboard").status_code == 200
+        finally:
+            elapsed = perf_counter() - started
+            event.remove(db.engine, "before_cursor_execute", count)
+        measurements.append((len(queries), elapsed))
+    print(
+        f"PostgreSQL dashboard: 31 days {measurements[0]}; 61 days {measurements[1]} (queries, seconds)"
+    )
+    assert measurements[0][0] <= 120
+    assert measurements[1][0] <= measurements[0][0] + 3
+    for name in ("ix_shift_facility_stream_date", "ix_resident_day_facility_date"):
+        db.session.execute(text(f"DROP INDEX {name}"))
+    db.session.commit()
+    init_db()
+    assert "ix_shift_facility_stream_date" in {
+        i["name"] for i in inspect(db.engine).get_indexes("shifts")
+    }
+    assert "ix_resident_day_facility_date" in {
+        i["name"] for i in inspect(db.engine).get_indexes("resident_days")
+    }

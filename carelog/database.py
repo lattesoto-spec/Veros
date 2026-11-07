@@ -147,6 +147,9 @@ def init_db():
     """
     db.create_all()
     added = add_missing_columns()
+    for table in db.metadata.sorted_tables:
+        for index in table.indexes:
+            index.create(bind=db.engine, checkfirst=True)
     return added
 
 

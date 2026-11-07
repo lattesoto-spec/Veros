@@ -24,29 +24,79 @@ from datetime import date
 ELIGIBLE_BUCKETS = ("RN", "EN", "PCA")
 
 BUCKETS = {
-    "RN": "RN", "EN": "EN", "EEN": "EN",
-    "PCW": "PCA", "PCA": "PCA", "AIN": "PCA",
+    "RN": "RN",
+    "EN": "EN",
+    "EEN": "EN",
+    "PCW": "PCA",
+    "PCA": "PCA",
+    "AIN": "PCA",
 }
 
 # Approved automatically: unambiguous in aged care.
 DEFINITIVE = {
-    "RN": ("registered nurse", "clinical nurse", "nurse practitioner",
-           "rn", "cns", "cnc", "cnm", "nurse unit manager"),
+    "RN": (
+        "registered nurse",
+        "clinical nurse",
+        "nurse practitioner",
+        "rn",
+        "cns",
+        "cnc",
+        "cnm",
+        "nurse unit manager",
+    ),
     "EN": ("enrolled nurse", "endorsed enrolled nurse", "en", "een"),
-    "PCA": ("personal care worker", "personal care assistant", "personal carer",
-            "assistant in nursing", "care service employee", "pcw", "pca", "ain",
-            "care worker", "careworker"),
+    "PCA": (
+        "personal care worker",
+        "personal care assistant",
+        "personal carer",
+        "assistant in nursing",
+        "care service employee",
+        "pcw",
+        "pca",
+        "ain",
+        "care worker",
+        "careworker",
+    ),
 }
 
 # Never eligible, whatever a "direct care" flag claims.
 INELIGIBLE = (
-    "allied health", "physio", "occupational therap", "podiatr", "dietit",
-    "speech", "exercise physiolog", "lifestyle", "diversional", "recreation",
-    "social support", "social work", "pastoral", "chaplain",
-    "care manager", "care management", "facility manager", "clinical manager",
-    "administration", "admin", "reception", "roster", "payroll",
-    "clean", "laundry", "catering", "chef", "cook", "kitchen", "hospitality",
-    "maintenance", "garden", "driver", "volunteer", "student", "trainee",
+    "allied health",
+    "physio",
+    "occupational therap",
+    "podiatr",
+    "dietit",
+    "speech",
+    "exercise physiolog",
+    "lifestyle",
+    "diversional",
+    "recreation",
+    "social support",
+    "social work",
+    "pastoral",
+    "chaplain",
+    "care manager",
+    "care management",
+    "facility manager",
+    "clinical manager",
+    "administration",
+    "admin",
+    "reception",
+    "roster",
+    "payroll",
+    "clean",
+    "laundry",
+    "catering",
+    "chef",
+    "cook",
+    "kitchen",
+    "hospitality",
+    "maintenance",
+    "garden",
+    "driver",
+    "volunteer",
+    "student",
+    "trainee",
 )
 
 # Statuses on Staff.eligibility_status
@@ -69,7 +119,8 @@ def classify(raw_role: str) -> tuple[str, str, str]:
     if not text:
         return "OTHER", PENDING, "no role recorded"
     if re.search(r"\b(non|not|no)\W+(rn|en|nurse|care)\b", text) or any(
-        term in text for term in ("educator", "education", "research", "non direct", "non-direct")
+        term in text
+        for term in ("educator", "education", "research", "non direct", "non-direct")
     ):
         return "OTHER", PENDING, "non-direct-care or negated title requires review"
 
@@ -86,7 +137,11 @@ def classify(raw_role: str) -> tuple[str, str, str]:
     # Broad words suggest care work but are shared with ineligible titles, so
     # they need a human decision rather than an assumption.
     if any(w in text for w in ("assistant", "aide", "carer", "support", "care")):
-        return "OTHER", PENDING, "ambiguous title; approval is required before it counts"
+        return (
+            "OTHER",
+            PENDING,
+            "ambiguous title; approval is required before it counts",
+        )
 
     return "OTHER", PENDING, "unrecognised role"
 
@@ -96,6 +151,8 @@ def counts_toward_care(staff, on_day=None) -> bool:
     if staff is None:
         return False
     if getattr(staff, "eligibility_status", PENDING) != APPROVED:
+        return False
+    if classify(getattr(staff, "source_role", None) or staff.role)[1] == EXCLUDED:
         return False
     if bucket_for(staff.role) not in ELIGIBLE_BUCKETS:
         return False

@@ -130,8 +130,12 @@ def update_targets():
         db.session.rollback()
         flash(str(error))
         return navigate(url_for("api.facilities_view")), 400
-    auth.record("facility_updated", "facility", facility.id,
-                f"targets {care_target}/{rn_target}")
+    auth.record(
+        "facility_updated",
+        "facility",
+        facility.id,
+        f"targets {care_target}/{rn_target}",
+    )
     db.session.commit()
     return navigate(url_for("api.dashboard"))
 
@@ -147,6 +151,10 @@ def clear():
     org_id = current_organization_id()
     facilities = Facility.query.filter_by(organization_id=org_id).all()
     facility_ids = [f.id for f in facilities]
+    if facility_ids:
+        Facility.query.filter(Facility.id.in_(facility_ids)).order_by(
+            Facility.id
+        ).with_for_update().all()
     receipts = (
         ImportReceipt.query.filter(ImportReceipt.facility_id.in_(facility_ids)).all()
         if facility_ids
@@ -155,7 +163,9 @@ def clear():
     try:
         files = _purge_evidence(receipts, facility_ids=facility_ids)
     except StorageError:
-        return {"error": "Evidence storage could not confirm deletion. Database records were kept; investigate storage and retry."}, 502
+        return {
+            "error": "Evidence storage could not confirm deletion. Database records were kept; investigate storage and retry."
+        }, 502
     if facility_ids:
         _delete_facility_data(facility_ids)
         Facility.query.filter(Facility.id.in_(facility_ids)).delete(
@@ -241,8 +251,12 @@ def facility_create():
     except ValueError as error:
         flash(str(error))
         return navigate(url_for("api.facilities_view")), 400
-    facility = Facility(name=name, organization_id=current_organization_id(),
-                        ancc_target=care_target, rn_target=rn_target)
+    facility = Facility(
+        name=name,
+        organization_id=current_organization_id(),
+        ancc_target=care_target,
+        rn_target=rn_target,
+    )
     db.session.add(facility)
     db.session.flush()
     try:
@@ -294,9 +308,13 @@ def facility_update(facility_id):
 @bp.route("/facilities/<int:facility_id>/delete", methods=["POST"])
 @require("manage_facility")
 def facility_delete(facility_id):
-    facility = Facility.query.filter_by(
-        id=facility_id, organization_id=current_organization_id()
-    ).first()
+    facility = (
+        Facility.query.filter_by(
+            id=facility_id, organization_id=current_organization_id()
+        )
+        .with_for_update()
+        .first()
+    )
     if facility is None:
         abort(404)
     if not _confirmed(request):

@@ -57,8 +57,9 @@ class ImportOutcome:
     parsers: list[str] = field(default_factory=list)
 
 
-def get_or_create_mapping(sheets, filename: str, progress=None,
-                          organization_id=None, reviewed_spec=None) -> tuple[FormatMapping, bool, dict | None]:
+def get_or_create_mapping(
+    sheets, filename: str, progress=None, organization_id=None, reviewed_spec=None
+) -> tuple[FormatMapping, bool, dict | None]:
     """Returns (mapping, reused, ai_usage).
 
     Learned specs are per-organization: a spec names the columns of a
@@ -90,8 +91,12 @@ def get_or_create_mapping(sheets, filename: str, progress=None,
 
     spec = reviewed_spec if reviewed_spec is not None else built_in
     if spec:
-        usage = {"calls": 0, "input_tokens": 0, "output_tokens": 0,
-                 "method": "built-in exact mapping"}
+        usage = {
+            "calls": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "method": "built-in exact mapping",
+        }
         if progress:
             progress("matched built-in format")
     else:
@@ -117,14 +122,23 @@ def get_or_create_mapping(sheets, filename: str, progress=None,
     return mapping, False, usage
 
 
-def ingest_file(facility, filename: str, data: bytes, receipt=None, progress=None,
-                evidence_type: str | None = None, reviewed_spec=None) -> ImportOutcome:
+def ingest_file(
+    facility,
+    filename: str,
+    data: bytes,
+    receipt=None,
+    progress=None,
+    evidence_type: str | None = None,
+    reviewed_spec=None,
+) -> ImportOutcome:
     """`receipt` (optional ImportReceipt) stamps audit lineage onto every shift.
     `progress` (optional callable taking a stage string) receives live status
     updates for the background-job status page."""
     sheets = read_upload(filename, data)
     mapping, reused, usage = get_or_create_mapping(
-        sheets, filename, progress=progress,
+        sheets,
+        filename,
+        progress=progress,
         organization_id=getattr(facility, "organization_id", None),
         reviewed_spec=reviewed_spec,
     )
@@ -135,13 +149,21 @@ def ingest_file(facility, filename: str, data: bytes, receipt=None, progress=Non
     results = run_spec(spec, mapped_sheets)
     for result in results:
         if not result.records:
-            raise MappingError(f"{filename} / {result.sheet}: no usable {result.kind} rows; nothing was imported.")
+            raise MappingError(
+                f"{filename} / {result.sheet}: no usable {result.kind} rows; nothing was imported."
+            )
         if result.row_errors:
-            raise MappingError(f"{filename} / {result.sheet}: " + "; ".join(result.row_errors[:10]))
+            raise MappingError(
+                f"{filename} / {result.sheet}: " + "; ".join(result.row_errors[:10])
+            )
 
     outcome = ImportOutcome(
-        filename=filename, fingerprint=mapping.fingerprint, mapping_reused=reused,
-        spec=spec, results=results, ai_usage=usage,
+        filename=filename,
+        fingerprint=mapping.fingerprint,
+        mapping_reused=reused,
+        spec=spec,
+        results=results,
+        ai_usage=usage,
         parsers=sorted({s.parser for s in sheets}),
     )
     outcome.mapping_id = mapping.id
@@ -162,6 +184,7 @@ def ingest_file(facility, filename: str, data: bytes, receipt=None, progress=Non
             r.evidence_type = auto_type
             r.evidence_basis = basis
             from .quality import validate_shifts
+
             validate_shifts(r.records, evidence_type=auto_type)
             outcome.warnings.extend(check_shifts(r.records))
             _import_shifts(facility, r.records, outcome, evidence_type=auto_type)
@@ -184,13 +207,36 @@ def _normalise_employment_type(value: str | None) -> str | None:
         return "agency"
     if "contract" in raw:
         return "contractor"
-    if any(term in raw for term in ("permanent", "employee", "casual", "part-time", "full-time")):
+    if any(
+        term in raw
+        for term in ("permanent", "employee", "casual", "part-time", "full-time")
+    ):
         return "employee"
     return raw
 
 
+def _guard_role_history(member, raw_role):
+    if not raw_role or not member.source_role:
+        return
+    previous = classify(member.source_role)[:2]
+    incoming = classify(raw_role)[:2]
+    if (
+        previous != incoming
+        and Shift.query.filter_by(
+            staff_id=member.id, facility_id=member.facility_id
+        ).first()
+    ):
+        raise MappingError(
+            f"Staff {member.staff_id}: the source role changed from {member.source_role!r} to {raw_role!r}. "
+            "Past worked records must not be reclassified silently. Review eligibility with explicit effective dates, "
+            "or export separate employment-role identifiers for a genuine role change. Nothing was imported."
+        )
+
+
 def _import_staff(facility, records: list[dict], outcome: ImportOutcome):
-    cache = {s.staff_id: s for s in Staff.query.filter_by(facility_id=facility.id).all()}
+    cache = {
+        s.staff_id: s for s in Staff.query.filter_by(facility_id=facility.id).all()
+    }
     for rec in records:
         sid = str(rec["staff_id"]).strip()
         name = str(rec.get("staff_name") or "").strip() or sid
@@ -203,14 +249,19 @@ def _import_staff(facility, records: list[dict], outcome: ImportOutcome):
         member = cache.get(sid)
         if member is None:
             member = Staff(
-                facility_id=facility.id, staff_id=sid, name=name, role=role,
-                source_role=raw_role, eligibility_status=status,
+                facility_id=facility.id,
+                staff_id=sid,
+                name=name,
+                role=role,
+                source_role=raw_role,
+                eligibility_status=status,
                 eligibility_reason=reason,
             )
             db.session.add(member)
             db.session.flush()
             cache[sid] = member
         else:
+            _guard_role_history(member, raw_role)
             if rec.get("staff_name"):
                 member.name = name
             if member.approved_at is None and raw_role:
@@ -234,8 +285,12 @@ def _import_staff(facility, records: list[dict], outcome: ImportOutcome):
         outcome.staff_imported += 1
 
 
-def _import_shifts(facility, records: list[dict], outcome: ImportOutcome,
-                   evidence_type: str = "unverified"):
+def _import_shifts(
+    facility,
+    records: list[dict],
+    outcome: ImportOutcome,
+    evidence_type: str = "unverified",
+):
     if evidence_type not in ("worked", "rostered", "unverified"):
         evidence_type = "unverified"
 
@@ -247,24 +302,40 @@ def _import_shifts(facility, records: list[dict], outcome: ImportOutcome,
     for sid, days in dates_by_staff.items():
         member = Staff.query.filter_by(facility_id=facility.id, staff_id=sid).first()
         if member:
-            query = Shift.query.filter(Shift.facility_id == facility.id,
-                                       Shift.staff_id == member.id,
-                                       Shift.evidence_type == evidence_type,
-                                       Shift.date.in_(days))
+            query = Shift.query.filter(
+                Shift.facility_id == facility.id,
+                Shift.staff_id == member.id,
+                Shift.evidence_type == evidence_type,
+                Shift.date.in_(days),
+            )
             receipt_id = getattr(outcome.receipt, "id", None)
             if receipt_id:
                 from sqlalchemy import or_
-                query = query.filter(or_(Shift.import_receipt_id != receipt_id,
-                                         Shift.import_receipt_id.is_(None)))
+
+                query = query.filter(
+                    or_(
+                        Shift.import_receipt_id != receipt_id,
+                        Shift.import_receipt_id.is_(None),
+                    )
+                )
             outcome.shifts_replaced += query.delete(synchronize_session=False)
     db.session.flush()
 
-    staff_cache = {s.staff_id: s for s in Staff.query.filter_by(facility_id=facility.id).all()}
+    staff_cache = {
+        s.staff_id: s for s in Staff.query.filter_by(facility_id=facility.id).all()
+    }
     existing_by_staff = {}
     if records:
-        earliest, latest = min(r["date"] for r in records), max(r["date"] for r in records)
-        for existing in Shift.query.filter(Shift.facility_id == facility.id, Shift.evidence_type == evidence_type,
-                                            Shift.date >= earliest - timedelta(days=1), Shift.date <= latest + timedelta(days=1)).all():
+        earliest, latest = (
+            min(r["date"] for r in records),
+            max(r["date"] for r in records),
+        )
+        for existing in Shift.query.filter(
+            Shift.facility_id == facility.id,
+            Shift.evidence_type == evidence_type,
+            Shift.date >= earliest - timedelta(days=1),
+            Shift.date <= latest + timedelta(days=1),
+        ).all():
             existing_by_staff.setdefault(existing.staff_id, []).append(existing)
     for rec in records:
         sid = str(rec["staff_id"]).strip()
@@ -278,21 +349,26 @@ def _import_shifts(facility, records: list[dict], outcome: ImportOutcome,
 
         staff = staff_cache.get(sid)
         if staff:
+            _guard_role_history(staff, raw_role)
             if rec.get("staff_name"):
                 staff.name = name
             # Any human decision is permanent until a human changes it. An
             # excluded worker must not become approved merely because a file
             # was imported again.
-            if staff.approved_at is None:
+            if staff.approved_at is None and raw_role:
                 staff.role = role
                 staff.source_role = raw_role or staff.source_role
                 staff.eligibility_status = status
                 staff.eligibility_reason = reason
         else:
             staff = Staff(
-                facility_id=facility.id, staff_id=sid, name=name, role=role,
+                facility_id=facility.id,
+                staff_id=sid,
+                name=name,
+                role=role,
                 source_role=raw_role,
-                eligibility_status=status, eligibility_reason=reason,
+                eligibility_status=status,
+                eligibility_reason=reason,
             )
             db.session.add(staff)
             db.session.flush()
@@ -306,21 +382,27 @@ def _import_shifts(facility, records: list[dict], outcome: ImportOutcome,
             duration = int(rec["minutes"]) - break_minutes
             start = end = time(0, 0)
 
-
         d = rec["date"]
         previous = existing_by_staff.setdefault(staff.id, [])
         for old in previous:
             if (not coverage_known or not old.coverage_known) and old.date == d:
-                raise MappingError(f"{outcome.filename}, row {rec.get('_source_row', '?')}: duration-only rows overlap a staff/date group; correct the source before importing.")
+                raise MappingError(
+                    f"{outcome.filename}, row {rec.get('_source_row', '?')}: duration-only rows overlap a staff/date group; correct the source before importing."
+                )
             if coverage_known and old.coverage_known and old.start_time != old.end_time:
                 left, right = datetime.combine(d, start), datetime.combine(d, end)
                 if right < left:
                     right += timedelta(days=1)
-                old_left, old_right = datetime.combine(old.date, old.start_time), datetime.combine(old.date, old.end_time)
+                old_left, old_right = (
+                    datetime.combine(old.date, old.start_time),
+                    datetime.combine(old.date, old.end_time),
+                )
                 if old_right < old_left:
                     old_right += timedelta(days=1)
                 if left < old_right and old_left < right:
-                    raise MappingError(f"{outcome.filename}, row {rec.get('_source_row', '?')}: duplicate or overlapping staff time across source files; nothing was imported.")
+                    raise MappingError(
+                        f"{outcome.filename}, row {rec.get('_source_row', '?')}: duplicate or overlapping staff time across source files; nothing was imported."
+                    )
         shift = Shift(
             staff_id=staff.id,
             facility_id=facility.id,
@@ -333,8 +415,11 @@ def _import_shifts(facility, records: list[dict], outcome: ImportOutcome,
             coverage_known=coverage_known,
             is_agency=bool(rec.get("is_agency", False)),
             evidence_type=evidence_type,
-            labour_cost=(float(rec["labour_cost"]) if isinstance(
-                rec.get("labour_cost"), (int, float)) else None),
+            labour_cost=(
+                float(rec["labour_cost"])
+                if isinstance(rec.get("labour_cost"), (int, float))
+                else None
+            ),
             import_receipt_id=getattr(outcome.receipt, "id", None),
             source_row=rec.get("_source_row"),
             source_file=rec.get("_source_file"),
@@ -353,7 +438,9 @@ def _import_shifts(facility, records: list[dict], outcome: ImportOutcome,
 def _import_residents(facility, records: list[dict], outcome: ImportOutcome):
     for rec in records:
         rid = str(rec["resident_id"]).strip()
-        existing = Resident.query.filter_by(facility_id=facility.id, resident_id=rid).first()
+        existing = Resident.query.filter_by(
+            facility_id=facility.id, resident_id=rid
+        ).first()
         values = dict(
             name=str(rec.get("name") or "").strip(),
             ancc_class=str(rec.get("ancc_class") or "").strip(),
@@ -381,8 +468,11 @@ def _import_resident_days(facility, records: list[dict], outcome: ImportOutcome)
             occupied=bool(rec.get("occupied", True)),
             service_type=str(rec.get("service_type") or "").strip() or None,
             leave_type=str(rec.get("leave_type") or "").strip() or None,
-            leave_day_number=(int(rec["leave_day_number"]) if isinstance(
-                rec.get("leave_day_number"), (int, float)) else None),
+            leave_day_number=(
+                int(rec["leave_day_number"])
+                if isinstance(rec.get("leave_day_number"), (int, float))
+                else None
+            ),
             ancc_class=str(rec.get("ancc_class") or "").strip() or None,
             exclusion_reason=str(rec.get("exclusion_reason") or "").strip() or None,
             import_receipt_id=getattr(outcome.receipt, "id", None),
@@ -395,9 +485,11 @@ def _import_resident_days(facility, records: list[dict], outcome: ImportOutcome)
             for key, value in values.items():
                 setattr(row, key, value)
         else:
-            db.session.add(ResidentDay(
-                facility_id=facility.id, resident_id=rid, date=day, **values
-            ))
+            db.session.add(
+                ResidentDay(
+                    facility_id=facility.id, resident_id=rid, date=day, **values
+                )
+            )
         outcome.resident_days_imported += 1
 
 
@@ -405,11 +497,18 @@ def _import_care_episodes(facility, records: list[dict], outcome: ImportOutcome)
     # Replace supplied resident/date groups, preserving unrelated history.
     receipt_id = getattr(outcome.receipt, "id", None)
     for rid, day in {(str(r["resident_id"]).strip(), r["date"]) for r in records}:
-        query = CareEpisode.query.filter_by(facility_id=facility.id, resident_id=rid, date=day)
+        query = CareEpisode.query.filter_by(
+            facility_id=facility.id, resident_id=rid, date=day
+        )
         if receipt_id:
             from sqlalchemy import or_
-            query = query.filter(or_(CareEpisode.import_receipt_id != receipt_id,
-                                     CareEpisode.import_receipt_id.is_(None)))
+
+            query = query.filter(
+                or_(
+                    CareEpisode.import_receipt_id != receipt_id,
+                    CareEpisode.import_receipt_id.is_(None),
+                )
+            )
         outcome.care_episodes_replaced += query.delete(synchronize_session=False)
 
     for rec in records:
@@ -422,23 +521,26 @@ def _import_care_episodes(facility, records: list[dict], outcome: ImportOutcome)
                 if b < a:
                     b += timedelta(days=1)
                 minutes = (b - a).total_seconds() / 60
-        db.session.add(CareEpisode(
-            facility_id=facility.id,
-            resident_id=str(rec["resident_id"]).strip(),
-            resident_name=str(rec.get("resident_name") or "").strip() or None,
-            date=rec["date"],
-            care_type=str(rec.get("care_type") or "").strip() or None,
-            care_category=str(rec.get("care_category") or "").strip() or None,
-            staff_id=str(rec.get("staff_id") or "").strip() or None,
-            staff_name=str(rec.get("staff_name") or "").strip() or None,
-            source_role=str(rec.get("source_role") or rec.get("role") or "").strip() or None,
-            start_time=rec.get("start_time"),
-            end_time=rec.get("end_time"),
-            minutes=max(int(minutes or 0), 0),
-            import_receipt_id=getattr(outcome.receipt, "id", None),
-            source_row=rec.get("_source_row"),
-            source_file=rec.get("_source_file"),
-            source_sheet=rec.get("_source_sheet"),
-            source_page=rec.get("_source_page"),
-        ))
+        db.session.add(
+            CareEpisode(
+                facility_id=facility.id,
+                resident_id=str(rec["resident_id"]).strip(),
+                resident_name=str(rec.get("resident_name") or "").strip() or None,
+                date=rec["date"],
+                care_type=str(rec.get("care_type") or "").strip() or None,
+                care_category=str(rec.get("care_category") or "").strip() or None,
+                staff_id=str(rec.get("staff_id") or "").strip() or None,
+                staff_name=str(rec.get("staff_name") or "").strip() or None,
+                source_role=str(rec.get("source_role") or rec.get("role") or "").strip()
+                or None,
+                start_time=rec.get("start_time"),
+                end_time=rec.get("end_time"),
+                minutes=max(int(minutes or 0), 0),
+                import_receipt_id=getattr(outcome.receipt, "id", None),
+                source_row=rec.get("_source_row"),
+                source_file=rec.get("_source_file"),
+                source_sheet=rec.get("_source_sheet"),
+                source_page=rec.get("_source_page"),
+            )
+        )
         outcome.care_episodes_imported += 1

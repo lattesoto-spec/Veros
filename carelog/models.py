@@ -8,6 +8,7 @@ db = SQLAlchemy()
 class Organization(db.Model):
     """A customer. Every piece of care data belongs to exactly one, and no
     query may cross the boundary — see auth.current_organization_id()."""
+
     __tablename__ = "organizations"
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.Text, nullable=False)
@@ -18,7 +19,9 @@ class Organization(db.Model):
 class User(db.Model):
     __tablename__ = "users"
     id = db.Column(db.Integer, primary_key=True)
-    organization_id = db.Column(db.Integer, db.ForeignKey("organizations.id"), nullable=False)
+    organization_id = db.Column(
+        db.Integer, db.ForeignKey("organizations.id"), nullable=False
+    )
     email = db.Column(db.Text, nullable=False, unique=True)
     name = db.Column(db.Text, nullable=False, default="")
     password_hash = db.Column(db.Text, nullable=False)
@@ -46,9 +49,12 @@ class User(db.Model):
 
 class MfaRecoveryCode(db.Model):
     """A single-use MFA recovery code. The plaintext is displayed once."""
+
     __tablename__ = "mfa_recovery_codes"
     id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
+    user_id = db.Column(
+        db.Integer, db.ForeignKey("users.id"), nullable=False, index=True
+    )
     code_prefix = db.Column(db.Text, nullable=False, index=True)
     code_hash = db.Column(db.Text, nullable=False)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
@@ -57,9 +63,12 @@ class MfaRecoveryCode(db.Model):
 
 class TrustedDevice(db.Model):
     """Server-side half of a revocable 30-day trusted-device token."""
+
     __tablename__ = "trusted_devices"
     id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
+    user_id = db.Column(
+        db.Integer, db.ForeignKey("users.id"), nullable=False, index=True
+    )
     selector = db.Column(db.Text, nullable=False, unique=True, index=True)
     token_hash = db.Column(db.Text, nullable=False)
     auth_version = db.Column(db.Integer, nullable=False)
@@ -71,6 +80,7 @@ class TrustedDevice(db.Model):
 
 class AuthRateLimit(db.Model):
     """Database-backed failed-login buckets suitable for serverless workers."""
+
     __tablename__ = "auth_rate_limits"
     key_hash = db.Column(db.String(64), primary_key=True)
     failures = db.Column(db.Integer, nullable=False, default=0)
@@ -82,11 +92,12 @@ class AuthRateLimit(db.Model):
 class AuditLog(db.Model):
     """Who did what, when. Written for security-relevant and data-changing
     actions; never deleted through the UI."""
+
     __tablename__ = "audit_logs"
     id = db.Column(db.Integer, primary_key=True)
     organization_id = db.Column(db.Integer, db.ForeignKey("organizations.id"))
     user_id = db.Column(db.Integer, db.ForeignKey("users.id"))
-    user_email = db.Column(db.Text)      # denormalised: survives user deletion
+    user_email = db.Column(db.Text)  # denormalised: survives user deletion
     action = db.Column(db.Text, nullable=False)
     entity = db.Column(db.Text)
     entity_id = db.Column(db.Text)
@@ -105,13 +116,22 @@ class Facility(db.Model):
 
     @property
     def target_history(self):
-        return FacilityTarget.query.filter_by(facility_id=self.id).order_by(FacilityTarget.quarter_start.desc()).all()
+        return (
+            FacilityTarget.query.filter_by(facility_id=self.id)
+            .order_by(FacilityTarget.quarter_start.desc())
+            .all()
+        )
 
 
 class FacilityTarget(db.Model):
     """Approved target evidence for one quarter; corrections remain audited."""
+
     __tablename__ = "facility_targets"
-    __table_args__ = (db.UniqueConstraint("facility_id", "quarter_start", name="uq_facility_target_quarter"),)
+    __table_args__ = (
+        db.UniqueConstraint(
+            "facility_id", "quarter_start", name="uq_facility_target_quarter"
+        ),
+    )
     id = db.Column(db.Integer, primary_key=True)
     facility_id = db.Column(db.Integer, db.ForeignKey("facilities.id"), nullable=False)
     quarter_start = db.Column(db.Date, nullable=False)
@@ -140,18 +160,25 @@ class ResidentDay(db.Model):
     of truth for that date.  Admission/discharge dates remain a clearly marked
     fallback for older imports.
     """
+
     __tablename__ = "resident_days"
-    __table_args__ = (db.UniqueConstraint(
-        "facility_id", "resident_id", "date", name="uq_resident_day_facility_resident_date"
-    ),)
+    __table_args__ = (
+        db.UniqueConstraint(
+            "facility_id",
+            "resident_id",
+            "date",
+            name="uq_resident_day_facility_resident_date",
+        ),
+        db.Index("ix_resident_day_facility_date", "facility_id", "date"),
+    )
     id = db.Column(db.Integer, primary_key=True)
     facility_id = db.Column(db.Integer, db.ForeignKey("facilities.id"), nullable=False)
     resident_id = db.Column(db.Text, nullable=False)
     resident_name = db.Column(db.Text)
     date = db.Column(db.Date, nullable=False)
     occupied = db.Column(db.Boolean, nullable=False, default=True)
-    service_type = db.Column(db.Text)       # permanent | respite | transition | other
-    leave_type = db.Column(db.Text)         # hospital | social | none
+    service_type = db.Column(db.Text)  # permanent | respite | transition | other
+    leave_type = db.Column(db.Text)  # hospital | social | none
     leave_day_number = db.Column(db.Integer)  # consecutive hospital-leave day
     ancc_class = db.Column(db.Text)
     exclusion_reason = db.Column(db.Text)
@@ -168,6 +195,7 @@ class CareEpisode(db.Model):
     Episodes do not feed the statutory staffing-hours numerator: overlapping
     episodes and concurrent care would otherwise double count worked time.
     """
+
     __tablename__ = "care_episodes"
     id = db.Column(db.Integer, primary_key=True)
     facility_id = db.Column(db.Integer, db.ForeignKey("facilities.id"), nullable=False)
@@ -210,14 +238,19 @@ class Staff(db.Model):
     approved_at = db.Column(db.DateTime)
 
     # Evidence of entitlement to work in the counted role.
-    employment_type = db.Column(db.Text)        # employee | agency | contractor
-    classification = db.Column(db.Text)         # award / EA classification
-    registration_number = db.Column(db.Text)    # Ahpra, for RN and EN
+    employment_type = db.Column(db.Text)  # employee | agency | contractor
+    classification = db.Column(db.Text)  # award / EA classification
+    registration_number = db.Column(db.Text)  # Ahpra, for RN and EN
     registration_expiry = db.Column(db.Date)
 
 
 class Shift(db.Model):
     __tablename__ = "shifts"
+    __table_args__ = (
+        db.Index(
+            "ix_shift_facility_stream_date", "facility_id", "evidence_type", "date"
+        ),
+    )
     id = db.Column(db.Integer, primary_key=True)
     staff_id = db.Column(db.Integer, db.ForeignKey("staff.id"), nullable=False)
     facility_id = db.Column(db.Integer, db.ForeignKey("facilities.id"), nullable=False)
@@ -248,11 +281,15 @@ class FormatMapping(db.Model):
     Once a format is learned, every future upload with the same structure is
     parsed by the stored spec with no AI call.
     """
+
     __tablename__ = "format_mappings"
     # A learned spec names the columns of a customer's roster system, so it is
     # tenant configuration rather than shared knowledge: scoped per org.
-    __table_args__ = (db.UniqueConstraint("organization_id", "fingerprint",
-                                          name="uq_format_org_fingerprint"),)
+    __table_args__ = (
+        db.UniqueConstraint(
+            "organization_id", "fingerprint", name="uq_format_org_fingerprint"
+        ),
+    )
     id = db.Column(db.Integer, primary_key=True)
     organization_id = db.Column(db.Integer, db.ForeignKey("organizations.id"))
     fingerprint = db.Column(db.Text, nullable=False)
@@ -280,22 +317,43 @@ class ImportReceipt(db.Model):
     first_shift_date = db.Column(db.Date)
     last_shift_date = db.Column(db.Date)
     # Audit trail
-    source_path = db.Column(db.Text)      # retained copy of the uploaded file(s)
-    imported_by = db.Column(db.Text)      # placeholder until user accounts exist
-    mapping_ids = db.Column(db.Text)      # FormatMapping ids used, comma-separated
+    source_path = db.Column(db.Text)  # retained copy of the uploaded file(s)
+    imported_by = db.Column(db.Text)  # placeholder until user accounts exist
+    mapping_ids = db.Column(db.Text)  # FormatMapping ids used, comma-separated
     calc_version = db.Column(db.Text)
-    summary_json = db.Column(db.Text)     # per-file outcome snapshot for the summary page
+    summary_json = db.Column(db.Text)  # per-file outcome snapshot for the summary page
 
     @property
     def active_care_rows(self):
-        return sum(model.query.filter_by(import_receipt_id=self.id).count()
-                   for model in (Shift, ResidentDay, CareEpisode))
+        return sum(
+            model.query.filter_by(import_receipt_id=self.id).count()
+            for model in (Shift, ResidentDay, CareEpisode)
+        )
 
     @property
     def record_status(self):
-        original = self.shifts_imported + self.resident_days_imported + self.care_episodes_imported
+        if any(
+            value is None
+            for value in (
+                self.shifts_imported,
+                self.resident_days_imported,
+                self.care_episodes_imported,
+            )
+        ):
+            return "Not available"
+        original = (
+            self.shifts_imported
+            + self.resident_days_imported
+            + self.care_episodes_imported
+        )
         active = self.active_care_rows
-        return "Superseded" if original and active == 0 else "Partly superseded" if active < original else "Current"
+        return (
+            "Superseded"
+            if original and active == 0
+            else "Partly superseded"
+            if active < original
+            else "Current"
+        )
 
 
 class ImportJob(db.Model):
@@ -307,15 +365,20 @@ class ImportJob(db.Model):
     survives both, and a job that dies leaves an inspectable record instead of
     vanishing.
     """
+
     __tablename__ = "import_jobs"
     id = db.Column(db.Text, primary_key=True)  # short uuid hex
     organization_id = db.Column(db.Integer, db.ForeignKey("organizations.id"))
     facility_id = db.Column(db.Integer, db.ForeignKey("facilities.id"), nullable=False)
     started_by_user_id = db.Column(db.Integer, db.ForeignKey("users.id"))
-    status = db.Column(db.Text, nullable=False, default="queued")  # queued|running|done|failed
+    status = db.Column(
+        db.Text, nullable=False, default="queued"
+    )  # queued|running|done|failed
     error = db.Column(db.Text)
     receipt_id = db.Column(db.Integer, db.ForeignKey("import_receipts.id"))
-    files_json = db.Column(db.Text, nullable=False, default="[]")  # [{filename, stage, detail}]
+    files_json = db.Column(
+        db.Text, nullable=False, default="[]"
+    )  # [{filename, stage, detail}]
     review_json = db.Column(db.Text)
     approved_at = db.Column(db.DateTime)
     reviewed_by_user_id = db.Column(db.Integer, db.ForeignKey("users.id"))
@@ -328,7 +391,10 @@ class ImportJob(db.Model):
         import json as _json
         from carelog.ingestion.review import public_review
 
-        stalled = self.status in {"queued", "running"} and (datetime.utcnow() - self.updated_at).total_seconds() > 900
+        updated = self.updated_at or self.created_at
+        stalled = self.status in {"queued", "running"} and (
+            updated is None or (datetime.utcnow() - updated).total_seconds() > 900
+        )
 
         return {
             "id": self.id,
@@ -336,10 +402,12 @@ class ImportJob(db.Model):
             "error": self.error,
             "receipt_id": self.receipt_id,
             "files": _json.loads(self.files_json or "[]"),
-            "created_at": self.created_at.isoformat(),
-            "updated_at": self.updated_at.isoformat(),
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": updated.isoformat() if updated else None,
             "approved_at": self.approved_at.isoformat() if self.approved_at else None,
-            "review": public_review(_json.loads(self.review_json)) if self.review_json else None,
+            "review": public_review(_json.loads(self.review_json))
+            if self.review_json
+            else None,
         }
 
 
@@ -350,9 +418,13 @@ class IntegrationConfig(db.Model):
     sync today is the generic scheduled-URL fetch; vendor APIs activate once
     partner credentials exist.
     """
+
     __tablename__ = "integration_configs"
-    __table_args__ = (db.UniqueConstraint("organization_id", "platform",
-                                          name="uq_integration_org_platform"),)
+    __table_args__ = (
+        db.UniqueConstraint(
+            "organization_id", "platform", name="uq_integration_org_platform"
+        ),
+    )
     id = db.Column(db.Integer, primary_key=True)
     organization_id = db.Column(db.Integer, db.ForeignKey("organizations.id"))
     platform = db.Column(db.Text, nullable=False)

@@ -33,3 +33,7 @@ docker-compose.yml
 AGENTS.md
 README.md
 requirements-dev.txt
+.github/
+tmp/
+brag-output-*/
+sample_data/live_demo/

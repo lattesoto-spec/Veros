@@ -9,11 +9,16 @@ from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 
 
-from carelog.domain.care_minutes import _minutes_between, active_residents_on, quarter_bounds
+from carelog.domain.care_minutes import (
+    _minutes_between,
+    active_residents_on,
+    quarter_bounds,
+    resident_day_is_occupied,
+)
 from carelog.domain import eligibility
-from carelog.models import CareEpisode, ResidentDay, Shift, Staff, db
+from carelog.models import CareEpisode, Resident, ResidentDay, Shift, Staff, db
 
-CALC_VERSION = "2026.11.2"
+CALC_VERSION = "2026.11.3"
 
 # Canonical reporting buckets. The mapping engine normalizes to PCW; the
 # government statement calls the bucket PCA — they are the same bucket.
@@ -27,30 +32,21 @@ def bucket_role(role: str) -> str:
 def worked_minutes(shift: Shift) -> int:
     if shift.duration_minutes is not None:
         return max(shift.duration_minutes, 0)
-    return max(_minutes_between(shift.start_time, shift.end_time) - (shift.break_minutes or 0), 0)
+    return max(
+        _minutes_between(shift.start_time, shift.end_time) - (shift.break_minutes or 0),
+        0,
+    )
 
 
 # ------------------------------------------------------------- daily stats
 
 
-def day_breakdown(facility_id: int, day: date, evidence_type: str = "worked") -> dict:
-    """Per-role direct-care minutes for one day."""
-    shifts = (
-        db.session.query(Shift, Staff)
-        .join(Staff, Shift.staff_id == Staff.id)
-        .filter(
-            Shift.facility_id == facility_id,
-            Shift.date == day,
-            Shift.is_direct_care == True,  # noqa: E712
-            Shift.evidence_type == evidence_type,
-        )
-        .all()
-    )
+def _day_from_rows(day, shifts, ledger, residents_master, evidence_type):
     roles = {"RN": 0, "EN": 0, "PCA": 0}
     agency = 0
     agency_roles = {"RN": 0, "EN": 0, "PCA": 0}
-    excluded = 0            # eligible-looking rows whose staff is not approved
-    ineligible = 0          # roles that can never count
+    excluded = 0  # eligible-looking rows whose staff is not approved
+    ineligible = 0  # roles that can never count
     for s, st in shifts:
         m = worked_minutes(s)
         if eligibility.counts_toward_care(st, day):
@@ -59,10 +55,19 @@ def day_breakdown(facility_id: int, day: date, evidence_type: str = "worked") ->
                 agency += m
                 agency_roles[bucket_role(st.role)] += m
         elif bucket_role(st.role) in eligibility.ELIGIBLE_BUCKETS:
-            excluded += m   # right role, unapproved — surfaced as an exception
+            excluded += m  # right role, unapproved — surfaced as an exception
         else:
             ineligible += m
-    residents = active_residents_on(facility_id, day)
+    residents = (
+        sum(resident_day_is_occupied(row) for row in ledger)
+        if ledger
+        else sum(
+            person.admitted_date is not None
+            and person.admitted_date <= day
+            and (person.discharged_date is None or person.discharged_date > day)
+            for person in residents_master
+        )
+    )
     # Only eligible, approved minutes reach the total.
     total = sum(roles.values())
     return {
@@ -75,7 +80,7 @@ def day_breakdown(facility_id: int, day: date, evidence_type: str = "worked") ->
         "rn_en_minutes": roles["RN"] + roles["EN"],
         "excluded_minutes": excluded,
         "ineligible_minutes": ineligible,
-        "other_minutes": ineligible,   # retained for existing report templates
+        "other_minutes": ineligible,  # retained for existing report templates
         "agency_minutes": agency,
         "agency_rn_minutes": agency_roles["RN"],
         "agency_en_minutes": agency_roles["EN"],
@@ -85,13 +90,45 @@ def day_breakdown(facility_id: int, day: date, evidence_type: str = "worked") ->
     }
 
 
-def range_breakdown(facility_id: int, start: date, end: date,
-                    evidence_type: str = "worked") -> list[dict]:
-    out = []
-    d = start
-    while d <= end:
-        out.append(day_breakdown(facility_id, d, evidence_type=evidence_type))
-        d += timedelta(days=1)
+def day_breakdown(facility_id: int, day: date, evidence_type: str = "worked") -> dict:
+    return range_breakdown(facility_id, day, day, evidence_type)[0]
+
+
+def range_breakdown(
+    facility_id: int, start: date, end: date, evidence_type: str = "worked"
+) -> list[dict]:
+    # Three bounded queries per period, independent of the number of dates.
+    shifts = (
+        db.session.query(Shift, Staff)
+        .join(Staff, Shift.staff_id == Staff.id)
+        .filter(
+            Shift.facility_id == facility_id,
+            Shift.date >= start,
+            Shift.date <= end,
+            Shift.is_direct_care.is_(True),
+            Shift.evidence_type == evidence_type,
+        )
+        .all()
+    )
+    ledger = ResidentDay.query.filter(
+        ResidentDay.facility_id == facility_id,
+        ResidentDay.date >= start,
+        ResidentDay.date <= end,
+    ).all()
+    residents = Resident.query.filter_by(facility_id=facility_id).all()
+    by_day, census = {}, {}
+    for shift, staff in shifts:
+        by_day.setdefault(shift.date, []).append((shift, staff))
+    for row in ledger:
+        census.setdefault(row.date, []).append(row)
+    out, day = [], start
+    while day <= end:
+        out.append(
+            _day_from_rows(
+                day, by_day.get(day, []), census.get(day, []), residents, evidence_type
+            )
+        )
+        day += timedelta(days=1)
     return out
 
 
@@ -102,14 +139,29 @@ def monthly_breakdown(facility_id: int, start: date, end: date) -> list[dict]:
         if r["residents"] == 0 and r["total_minutes"] == 0:
             continue
         key = (r["date"].year, r["date"].month)
-        m = months.setdefault(key, {
-            "year": key[0], "month": key[1], "days": 0, "bed_days": 0,
-            "total_minutes": 0, "rn_minutes": 0, "en_minutes": 0,
-            "pca_minutes": 0, "agency_minutes": 0,
-        })
+        m = months.setdefault(
+            key,
+            {
+                "year": key[0],
+                "month": key[1],
+                "days": 0,
+                "bed_days": 0,
+                "total_minutes": 0,
+                "rn_minutes": 0,
+                "en_minutes": 0,
+                "pca_minutes": 0,
+                "agency_minutes": 0,
+            },
+        )
         m["days"] += 1
         m["bed_days"] += r["residents"]
-        for k in ("total_minutes", "rn_minutes", "en_minutes", "pca_minutes", "agency_minutes"):
+        for k in (
+            "total_minutes",
+            "rn_minutes",
+            "en_minutes",
+            "pca_minutes",
+            "agency_minutes",
+        ):
             m[k] += r[k]
     out = []
     for key in sorted(months):
@@ -125,16 +177,30 @@ def monthly_breakdown(facility_id: int, start: date, end: date) -> list[dict]:
 # ------------------------------------------------------------- RN coverage
 
 
-def rn_coverage(facility_id: int, day: date, ignore_gap_minutes: int = 30,
-                evidence_type: str = "worked") -> dict:
+def rn_coverage(
+    facility_id: int,
+    day: date,
+    ignore_gap_minutes: int = 30,
+    evidence_type: str = "worked",
+) -> dict:
     """Continuous coverage around midnight; duration-only evidence proves no interval."""
     day_start = datetime.combine(day, time(0))
     day_end = day_start + timedelta(days=1)
-    window_start, window_end = day_start - timedelta(days=1), day_end + timedelta(days=1)
-    shifts = db.session.query(Shift, Staff).join(Staff, Shift.staff_id == Staff.id).filter(
-        Shift.facility_id == facility_id, Shift.date >= day - timedelta(days=1),
-        Shift.date <= day + timedelta(days=1), Shift.evidence_type == evidence_type,
-    ).all()
+    window_start, window_end = (
+        day_start - timedelta(days=1),
+        day_end + timedelta(days=1),
+    )
+    shifts = (
+        db.session.query(Shift, Staff)
+        .join(Staff, Shift.staff_id == Staff.id)
+        .filter(
+            Shift.facility_id == facility_id,
+            Shift.date >= day - timedelta(days=1),
+            Shift.date <= day + timedelta(days=1),
+            Shift.evidence_type == evidence_type,
+        )
+        .all()
+    )
     intervals, unknown = [], False
     for shift, staff in shifts:
         if eligibility.bucket_for(staff.role) != "RN":
@@ -150,7 +216,9 @@ def rn_coverage(facility_id: int, day: date, ignore_gap_minutes: int = 30,
         # Effective dates and registration apply on each calendar date covered.
         cursor = start
         while cursor < end:
-            boundary = min(end, datetime.combine(cursor.date() + timedelta(days=1), time(0)))
+            boundary = min(
+                end, datetime.combine(cursor.date() + timedelta(days=1), time(0))
+            )
             if eligibility.counts_toward_care(staff, cursor.date()):
                 intervals.append((max(cursor, window_start), min(boundary, window_end)))
             cursor = boundary
@@ -167,26 +235,43 @@ def rn_coverage(facility_id: int, day: date, ignore_gap_minutes: int = 30,
     for start, end in merged:
         left, right = max(start, day_start), min(end, day_end)
         if right > left:
-            lo, hi = int((left - day_start).total_seconds() / 60), int((right - day_start).total_seconds() / 60)
+            lo, hi = (
+                int((left - day_start).total_seconds() / 60),
+                int((right - day_start).total_seconds() / 60),
+            )
             covered += hi - lo
-            timeline.append({"start_minute": lo, "end_minute": hi,
-                             "left_pct": round(lo / 1440 * 100, 4),
-                             "width_pct": round((hi - lo) / 1440 * 100, 4)})
+            timeline.append(
+                {
+                    "start_minute": lo,
+                    "end_minute": hi,
+                    "left_pct": round(lo / 1440 * 100, 4),
+                    "width_pct": round((hi - lo) / 1440 * 100, 4),
+                }
+            )
     gaps = []
     cursor = window_start
     for start, end in [*merged, (window_end, window_end)]:
         left, right = max(cursor, day_start), min(start, day_end)
         if right > left:
             duration = int((start - cursor).total_seconds() / 60)
-            gaps.append({"start_minute": int((left - day_start).total_seconds() / 60),
-                         "end_minute": int((right - day_start).total_seconds() / 60),
-                         "minutes": int((right - left).total_seconds() / 60),
-                         "reportable": duration >= ignore_gap_minutes})
+            gaps.append(
+                {
+                    "start_minute": int((left - day_start).total_seconds() / 60),
+                    "end_minute": int((right - day_start).total_seconds() / 60),
+                    "minutes": int((right - left).total_seconds() / 60),
+                    "reportable": duration >= ignore_gap_minutes,
+                }
+            )
         cursor = max(cursor, end)
-    return {"covered_minutes": covered, "coverage_pct": round(covered / 1440 * 100, 1),
-            "full_coverage": not unknown and not any(g["reportable"] for g in gaps),
-            "coverage_known": not unknown, "gaps": len(gaps), "timeline": timeline,
-            "gap_intervals": gaps}
+    return {
+        "covered_minutes": covered,
+        "coverage_pct": round(covered / 1440 * 100, 1),
+        "full_coverage": not unknown and not any(g["reportable"] for g in gaps),
+        "coverage_known": not unknown,
+        "gaps": len(gaps),
+        "timeline": timeline,
+        "gap_intervals": gaps,
+    }
 
 
 # ------------------------------------------------------------- gap detection
@@ -197,6 +282,7 @@ def detect_gaps(facility, today: date) -> list[dict]:
     alerts = []
     fid = facility.id
     from carelog.domain.targets import target_for_quarter
+
     approved = target_for_quarter(facility, today)
     care_target = approved.ancc_target if approved else 0
     rn_target = approved.rn_target if approved else 0
@@ -205,78 +291,127 @@ def detect_gaps(facility, today: date) -> list[dict]:
     fc = forecast_quarter(facility, today)
     if fc and fc["qtd_days"] > 0:
         if fc["qtd_avg"] < care_target:
-            alerts.append({
-                "severity": "high",
-                "message": (f"Facility is below its AN-ACC target: averaging "
-                            f"{fc['qtd_avg']:.0f} of {care_target:.0f} "
-                            f"mins/resident/day this quarter."),
-            })
+            alerts.append(
+                {
+                    "severity": "high",
+                    "message": (
+                        f"Facility is below its AN-ACC target: averaging "
+                        f"{fc['qtd_avg']:.0f} of {care_target:.0f} "
+                        f"mins/resident/day this quarter."
+                    ),
+                }
+            )
         elif fc["projected_avg"] < care_target:
-            when = (f"in {fc['days_until_breach']} day(s)" if fc["days_until_breach"]
-                    else "by quarter end")
-            alerts.append({
-                "severity": "high",
-                "message": (f"Predicted breach: at current staffing the quarter average "
-                            f"falls below target {when} "
-                            f"(projected {fc['projected_avg']:.0f} vs target "
-                            f"{care_target:.0f})."),
-            })
+            when = (
+                f"in {fc['days_until_breach']} day(s)"
+                if fc["days_until_breach"]
+                else "by quarter end"
+            )
+            alerts.append(
+                {
+                    "severity": "high",
+                    "message": (
+                        f"Predicted breach: at current staffing the quarter average "
+                        f"falls below target {when} "
+                        f"(projected {fc['projected_avg']:.0f} vs target "
+                        f"{care_target:.0f})."
+                    ),
+                }
+            )
         if fc["qtd_rn_avg"] < rn_target * RN_ONLY_FRACTION:
-            alerts.append({
-                "severity": "high",
-                "message": (f"RN minutes below target: averaging {fc['qtd_rn_avg']:.0f} "
-                            f"of {rn_target * RN_ONLY_FRACTION:.1f} required "
-                            f"RN-only mins/bed-day this quarter."),
-            })
+            alerts.append(
+                {
+                    "severity": "high",
+                    "message": (
+                        f"RN minutes below target: averaging {fc['qtd_rn_avg']:.0f} "
+                        f"of {rn_target * RN_ONLY_FRACTION:.1f} required "
+                        f"RN-only mins/bed-day this quarter."
+                    ),
+                }
+            )
         if fc["qtd_rn_en_avg"] < rn_target:
-            alerts.append({
-                "severity": "high",
-                "message": (f"RN + EN minutes below target: averaging "
-                            f"{fc['qtd_rn_en_avg']:.0f} of {rn_target:.0f} "
-                            f"mins/bed-day this quarter."),
-            })
+            alerts.append(
+                {
+                    "severity": "high",
+                    "message": (
+                        f"RN + EN minutes below target: averaging "
+                        f"{fc['qtd_rn_en_avg']:.0f} of {rn_target:.0f} "
+                        f"mins/bed-day this quarter."
+                    ),
+                }
+            )
 
     # Tomorrow's rostered RN shortfall (only if the roster extends that far)
     tomorrow = today + timedelta(days=1)
-    has_future = db.session.query(Shift.id).filter(
-        Shift.facility_id == fid, Shift.date >= tomorrow
-    ).first() is not None
+    has_future = (
+        db.session.query(Shift.id)
+        .filter(Shift.facility_id == fid, Shift.date >= tomorrow)
+        .first()
+        is not None
+    )
     if has_future and approved:
-        has_roster = db.session.query(Shift.id).filter_by(
-            facility_id=fid, date=tomorrow, evidence_type="rostered"
-        ).first() is not None
-        b = day_breakdown(fid, tomorrow, evidence_type="rostered" if has_roster else "worked")
+        has_roster = (
+            db.session.query(Shift.id)
+            .filter_by(facility_id=fid, date=tomorrow, evidence_type="rostered")
+            .first()
+            is not None
+        )
+        b = day_breakdown(
+            fid, tomorrow, evidence_type="rostered" if has_roster else "worked"
+        )
         residents = b["residents"] or active_residents_on(fid, today)
         rn_needed = rn_target * RN_ONLY_FRACTION * residents
         if b["rn_minutes"] < rn_needed:
-            alerts.append({
-                "severity": "high",
-                "message": (f"Roster on {tomorrow.isoformat()} is short {rn_needed - b['rn_minutes']:.0f} RN "
-                            f"minutes ({b['rn_minutes']:.0f} rostered vs "
-                            f"{rn_needed:.0f} needed for {residents} residents)."),
-            })
+            alerts.append(
+                {
+                    "severity": "high",
+                    "message": (
+                        f"Roster on {tomorrow.isoformat()} is short {rn_needed - b['rn_minutes']:.0f} RN "
+                        f"minutes ({b['rn_minutes']:.0f} rostered vs "
+                        f"{rn_needed:.0f} needed for {residents} residents)."
+                    ),
+                }
+            )
         care_needed = care_target * residents
         if b["total_minutes"] < care_needed:
-            alerts.append({
-                "severity": "medium",
-                "message": (f"Roster on {tomorrow.isoformat()} is {care_needed - b['total_minutes']:.0f} "
-                            f"care minutes below target "
-                            f"({b['total_minutes']:.0f} of {care_needed:.0f})."),
-            })
+            alerts.append(
+                {
+                    "severity": "medium",
+                    "message": (
+                        f"Roster on {tomorrow.isoformat()} is {care_needed - b['total_minutes']:.0f} "
+                        f"care minutes below target "
+                        f"({b['total_minutes']:.0f} of {care_needed:.0f})."
+                    ),
+                }
+            )
 
     # 24/7 RN coverage today
     cov = rn_coverage(fid, today)
     if not cov["full_coverage"] and cov["covered_minutes"] > 0:
-        alerts.append({
-            "severity": "medium",
-            "message": (f"RN coverage on {today.isoformat()} is {cov['coverage_pct']}% "
-                        f"({1440 - cov['covered_minutes']} uncovered minutes)."),
-        })
+        alerts.append(
+            {
+                "severity": "medium",
+                "message": (
+                    f"RN coverage on {today.isoformat()} is {cov['coverage_pct']}% "
+                    f"({1440 - cov['covered_minutes']} uncovered minutes)."
+                ),
+            }
+        )
     elif cov["covered_minutes"] == 0:
-        alerts.append({"severity": "high", "message": f"No clocked RN coverage is evidenced on {today.isoformat()}."})
+        alerts.append(
+            {
+                "severity": "high",
+                "message": f"No clocked RN coverage is evidenced on {today.isoformat()}.",
+            }
+        )
 
     if not alerts:
-        alerts.append({"severity": "info", "message": f"No additional risks detected by the available checks through {today.isoformat()}; review evidence limitations."})
+        alerts.append(
+            {
+                "severity": "info",
+                "message": f"No additional risks detected by the available checks through {today.isoformat()}; review evidence limitations.",
+            }
+        )
     return alerts
 
 
@@ -285,8 +420,11 @@ def detect_gaps(facility, today: date) -> list[dict]:
 
 def _trailing_baseline(facility_id: int, today: date, days: int = 14) -> dict | None:
     """Average daily totals over the trailing window — the 'typical day'."""
-    rows = [r for r in range_breakdown(facility_id, today - timedelta(days=days - 1), today)
-            if r["residents"] > 0 and r["total_minutes"] > 0]
+    rows = [
+        r
+        for r in range_breakdown(facility_id, today - timedelta(days=days - 1), today)
+        if r["residents"] > 0 and r["total_minutes"] > 0
+    ]
     if not rows:
         return None
     n = len(rows)
@@ -301,20 +439,24 @@ def _trailing_baseline(facility_id: int, today: date, days: int = 14) -> dict | 
     }
 
 
-def forecast_quarter(facility, today: date, adjustments: dict | None = None) -> dict | None:
+def forecast_quarter(
+    facility, today: date, adjustments: dict | None = None
+) -> dict | None:
     """Project the quarter-end average. `adjustments` (scenario planning):
-      rn_shifts_removed: int   — 8h RN shifts removed per future day
-      agency_removed: bool     — all agency minutes disappear from future days
-      occupancy_delta: int     — residents added (+) or discharged (−) go-forward
+    rn_shifts_removed: int   — 8h RN shifts removed per future day
+    agency_removed: bool     — all agency minutes disappear from future days
+    occupancy_delta: int     — residents added (+) or discharged (−) go-forward
     """
     q_start, _ = quarter_bounds(today)
     from carelog.domain.targets import target_for_quarter
+
     configured = target_for_quarter(facility, today)
     if configured is None:
         return None
     q_end = _calendar_quarter_end(today)
-    qtd = [r for r in range_breakdown(facility.id, q_start, today)
-           if r["residents"] > 0]
+    qtd = [
+        r for r in range_breakdown(facility.id, q_start, today) if r["residents"] > 0
+    ]
     baseline = _trailing_baseline(facility.id, today)
     if not qtd or not baseline:
         return None
@@ -369,9 +511,12 @@ def forecast_quarter(facility, today: date, adjustments: dict | None = None) -> 
 
     return {
         "calc_version": CALC_VERSION,
-        "q_start": q_start, "q_end": q_end,
-        "qtd_days": n, "days_remaining": m,
-        "qtd_avg": round(qtd_avg, 1), "qtd_rn_avg": round(qtd_rn_avg, 1),
+        "q_start": q_start,
+        "q_end": q_end,
+        "qtd_days": n,
+        "days_remaining": m,
+        "qtd_avg": round(qtd_avg, 1),
+        "qtd_rn_avg": round(qtd_rn_avg, 1),
         "qtd_rn_en_avg": round(qtd_rn_en_avg, 1),
         "future_per_resident": round(fut_per_res, 1),
         "future_rn_per_resident": round(fut_rn_per_res, 1),
@@ -400,6 +545,7 @@ def compliance_pct(facility, today: date) -> float | None:
     """QTD average as a percentage of target — the headline dashboard number."""
     fc = forecast_quarter(facility, today)
     from carelog.domain.targets import target_for_quarter
+
     target = target_for_quarter(facility, today)
     if not fc or not target or not target.ancc_target:
         return None
@@ -409,8 +555,8 @@ def compliance_pct(facility, today: date) -> float | None:
 # ------------------------------------------------- legislated quarterly tests
 
 # A mainstream residential home must pass all three each quarter.
-RN_ONLY_FRACTION = 0.90      # RN-only minutes vs the RN target
-RN_PLUS_EN_FRACTION = 1.00   # RN + EN minutes vs the RN target
+RN_ONLY_FRACTION = 0.90  # RN-only minutes vs the RN target
+RN_PLUS_EN_FRACTION = 1.00  # RN + EN minutes vs the RN target
 
 
 def quarter_totals(facility_id: int, start: date, end: date) -> dict:
@@ -453,16 +599,22 @@ def quarterly_tests(facility, start: date, end: date) -> dict:
     t = quarter_totals(facility.id, start, end)
     bd = t["bed_days"]
     from carelog.domain.targets import target_for_quarter
+
     configured = target_for_quarter(facility, start)
     care_target = configured.ancc_target if configured else 0
     rn_target = configured.rn_target if configured else 0
 
     from carelog.domain.care_minutes import denominator_issues
+
     limitations = denominator_issues(facility.id, start, end)
     if configured is None:
-        limitations.append("No approved target evidence is recorded for this quarter. Configure the quarter and source in Settings.")
+        limitations.append(
+            "No approved target evidence is recorded for this quarter. Configure the quarter and source in Settings."
+        )
     if quarter_bounds(start)[0] != quarter_bounds(end)[0]:
-        limitations.append("This date range crosses quarters; assess each quarter against its own approved targets.")
+        limitations.append(
+            "This date range crosses quarters; assess each quarter against its own approved targets."
+        )
     if not bd:
         limitations.append("No occupied bed days are available.")
 
@@ -476,22 +628,36 @@ def quarterly_tests(facility, start: date, end: date) -> dict:
             "achieved": float(round(achieved_exact, 1)),
             "target": float(round(target, 1)),
             "basis": basis,
-            "passed": minutes >= target * bd if target > 0 and bd and not limitations else None,
+            "passed": minutes >= target * bd
+            if target > 0 and bd and not limitations
+            else None,
             "shortfall": float(round(shortfall / bd, 3)) if bd else None,
             "shortfall_minutes": float(shortfall),
             "provisional": bool(limitations),
         }
 
     tests = [
-        result("total_care", "Total care minutes",
-               t["total_minutes"], care_target,
-               "RN + EN + eligible PCW/AIN minutes per occupied bed day"),
-        result("rn_only", "Registered nurse minutes",
-               t["rn_minutes"], Decimal(str(rn_target)) * Decimal("0.9"),
-               f"RN-only minutes per bed day, against {RN_ONLY_FRACTION:.0%} of the RN target"),
-        result("rn_plus_en", "Registered + enrolled nurse minutes",
-               t["rn_en_minutes"], rn_target,
-               f"RN + EN minutes per bed day, against {RN_PLUS_EN_FRACTION:.0%} of the RN target"),
+        result(
+            "total_care",
+            "Total care minutes",
+            t["total_minutes"],
+            care_target,
+            "RN + EN + eligible PCW/AIN minutes per occupied bed day",
+        ),
+        result(
+            "rn_only",
+            "Registered nurse minutes",
+            t["rn_minutes"],
+            Decimal(str(rn_target)) * Decimal("0.9"),
+            f"RN-only minutes per bed day, against {RN_ONLY_FRACTION:.0%} of the RN target",
+        ),
+        result(
+            "rn_plus_en",
+            "Registered + enrolled nurse minutes",
+            t["rn_en_minutes"],
+            rn_target,
+            f"RN + EN minutes per bed day, against {RN_PLUS_EN_FRACTION:.0%} of the RN target",
+        ),
     ]
     decided = [x for x in tests if x["passed"] is not None]
     from carelog.domain.targets import reconcile_configured_targets
@@ -513,7 +679,9 @@ def evidence_summary(facility_id: int, start: date, end: date) -> dict:
     shift_rows = (
         db.session.query(Shift, Staff)
         .join(Staff, Shift.staff_id == Staff.id)
-        .filter(Shift.facility_id == facility_id, Shift.date >= start, Shift.date <= end)
+        .filter(
+            Shift.facility_id == facility_id, Shift.date >= start, Shift.date <= end
+        )
         .all()
     )
     by_type = {"worked": 0, "rostered": 0, "unverified": 0}
@@ -540,13 +708,21 @@ def evidence_summary(facility_id: int, start: date, end: date) -> dict:
     )
     ledger_rows = ledger_query.count()
     from carelog.domain.care_minutes import denominator_issues, resident_day_problem
-    ledger_unverified = sum(bool(resident_day_problem(row)) for row in ledger_query.all())
+
+    ledger_unverified = sum(
+        bool(resident_day_problem(row)) for row in ledger_query.all()
+    )
     limitations = denominator_issues(facility_id, start, end)
-    ledger_dates = db.session.query(ResidentDay.date).filter(
-        ResidentDay.facility_id == facility_id,
-        ResidentDay.date >= start,
-        ResidentDay.date <= end,
-    ).distinct().count()
+    ledger_dates = (
+        db.session.query(ResidentDay.date)
+        .filter(
+            ResidentDay.facility_id == facility_id,
+            ResidentDay.date >= start,
+            ResidentDay.date <= end,
+        )
+        .distinct()
+        .count()
+    )
     expected_dates = (end - start).days + 1
     worked = by_type.get("worked", 0)
     return {
@@ -564,6 +740,7 @@ def evidence_summary(facility_id: int, start: date, end: date) -> dict:
         "resident_day_dates": ledger_dates,
         "resident_day_expected_dates": expected_dates,
         "uses_resident_day_ledger": ledger_rows > 0,
-        "resident_day_ledger_complete": ledger_dates == expected_dates and not limitations,
+        "resident_day_ledger_complete": ledger_dates == expected_dates
+        and not limitations,
         "denominator_issues": limitations,
     }

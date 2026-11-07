@@ -34,3 +34,12 @@ Original source files remain retained on failure. Changes to care data and recei
 - A tenant/facility-scoped, paginated worked-time record view exposes counted/withheld treatment and file/sheet/page/row provenance. Staff filters cannot access foreign records.
 - Managers can resolve unverified receipt evidence with an audited verification basis, and reverse it to unverified. Original roster/mixed origins cannot be laundered into actual-worked evidence; target-stream conflicts require a new replacement review.
 - Provider decision history includes evidence-class changes. Date filters and exports reject invalid/reversed ranges and bound periods to 366 days.
+
+## Guided review and operational clarity
+
+- Dashboard includes a live evidence checklist and a worked-data-age warning. Future/unverified/rostered dates cannot present as the latest included actual-worked date.
+- Eligibility exposes per-person withheld minutes and source links. Bulk decisions validate all selected staff before a single atomic commit; approvals require effective dates and valid existing role/registration evidence.
+- The eligibility authority refuses explicitly ineligible source roles even if an approval/direct-care flag is present. Importing a changed source role cannot silently reclassify stored history. Use an effective eligibility review or distinct employment-role source identifiers. `CALC_VERSION` is `2026.11.3`.
+- Period calculations use bounded batched reads rather than daily database loops; new non-destructive facility/date indexes support them. A PostgreSQL regression measures stable query counts as the period doubles.
+- Reports include target quarter/source, exact-comparison wording and overnight attribution. PDF text and spreadsheet references remain literal provider text. RN screens show the actual calculation basis rather than unsupported approval/export placeholders.
+- Blank counting flags, malformed facility IDs and invalid reporting months are visibly rejected.
