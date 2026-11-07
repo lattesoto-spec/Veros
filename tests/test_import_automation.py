@@ -163,6 +163,14 @@ def test_realistic_workbook_imports_credentials_and_countable_rn_minutes(app, fa
         )
         db.session.commit()
 
+        # Award-level modifiers now require an explicit human eligibility
+        # decision. Verify that gate before checking the same worked totals.
+        for member in Staff.query.filter_by(facility_id=facility.id).all():
+            if member.source_role in ("Registered Nurse – Level 1", "Personal Care Worker Grade 2"):
+                assert member.eligibility_status == "pending"
+                member.eligibility_status = "approved"
+                member.eligibility_reason = "Synthetic test: reviewer confirmed direct-care duties"
+        db.session.commit()
         rn = Staff.query.filter_by(facility_id=facility.id, role="RN").first()
         assert rn.registration_number
         assert rn.registration_expiry >= last_day

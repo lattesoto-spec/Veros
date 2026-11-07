@@ -18,7 +18,7 @@ from carelog.domain.care_minutes import (
 from carelog.domain import eligibility
 from carelog.models import CareEpisode, Resident, ResidentDay, Shift, Staff, db
 
-CALC_VERSION = "2026.11.4"
+CALC_VERSION = "2026.11.5"
 
 # Canonical reporting buckets. The mapping engine normalizes to PCW; the
 # government statement calls the bucket PCA — they are the same bucket.
@@ -54,8 +54,11 @@ def _day_from_rows(day, shifts, ledger, residents_master, evidence_type):
             if s.is_agency:
                 agency += m
                 agency_roles[bucket_role(st.role)] += m
-        elif bucket_role(st.role) in eligibility.ELIGIBLE_BUCKETS:
-            excluded += m  # right role, unapproved — surfaced as an exception
+        elif st.eligibility_status != eligibility.EXCLUDED and (
+            st.eligibility_status == eligibility.PENDING
+            or bucket_role(st.role) in eligibility.ELIGIBLE_BUCKETS
+        ):
+            excluded += m  # unresolved title, dates or credentials — visibly withheld
         else:
             ineligible += m
     residents = (
@@ -289,8 +292,10 @@ def detect_gaps(facility, today: date) -> list[dict]:
 
     # Quarter-to-date position
     fc = forecast_quarter(facility, today)
-    if fc and fc["qtd_days"] > 0:
-        if fc["qtd_avg"] < care_target:
+    if fc and fc["qtd_days"] > 0 and approved:
+        exact = quarter_totals(fid, quarter_bounds(today)[0], today)
+        bd = exact["bed_days"]
+        if Decimal(exact["total_minutes"]) < Decimal(str(care_target)) * bd:
             alerts.append(
                 {
                     "severity": "high",
@@ -318,7 +323,7 @@ def detect_gaps(facility, today: date) -> list[dict]:
                     ),
                 }
             )
-        if fc["qtd_rn_avg"] < rn_target * RN_ONLY_FRACTION:
+        if Decimal(exact["rn_minutes"]) < Decimal(str(rn_target)) * Decimal("0.9") * bd:
             alerts.append(
                 {
                     "severity": "high",
@@ -329,7 +334,7 @@ def detect_gaps(facility, today: date) -> list[dict]:
                     ),
                 }
             )
-        if fc["qtd_rn_en_avg"] < rn_target:
+        if Decimal(exact["rn_en_minutes"]) < Decimal(str(rn_target)) * bd:
             alerts.append(
                 {
                     "severity": "high",
@@ -423,7 +428,7 @@ def _trailing_baseline(facility_id: int, today: date, days: int = 14) -> dict | 
     rows = [
         r
         for r in range_breakdown(facility_id, today - timedelta(days=days - 1), today)
-        if r["residents"] > 0 and r["total_minutes"] > 0
+        if r["residents"] > 0
     ]
     if not rows:
         return None
@@ -582,6 +587,7 @@ def quarter_totals(facility_id: int, start: date, end: date) -> dict:
         "excluded_minutes": sum(r["excluded_minutes"] for r in rows),
         "ineligible_minutes": sum(r["ineligible_minutes"] for r in rows),
         "agency_minutes": sum(r["agency_minutes"] for r in rows),
+        "zero_bed_day_worked_dates": [r["date"].isoformat() for r in rows if r["residents"] == 0 and r["total_minutes"] > 0],
     }
 
 
@@ -618,6 +624,25 @@ def quarterly_tests(facility, start: date, end: date) -> dict:
     if not bd:
         limitations.append("No occupied bed days are available.")
 
+    if t["excluded_minutes"]:
+        limitations.append(f"{t['excluded_minutes']} worked minutes are withheld pending eligibility, effective-date or registration review.")
+    if t["zero_bed_day_worked_dates"]:
+        limitations.append("Eligible worked minutes occur on zero-occupied-bed-day dates: " + ", ".join(t["zero_bed_day_worked_dates"]) + ". Reconcile their allocation before a verdict.")
+    worked_dates = {row[0] for row in db.session.query(Shift.date).filter(
+        Shift.facility_id == facility.id, Shift.evidence_type == "worked",
+        Shift.date >= start, Shift.date <= end,
+    ).distinct().all()}
+    missing_dates = [start + timedelta(days=i) for i in range((end - start).days + 1)
+                     if start + timedelta(days=i) not in worked_dates]
+    if missing_dates:
+        limitations.append("No worked-time evidence on: " + ", ".join(d.isoformat() for d in missing_dates) + ". Verify source completeness; absence is not proof of zero time.")
+    complete_quarter = start == quarter_bounds(start)[0] and end == _calendar_quarter_end(start)
+    # Threshold comparisons remain useful during a quarter, but are not a
+    # completed quarterly verdict. Evidence limitations withhold both.
+    evidence_clear = not limitations
+    if not complete_quarter:
+        limitations.append("Quarter to date / partial period: a definitive quarterly verdict requires a complete calendar quarter.")
+
     def result(key, label, minutes, target, basis):
         target = Decimal(str(target))
         achieved_exact = Decimal(minutes) / Decimal(bd) if bd else Decimal(0)
@@ -626,13 +651,14 @@ def quarterly_tests(facility, start: date, end: date) -> dict:
             "key": key,
             "label": label,
             "achieved": float(round(achieved_exact, 1)),
-            "target": float(round(target, 1)),
+            "target": float(target) if configured else None,
             "basis": basis,
             "passed": minutes >= target * bd
             if target > 0 and bd and not limitations
             else None,
-            "shortfall": float(round(shortfall / bd, 3)) if bd else None,
-            "shortfall_minutes": float(shortfall),
+            "on_track": minutes >= target * bd if target > 0 and bd and evidence_clear else None,
+            "shortfall": float(round(shortfall / bd, 3)) if bd and configured else None,
+            "shortfall_minutes": float(shortfall) if configured else None,
             "provisional": bool(limitations),
         }
 
@@ -668,6 +694,10 @@ def quarterly_tests(facility, start: date, end: date) -> dict:
         "passed": all(x["passed"] for x in decided) if len(decided) == 3 else None,
         "failed": [x for x in decided if not x["passed"]],
         "calc_version": CALC_VERSION,
+        "complete_quarter": complete_quarter,
+        "period_label": "Quarter" if complete_quarter else "Quarter to date / partial period",
+        "on_track": all(x["on_track"] for x in tests) if all(x["on_track"] is not None for x in tests) else None,
+        "missing_worked_dates": [d.isoformat() for d in missing_dates],
         "limitations": limitations,
         "provisional": bool(limitations),
         "target_reconciliation": reconcile_configured_targets(facility, start),
@@ -685,6 +715,7 @@ def evidence_summary(facility_id: int, start: date, end: date) -> dict:
         .all()
     )
     by_type = {"worked": 0, "rostered": 0, "unverified": 0}
+    ineligible_by_type = {"worked": 0, "rostered": 0, "unverified": 0}
     withheld_by_type = {"worked": 0, "rostered": 0, "unverified": 0}
     for shift, staff in shift_rows:
         kind = shift.evidence_type or "unverified"
@@ -692,8 +723,12 @@ def evidence_summary(facility_id: int, start: date, end: date) -> dict:
         if shift.is_direct_care and eligibility.counts_toward_care(staff, shift.date):
             by_type[kind] += worked_minutes(shift)
         elif shift.is_direct_care:
-            withheld_by_type.setdefault(kind, 0)
-            withheld_by_type[kind] += worked_minutes(shift)
+            unresolved = staff.eligibility_status != eligibility.EXCLUDED and (
+                staff.eligibility_status == eligibility.PENDING or bucket_role(staff.role) in eligibility.ELIGIBLE_BUCKETS
+            )
+            destination = withheld_by_type if unresolved else ineligible_by_type
+            destination.setdefault(kind, 0)
+            destination[kind] += worked_minutes(shift)
 
     episodes = CareEpisode.query.filter(
         CareEpisode.facility_id == facility_id,
@@ -730,6 +765,7 @@ def evidence_summary(facility_id: int, start: date, end: date) -> dict:
         "rostered_minutes": by_type.get("rostered", 0),
         "unverified_minutes": by_type.get("unverified", 0),
         "worked_withheld_minutes": withheld_by_type.get("worked", 0),
+        "worked_ineligible_minutes": ineligible_by_type.get("worked", 0),
         "rostered_withheld_minutes": withheld_by_type.get("rostered", 0),
         "unverified_withheld_minutes": withheld_by_type.get("unverified", 0),
         "delivered_minutes": delivered,

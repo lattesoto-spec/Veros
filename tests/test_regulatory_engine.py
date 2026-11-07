@@ -108,7 +108,8 @@ def test_weighted_quarter_result_not_mean_of_daily_ratios(app, facility):
 
         result = quarterly_tests(facility, d1, d2)
         assert result["tests"][0]["achieved"] == 225.0
-        assert result["tests"][0]["passed"] is True
+        assert result["tests"][0]["on_track"] is True
+        assert result["passed"] is None
 
 
 def test_forecast_qtd_uses_weighted_numerator_and_bed_days(app, facility):

@@ -257,9 +257,12 @@ def dashboard():
         facility.id, q_start, q_end, facility.ancc_target, facility.rn_target
     )
     q_avg = average(q_rows)
-    q_gap = round(q_avg["care_per_resident"] - facility.ancc_target, 1)
+    from carelog.domain.targets import target_for_quarter
+
+    approved_target = target_for_quarter(facility, today)
+    q_gap = round(q_avg["care_per_resident"] - approved_target.ancc_target, 1) if approved_target else None
     q_gap_pct = (
-        round((q_gap / facility.ancc_target) * 100, 1) if facility.ancc_target else 0
+        round((q_gap / approved_target.ancc_target) * 100, 1) if approved_target else None
     )
 
     from carelog.domain.targets import target_for_quarter

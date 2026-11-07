@@ -41,8 +41,6 @@ DEFINITIVE = {
         "rn",
         "cns",
         "cnc",
-        "cnm",
-        "nurse unit manager",
     ),
     "EN": ("enrolled nurse", "endorsed enrolled nurse", "en", "een"),
     "PCA": (
@@ -115,7 +113,7 @@ def classify(raw_role: str) -> tuple[str, str, str]:
     not resolve to an eligible category. Callers must not count anything whose
     status is not APPROVED.
     """
-    text = (raw_role or "").strip().lower()
+    text = " ".join((raw_role or "").strip().lower().split())
     if not text:
         return "OTHER", PENDING, "no role recorded"
     if re.search(r"\b(non|not|no)\W+(rn|en|nurse|care)\b", text) or any(
@@ -129,10 +127,8 @@ def classify(raw_role: str) -> tuple[str, str, str]:
             return "OTHER", EXCLUDED, f"not a direct-care role ({term})"
 
     for bucket, terms in DEFINITIVE.items():
-        tokens = set(re.findall(r"[a-z]+", text))
-        for term in terms:
-            if (" " in term and term in text) or (" " not in term and term in tokens):
-                return bucket, APPROVED, f"matched {term!r}"
+        if text in terms:
+            return bucket, APPROVED, f"exact title {text!r}"
 
     # Broad words suggest care work but are shared with ineligible titles, so
     # they need a human decision rather than an assumption.

@@ -178,7 +178,8 @@ def ingest_file(
     for r in results:
         if r.kind == "shifts":
             sheet = next(s for s in mapped_sheets if s.name == r.sheet)
-            auto_type, basis = classify_shift_evidence(filename, sheet)
+            target = next(t for t in spec["targets"] if t["kind"] == "shifts" and t["sheet"] == r.sheet)
+            auto_type, basis = classify_shift_evidence(filename, sheet, target)
             if evidence_type in ("worked", "rostered", "unverified"):
                 auto_type, basis = evidence_type, "server-side evidence override"
             r.evidence_type = auto_type
@@ -457,6 +458,18 @@ def _import_residents(facility, records: list[dict], outcome: ImportOutcome):
 
 
 def _import_resident_days(facility, records: list[dict], outcome: ImportOutcome):
+    # Validate the entire batch before any writes. Never resolve conflicting
+    # census identities by order of appearance or Python truthiness.
+    seen = set()
+    for rec in records:
+        key = (str(rec["resident_id"]).strip(), rec["date"])
+        if key in seen:
+            raise MappingError(f"Duplicate resident-day {key[0]} on {key[1]}; correct the source.")
+        seen.add(key)
+        if type(rec.get("occupied")) is not bool:
+            raise MappingError(f"Resident-day {key[0]} on {key[1]} requires an explicit boolean occupied value.")
+        if rec["occupied"] and str(rec.get("exclusion_reason") or "").strip():
+            raise MappingError(f"Resident-day {key[0]} on {key[1]} is occupied but has an exclusion reason; reconcile the source.")
     for rec in records:
         rid = str(rec["resident_id"]).strip()
         day = rec["date"]
@@ -465,7 +478,7 @@ def _import_resident_days(facility, records: list[dict], outcome: ImportOutcome)
         ).first()
         values = dict(
             resident_name=str(rec.get("resident_name") or "").strip() or None,
-            occupied=bool(rec.get("occupied", True)),
+            occupied=rec["occupied"],
             service_type=str(rec.get("service_type") or "").strip() or None,
             leave_type=str(rec.get("leave_type") or "").strip() or None,
             leave_day_number=(

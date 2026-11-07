@@ -54,7 +54,8 @@ def test_all_three_verdicts_compare_exact_minutes(
         )
         db.session.commit()
         test = quarterly_tests(facility, day, day)["tests"][index]
-        assert test["passed"] is (delta >= 0)
+        assert test["on_track"] is (delta >= 0)
+        assert test["passed"] is None
         assert test["shortfall_minutes"] == max(-delta, 0)
 
 
@@ -82,7 +83,8 @@ def test_display_rounding_cannot_erase_a_shortfall(app, facility):
         db.session.commit()
         result = quarterly_tests(facility, day, day)["tests"][0]
         assert result["achieved"] == 200
-        assert result["passed"] is False
+        assert result["on_track"] is False
+        assert result["passed"] is None
         assert result["shortfall_minutes"] == 1
 
 

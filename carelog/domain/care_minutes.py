@@ -60,6 +60,8 @@ def resident_day_is_occupied(row: ResidentDay) -> bool:
 
 
 def resident_day_problem(row) -> str | None:
+    if row.occupied and (row.exclusion_reason or "").strip():
+        return "occupied resident-day conflicts with an exclusion reason"
     service = (
         (row.service_type or "").strip().lower().replace("-", "_").replace(" ", "_")
     )
@@ -162,8 +164,8 @@ def _stats_from_breakdown(breakdown, ancc_target, rn_target):
         "rn_minutes": rn_minutes,
         "care_per_resident": round(per_res, 1),
         "rn_per_resident": round(rn_per_res, 1),
-        "status": status_for(per_res, ancc_target),
-        "rn_status": status_for(rn_per_res, rn_target),
+        "status": status_for(total_minutes / residents, ancc_target) if residents else "unavailable",
+        "rn_status": status_for(rn_minutes / residents, rn_target * 0.9 if rn_target else None) if residents else "unavailable",
     }
 
 
@@ -172,14 +174,16 @@ def daily_stats(
 ) -> dict:
     from carelog.domain.compliance import day_breakdown
 
-    return _stats_from_breakdown(
-        day_breakdown(facility_id, day), ancc_target, rn_target
-    )
+    from carelog.models import FacilityTarget
+    target = FacilityTarget.query.filter_by(facility_id=facility_id, quarter_start=quarter_bounds(day)[0]).first()
+    return _stats_from_breakdown(day_breakdown(facility_id, day),
+                                target.ancc_target if target else None,
+                                target.rn_target if target else None)
 
 
 def status_for(value: float, target: float) -> str:
-    if target <= 0:
-        return "on_track"
+    if target is None or target <= 0:
+        return "unavailable"
     gap_pct = (value - target) / target
     if value >= target:
         return "on_track"
@@ -193,10 +197,18 @@ def range_stats(
 ) -> list[dict]:
     from carelog.domain.compliance import range_breakdown
 
-    return [
-        _stats_from_breakdown(row, ancc_target, rn_target)
-        for row in range_breakdown(facility_id, start, end)
-    ]
+    from carelog.models import FacilityTarget
+    targets = {t.quarter_start: t for t in FacilityTarget.query.filter(
+        FacilityTarget.facility_id == facility_id,
+        FacilityTarget.quarter_start >= quarter_bounds(start)[0],
+        FacilityTarget.quarter_start <= quarter_bounds(end)[0],
+    ).all()}
+    out = []
+    for row in range_breakdown(facility_id, start, end):
+        target = targets.get(quarter_bounds(row["date"])[0])
+        out.append(_stats_from_breakdown(row, target.ancc_target if target else None,
+                                       target.rn_target if target else None))
+    return out
 
 
 def average(rows: list[dict]) -> dict:

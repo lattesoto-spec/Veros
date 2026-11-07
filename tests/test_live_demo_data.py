@@ -58,7 +58,7 @@ def test_two_file_live_demo_import_and_report(app, facility, slug, expected_achi
         assert result["totals"]["bed_days"] == 42 * 33
         assert result["target_reconciliation"]["matched"] is True
         assert [test["achieved"] for test in result["tests"]] == expected_achieved
-        assert [test["passed"] for test in result["tests"]] == expected_passes
+        assert [test["on_track"] for test in result["tests"]] == expected_passes
         pdf = build_quarterly_pdf(facility, 2026, 2)
         assert pdf.startswith(b"%PDF")
         assert len(pdf) > 5000

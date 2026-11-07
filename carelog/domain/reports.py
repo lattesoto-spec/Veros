@@ -243,7 +243,7 @@ def compute_quarter_stats(facility_id: int, year: int, quarter: int) -> dict:
     total_per_obd = per_bed_day(sum(worked_minutes.values()), obd)
 
     worked_hours = {role: round(m / 60, 1) for role, m in worked_minutes.items()}
-    blockers = []
+    blockers = list(tests["limitations"])
     if any(row["basis"].endswith("unavailable") for row in monthly_rn):
         blockers.append(
             "Some worked dates lack verifiable clock intervals for RN continuity; review the monthly coverage basis."

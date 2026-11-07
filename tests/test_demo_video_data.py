@@ -143,7 +143,7 @@ def test_demo_workbook_produces_the_expected_reported_result(app, facility):
 
         result = quarterly_tests(facility, PERIOD_START, PERIOD_END)
         assert result["totals"]["bed_days"] == 2352
-        assert [(test["achieved"], test["passed"]) for test in result["tests"]] == [
+        assert [(test["achieved"], test["on_track"]) for test in result["tests"]] == [
             (213.5, False), (42.8, True), (64.2, True),
         ]
         assert result["target_reconciliation"]["matched"] is True

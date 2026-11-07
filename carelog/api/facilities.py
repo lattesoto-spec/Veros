@@ -202,7 +202,11 @@ def facilities_view():
             period_start, _ = quarter_bounds(latest.date)
             result = quarterly_tests(f, period_start, latest.date)
             if result["totals"]["bed_days"]:
-                period_status = result["passed"]
+                period_status = result["passed"] if result["complete_quarter"] else (
+                    "Quarter to date: on track" if result["on_track"] is True else
+                    "Quarter to date: below threshold" if result["on_track"] is False else
+                    None
+                )
         summary[f.id] = {
             "shifts": Shift.query.filter_by(facility_id=f.id).count(),
             "residents": Resident.query.filter_by(
