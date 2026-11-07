@@ -437,6 +437,7 @@ def _process(job: ImportJob, review=None):
             "census_changed": sum(o.census_changed for o in outcomes),
             "census_changes": [c for o in outcomes for c in o.census_changes][:10],
             "void_matches": [m for o in outcomes for m in o.void_matches][:20],
+            "holds": [hold for o in outcomes for hold in o.holds],
             "pay_unknown": sorted(
                 {
                     item["category"]
@@ -464,7 +465,7 @@ def without_personal_samples(review_json):
         return review_json
     review = json.loads(review_json)
     review.pop("samples", None)
-    for name in ("period_sample", "census_changes", "void_matches"):
+    for name in ("period_sample", "census_changes", "void_matches", "holds"):
         review.get("impact", {}).pop(name, None)
     return json.dumps(review)
 
@@ -621,6 +622,7 @@ def _fail(job_id: str, message: str):
     job = db.session.get(ImportJob, job_id)
     if job is None:
         return
+    job.review_json = without_personal_samples(job.review_json)
     files = json.loads(job.files_json)
     for f in files:
         if f["stage"] != "waiting":

@@ -264,7 +264,7 @@ def board_pdf(facility, today: date) -> bytes:
             [
                 "Projected quarter-end average",
                 f"{fc['projected_avg']:.1f}",
-                "On track" if fc["on_track"] else "AT RISK",
+                "Provisional" if fc["on_track"] is None else "On track" if fc["on_track"] else "AT RISK",
             ],
             [
                 "RN coverage, included date",

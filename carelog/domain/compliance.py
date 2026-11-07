@@ -18,7 +18,7 @@ from carelog.domain.care_minutes import (
 from carelog.domain import eligibility
 from carelog.models import CareEpisode, Resident, ResidentDay, Shift, Staff, db
 
-CALC_VERSION = "2026.11.7"
+CALC_VERSION = "2026.11.8"
 
 # Canonical reporting buckets. The mapping engine normalizes to PCW; the
 # government statement calls the bucket PCA — they are the same bucket.
@@ -205,7 +205,13 @@ def rn_coverage(
         .all()
     )
     intervals, withheld, unknown = [], [], False
-    evidenced_dates = {shift.date for shift, _ in shifts}
+    # A duration-only RN row shows work happened but not when, so it cannot
+    # settle what a gap at midnight on the neighbouring date means.
+    evidenced_dates = {shift.date for shift, _ in shifts} - {
+        shift.date
+        for shift, staff in shifts
+        if not shift.coverage_known and eligibility.bucket_for(staff.role) == "RN"
+    }
     for shift, staff in shifts:
         if eligibility.bucket_for(staff.role) != "RN" and not eligibility.could_be_rn(staff):
             continue
@@ -562,6 +568,9 @@ def forecast_quarter(
                 days_until_breach = k
                 break
 
+    from carelog.domain.care_minutes import denominator_issues
+
+    census_issues = denominator_issues(facility.id, q_start, today)
     return {
         "calc_version": CALC_VERSION,
         "q_start": q_start,
@@ -577,8 +586,10 @@ def forecast_quarter(
         "projected_rn_avg": round(projected_rn, 1),
         "projected_rn_en_avg": round(projected_rn_en, 1),
         "days_until_breach": days_until_breach,
-        "on_track": projected >= target,
-        "rn_on_track": (
+        # With unverified bed days the average is inflated, so no call is made.
+        "provisional": bool(census_issues),
+        "on_track": None if census_issues else projected >= target,
+        "rn_on_track": None if census_issues else (
             projected_rn >= configured.rn_target * RN_ONLY_FRACTION
             and projected_rn_en >= configured.rn_target
         ),
@@ -600,7 +611,7 @@ def compliance_pct(facility, today: date) -> float | None:
     from carelog.domain.targets import target_for_quarter
 
     target = target_for_quarter(facility, today)
-    if not fc or not target or not target.ancc_target:
+    if not fc or not target or not target.ancc_target or fc["provisional"]:
         return None
     return round(fc["qtd_avg"] / target.ancc_target * 100, 1)
 

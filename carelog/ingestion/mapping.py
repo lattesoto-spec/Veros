@@ -274,9 +274,16 @@ def _extract_field(fs: dict, row: dict, headers: list[str]):
 
 
 def _passes_filter(target: dict, row: dict, headers: list[str]) -> bool:
+    site = target.get("site_filter")
+    if site and not _matches_filter(site, row, headers):
+        return False
     rf = target.get("row_filter")
     if not rf:
         return True
+    return _matches_filter(rf, row, headers)
+
+
+def _matches_filter(rf: dict, row: dict, headers: list[str]) -> bool:
     try:
         val = _resolve_column(row, headers, rf.get("column", "")).strip().lower()
     except MappingError:

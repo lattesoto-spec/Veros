@@ -39,10 +39,10 @@ def validate_shifts(records, evidence_type="worked", today=None):
             problem = "identical start and finish"
         elif minutes is None or not isfinite(minutes) or not 0 < minutes <= 1440:
             problem = "worked duration must be positive and no more than 24 hours"
-        elif _span(rec) and minutes > MAX_SHIFT_MINUTES:
+        elif minutes > MAX_SHIFT_MINUTES and "pay_category" not in rec:
             problem = (
-                f"{minutes / 60:.1f} hours between start and finish, which is usually "
-                "a mistyped time"
+                f"{minutes / 60:.1f} hours on one line, which is usually a mistyped "
+                "time or a total"
             )
         key = (
             rec["staff_id"],

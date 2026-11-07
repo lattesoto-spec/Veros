@@ -20,7 +20,7 @@ PAY_COLUMNS = {
 
 # Exact, deliberately short: a near match is a question for a person.
 WORKED_CATEGORIES = {
-    "ordinary", "ordinary hours", "ordinary time", "normal", "normal hours",
+    "ordinary", "ord", "ordinary hours", "ordinary time", "normal", "normal hours",
     "regular", "base", "base hours", "worked", "worked hours", "overtime", "ot",
     "time and a half", "double time", "penalty", "saturday", "sunday",
     "public holiday worked", "night", "night shift", "afternoon", "afternoon shift",
@@ -42,6 +42,7 @@ def key(category) -> str:
 
 # Terms that identify a category column by its values. Narrower than the list
 # above: "travel" or "meal" could appear in an unrelated column.
+_SHORT_CODES = {"al", "sl", "pl", "pcl", "lsl", "wc", "cl", "lwop", "phnw", "rdo"}
 _VALUE_SIGNALS = (
     "leave", "lsl", "sick", "workers comp", "workcover", "training", "allowance",
     "absence", "absent", "compassionate", "bereavement", "parental",
@@ -64,20 +65,40 @@ def pay_column(headers, rows=(), mapped=()) -> str | None:
         values = {key(row.get(header)) for row in rows} - {""}
         if not values or len(values) > _MAX_CATEGORIES:
             continue
-        if any(signal in value for value in values for signal in _VALUE_SIGNALS):
+        if values & _SHORT_CODES or any(
+            signal in value for value in values for signal in _VALUE_SIGNALS
+        ):
             return header
     return None
+
+
+def candidate_columns(headers, rows, mapped) -> list[dict]:
+    """Unmapped low-variety text columns that could hold short pay codes."""
+    candidates = []
+    for header in headers:
+        if header in mapped:
+            continue
+        values = sorted({str(row.get(header) or "").strip() for row in rows} - {""})
+        textual = [v for v in values if any(c.isalpha() for c in v)]
+        if textual and len(values) <= _MAX_CATEGORIES:
+            candidates.append({"column": header, "values": values[:8]})
+    return candidates
+
+
+def is_non_worked(category) -> bool:
+    name = key(category)
+    return any(term in name for term in NON_WORKED_TERMS) or name in _SHORT_CODES
 
 
 def treatment(category, rules: dict) -> str:
     """A recorded decision wins; otherwise only an exact worked name counts."""
     name = key(category)
+    if is_non_worked(category):
+        return EXCLUDED  # Leave cannot be decided into worked time.
     if name in rules:
         return rules[name]
     if name in WORKED_CATEGORIES:
         return WORKED
-    if any(term in name for term in NON_WORKED_TERMS):
-        return EXCLUDED
     return UNKNOWN
 
 

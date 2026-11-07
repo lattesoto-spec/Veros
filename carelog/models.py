@@ -486,7 +486,7 @@ class ImportJob(db.Model):
         from carelog.ingestion.review import public_review
 
         updated = self.updated_at or self.created_at
-        stalled = self.status in {"queued", "running"} and (
+        stalled = self.status in {"retaining", "queued", "running"} and (
             updated is None or (datetime.utcnow() - updated).total_seconds() > 900
         )
 

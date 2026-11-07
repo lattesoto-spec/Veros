@@ -112,3 +112,12 @@ Original source files remain retained on failure. Changes to care data and recei
 - Analyzer sheet names are aliased, and a detected header is only trusted if it reads like column names.
 - A roster-sounding file name alone yields `unverified` rather than `rostered`, so a provider can verify a real timesheet.
 - Pay decisions are listed in Settings and can be withdrawn. They are part of the review fingerprint.
+
+## Remembered layouts, payroll and site questions
+
+- A stored mapping rebinds to the sheet holding its columns, so a new file or sheet name reaches review. If the sheet cannot be identified the job goes to `mapping`, not `failed`.
+- Short leave codes such as AL and PCL are recognised by value. A shift sheet with durations, no times and no pay category raises a review hold until a column is chosen or a reviewer attests that every line is worked. Known leave can no longer be decided into worked time.
+- A site, facility or location column with several values raises a hold, answered by a row filter or a recorded attestation. Holds block confirmation, are answered through `POST /import/<id>/resolve-hold`, and are remembered with the layout.
+- A changed title reuses a staff record only when it is an unambiguous title in the same bucket. A move into a nursing bucket stays pending and is not approved on an inherited registration.
+- Restoring a voided row checks every record for that person. A blank in a mapped leave or exclusion column clears that field and is listed at review; other fields stay protected.
+- Deleting an import cited by a closed quarter needs an explicit override. Forecasts make no on-track call and the compliance percentage is withheld while census issues exist. Duration lines over 16 hours are refused unless they are categorised payroll lines. A duration-only RN row on the neighbouring date leaves a midnight gap unassessed. `CALC_VERSION` is `2026.11.8`.

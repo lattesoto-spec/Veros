@@ -34,7 +34,13 @@ from carelog.domain.compliance import (
 from carelog.ingestion import jobs as import_jobs
 from carelog.ingestion.fingerprint import fingerprint
 from carelog.ingestion.manual import build_spec, describe_file, public_catalogue
-from carelog.ingestion.paycodes import BLANK, EXCLUDED, WORKED, key as pay_key
+from carelog.ingestion.paycodes import (
+    BLANK,
+    EXCLUDED,
+    WORKED,
+    is_non_worked,
+    key as pay_key,
+)
 from carelog.ingestion.pipeline import restore_census_rows
 from carelog.ingestion.presets import matching_spec
 from carelog.ingestion.reader import FileReadError, read_upload
@@ -48,6 +54,7 @@ from carelog.models import (
     AuditLog,
     FormatMapping,
     PayCategoryRule,
+    QuarterClosure,
     db,
 )
 from carelog.services.targets import target_details, save_target
@@ -214,9 +221,9 @@ def import_confirm(job_id):
     job = owned_or_404(import_jobs.get_job(job_id))
     replace_period = form_data().get("replace_period") == "1"
     review = json.loads(job.review_json or "{}")
-    if review.get("impact", {}).get("pay_unknown"):
+    if review.get("impact", {}).get("pay_unknown") or review.get("impact", {}).get("holds"):
         return {
-            "error": "Decide whether each pay category is worked time before importing."
+            "error": "Answer the open questions on this review before importing."
         }, 409
     changed = db.session.execute(
         update(ImportJob)
@@ -289,6 +296,8 @@ def import_pay_categories(job_id):
         return {"error": "Record the basis for these pay category decisions."}, 400
     if any(value not in (WORKED, EXCLUDED) for value in decisions.values()):
         return {"error": "Each pay category must be worked or not worked."}, 400
+    if any(value == WORKED and is_non_worked(name) for name, value in decisions.items()):
+        return {"error": "Leave, training and allowances cannot be counted as worked time."}, 400
     for category, value in decisions.items():
         name = pay_key("" if category == BLANK else category)
         rule = PayCategoryRule.query.filter_by(
@@ -304,6 +313,51 @@ def import_pay_categories(job_id):
         "pay_categories_decided", "import_job", job.id,
         f"{json.dumps(decisions)}; basis: {basis}",
     )
+    db.session.commit()
+    import_jobs.dispatch_job(current_app._get_current_object(), job.id)
+    return navigate(url_for("api.import_status", job_id=job.id))
+
+
+@bp.post("/import/<job_id>/resolve-hold")
+@require("review_eligibility")
+def import_resolve_hold(job_id):
+    """Answer a question about a sheet. The answer is remembered with its layout."""
+    job = owned_or_404(import_jobs.get_job(job_id))
+    if job.status != "review":
+        return {"error": "This import is no longer awaiting review. Reload its status."}, 409
+    data = form_data()
+    kind, name, sheet, value = (data.get(k) or "" for k in ("kind", "file", "sheet", "value"))
+    basis = (data.get("basis") or "").strip()
+    if not basis or not value:
+        return {"error": "Choose an answer and record its basis."}, 400
+    review = json.loads(job.review_json or "{}")
+    hold = next(
+        (h for h in review.get("impact", {}).get("holds", [])
+         if (h["kind"], h["file"], h["sheet"]) == (kind, name, sheet)),
+        None,
+    )
+    outcome = next((o for o in review.get("outcomes", []) if o["filename"] == name), None)
+    if hold is None or outcome is None:
+        return {"error": "That question is no longer open. Reload this review."}, 409
+    spec = outcome["spec"]
+    target = next(t for t in spec["targets"] if t.get("sheet") == sheet)
+    if kind == "pay_column":
+        if value == "none":
+            target["all_lines_worked"] = basis
+        elif value in {option["column"] for option in hold["options"]}:
+            target["fields"]["pay_category"] = {"column": value}
+        else:
+            return {"error": "Choose a column from this sheet."}, 400
+    elif value == "all":
+        target["single_site"] = basis
+    elif value in hold["options"]:
+        target["site_filter"] = {"column": hold["column"], "include_values": [value]}
+    else:
+        return {"error": "Choose a value from this sheet."}, 400
+    if not _requeue_for_review(job, {name: spec}):
+        db.session.rollback()
+        return {"error": "This import has moved on. Reload its status."}, 409
+    auth.record("import_hold_resolved", "import_job", job.id, f"{kind} on {sheet}: {value}; basis: {basis}")
     db.session.commit()
     import_jobs.dispatch_job(current_app._get_current_object(), job.id)
     return navigate(url_for("api.import_status", job_id=job.id))
@@ -622,6 +676,7 @@ def audit():
                     "evidence_classified",
                     "import_mapping_saved",
                     "pay_categories_decided",
+                    "import_hold_resolved",
                     "import_purged",
                     "quarter_closed",
                     "platform_acting_as",
@@ -723,6 +778,13 @@ def delete_receipt(receipt_id):
     if not _confirmed(request) or not reason:
         flash('Type "delete" and record a reason. Nothing was deleted.')
         return navigate(url_for("api.audit"))
+    cited = [
+        f"{closure.year}-Q{closure.quarter}"
+        for closure in QuarterClosure.query.filter_by(facility_id=receipt.facility_id)
+        if receipt.id in {s.get("receipt_id") for s in json.loads(closure.sources_json)}
+    ]
+    if cited and form_data().get("override_closure") != "1":
+        return {"error": f"A closed quarter ({', '.join(sorted(set(cited)))}) cites this import. Confirm you are removing evidence behind an issued statement."}, 409
 
     try:
         files = _purge_evidence([receipt])

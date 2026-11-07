@@ -123,8 +123,10 @@ def restore_shift(shift_id):
     if row.evidence_type != VOIDED:
         return {"error": "Only a voided row can be restored."}, 409
     stream = row.prior_evidence_type or "unverified"
+    person = db.session.get(Staff, row.staff_id).staff_id
+    versions = [m.id for m in Staff.query.filter_by(facility_id=row.facility_id, staff_id=person)]
     active = Shift.query.filter(
-        Shift.facility_id == row.facility_id, Shift.staff_id == row.staff_id,
+        Shift.facility_id == row.facility_id, Shift.staff_id.in_(versions),
         Shift.evidence_type == stream,
         Shift.date >= row.date - timedelta(days=1), Shift.date <= row.date + timedelta(days=1),
     ).all()

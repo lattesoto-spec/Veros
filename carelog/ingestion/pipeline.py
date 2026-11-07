@@ -14,7 +14,7 @@ from math import ceil, floor
 from sqlalchemy.orm import Session
 
 from carelog.domain.clock import facility_today
-from carelog.domain.eligibility import classify
+from carelog.domain.eligibility import PENDING, bucket_for, classify
 from carelog.models import (
     SUPERSEDED,
     VOIDED,
@@ -32,12 +32,12 @@ from carelog.models import (
 
 from .analyzer import ai_ready, generate_mapping_spec
 from .evidence import classify_shift_evidence
-from .fingerprint import fingerprint
+from .fingerprint import fingerprint, normalize_header
 from .mapping import MappingError, TargetResult, apply_header_overrides, run_spec
-from .paycodes import pay_column, split_records
+from .paycodes import candidate_columns, pay_column, split_records
 from .presets import matching_spec
 from .quality import _minutes as record_minutes, check_shifts, daylight_saving_warnings
-from .reader import read_upload
+from .reader import read_upload, rebuild_with_header
 
 
 MAPPING_SPEC_VERSION = 2
@@ -105,6 +105,7 @@ class ImportOutcome:
     census_changed: int = 0
     census_changes: list[dict] = field(default_factory=list)
     void_matches: list[dict] = field(default_factory=list)
+    holds: list[dict] = field(default_factory=list)
 
 
 def get_or_create_mapping(
@@ -203,6 +204,7 @@ def ingest_file(
     spec = json.loads(mapping.spec_json)
     if progress:
         progress("extracting rows")
+    _rebind_sheets(spec, sheets, filename)
     mapped_sheets = apply_header_overrides(spec, sheets)
     _read_pay_columns(spec, mapped_sheets)
     results = run_spec(spec, mapped_sheets)
@@ -227,6 +229,7 @@ def ingest_file(
     )
     outcome.mapping_id = mapping.id
     outcome.receipt = receipt
+    outcome.holds = _review_holds(spec, mapped_sheets, filename)
     for r in results:
         outcome.row_errors.extend(r.row_errors)
     # Credentials must be applied before shifts so newly-created nurses can be
@@ -316,17 +319,20 @@ def _record_for_role(versions, raw_role):
     """The record this title belongs to, or None when the role has changed."""
     if not versions or not raw_role:
         return versions[-1] if versions else None
-    incoming = classify(raw_role)[:2]
+    exact = next((m for m in reversed(versions) if m.source_role == raw_role), None)
+    if exact:
+        return exact
+    # A different wording is the same role only if both are unambiguous titles
+    # in one bucket. Two pending titles prove nothing and must not share a decision.
+    bucket, status, _ = classify(raw_role)
     return next(
-        (m for m in reversed(versions) if m.source_role == raw_role),
-        next(
-            (
-                m
-                for m in reversed(versions)
-                if not m.source_role or classify(m.source_role)[:2] == incoming
-            ),
-            None,
+        (
+            m
+            for m in reversed(versions)
+            if not m.source_role
+            or (status == "approved" and classify(m.source_role)[:2] == (bucket, status))
         ),
+        None,
     )
 
 
@@ -336,6 +342,13 @@ def _add_staff_record(facility, directory, sid, name, role, raw_role, status, re
     Only the new record awaits review, and the rest of the batch can proceed.
     """
     previous = (directory.get(sid) or [None])[-1]
+    if (
+        previous
+        and bucket_for(role) in ("RN", "EN")
+        and bucket_for(previous.role) != bucket_for(role)
+    ):
+        # A new nursing role needs its own registration checked, not inherited.
+        status, reason = PENDING, "Confirm registration for the new nursing role."
     member = Staff(
         facility_id=facility.id,
         staff_id=sid,
@@ -420,6 +433,74 @@ def _import_staff(facility, records: list[dict], outcome: ImportOutcome):
         outcome.staff_imported += 1
 
 
+def _target_columns(target) -> set:
+    columns = set()
+    for rule in target.get("fields", {}).values():
+        columns.add(rule.get("column"))
+        columns.update(rule.get("columns", []))
+    return columns - {None}
+
+
+def _rebind_sheets(spec, sheets, filename):
+    """A remembered layout must survive next month's file or sheet name.
+
+    Fingerprints ignore names on purpose, and a CSV's sheet is named after its
+    file. Find the sheet with these columns; if that is unclear, ask a person.
+    """
+    names = {sheet.name for sheet in sheets}
+    for target in spec.get("targets", []):
+        if target.get("sheet") in names:
+            continue
+        header_row = target.get("header_row")
+        matches = [
+            sheet for sheet in sheets
+            if _target_columns(target) <= set(
+                rebuild_with_header(sheet, header_row).headers
+                if isinstance(header_row, int) else sheet.headers
+            )
+        ]
+        if len(matches) != 1:
+            raise MappingRequired(filename)
+        target["sheet"] = matches[0].name
+
+
+SITE_COLUMNS = {
+    "site", "site_name", "facility", "facility_name", "home", "home_name", "campus",
+    "location", "cost_centre", "cost_center", "service_location",
+}
+
+
+def _review_holds(spec, sheets, filename) -> list[dict]:
+    """Questions only a person can answer before these rows may count."""
+    holds = []
+    for target in spec.get("targets", []):
+        if target.get("kind") not in ("shifts", "resident_days"):
+            continue
+        sheet = next(s for s in sheets if s.name == target.get("sheet"))
+        mapped = _target_columns(target)
+        fields = target.get("fields", {})
+        if (
+            target["kind"] == "shifts"
+            and "minutes" in fields
+            and "pay_category" not in fields
+            and not target.get("all_lines_worked")
+        ):
+            holds.append({
+                "kind": "pay_column", "file": filename, "sheet": sheet.name,
+                "options": candidate_columns(sheet.headers, sheet.rows, mapped),
+            })
+        if not target.get("site_filter") and not target.get("single_site"):
+            for header in sheet.headers:
+                values = sorted({str(r.get(header) or "").strip() for r in sheet.rows} - {""})
+                if normalize_header(header) in SITE_COLUMNS and len(values) > 1:
+                    holds.append({
+                        "kind": "site", "file": filename, "sheet": sheet.name,
+                        "column": header, "options": values[:40],
+                    })
+                    break
+    return holds
+
+
 def _read_pay_columns(spec, sheets):
     """A pay column on a shift sheet is always read, mapped or not.
 
@@ -429,11 +510,10 @@ def _read_pay_columns(spec, sheets):
     for target in spec.get("targets", []):
         if target.get("kind") != "shifts" or "pay_category" in target.get("fields", {}):
             continue
+        if target.get("all_lines_worked"):
+            continue
         sheet = next((s for s in sheets if s.name == target.get("sheet")), sheets[0])
-        mapped = {
-            rule.get("column") for rule in target.get("fields", {}).values()
-        } | {column for rule in target.get("fields", {}).values() for column in rule.get("columns", [])}
-        column = pay_column(sheet.headers, sheet.rows, mapped)
+        column = pay_column(sheet.headers, sheet.rows, _target_columns(target))
         row_filter = target.get("row_filter") or {}
         if column and not (row_filter.get("column") == column and row_filter.get("include_values")):
             target.setdefault("fields", {})["pay_category"] = {"column": column}
@@ -705,7 +785,7 @@ def _import_resident_days(facility, records: list[dict], outcome: ImportOutcome)
             source_page=rec.get("_source_page"),
         )
         if row:
-            _update_census_row(row, values, lineage, outcome)
+            _update_census_row(row, values, lineage, outcome, mapped=set(rec))
         else:
             db.session.add(
                 ResidentDay(
@@ -721,12 +801,20 @@ def _import_resident_days(facility, records: list[dict], outcome: ImportOutcome)
         )
 
 
-def _update_census_row(row, values, lineage, outcome):
-    """Blank never erases verified census evidence, and each change is kept."""
+CLEARABLE_CENSUS_FIELDS = ("leave_type", "leave_day_number", "exclusion_reason")
+
+
+def _update_census_row(row, values, lineage, outcome, mapped=()):
+    """Blank never erases identity or funding evidence, and each change is kept.
+
+    A blank in a mapped leave or exclusion column is different: it says the
+    resident is no longer on leave, and review lists the change.
+    """
     changes = {
         name: (getattr(row, name), value)
         for name, value in values.items()
-        if value is not None and value != getattr(row, name)
+        if value != getattr(row, name)
+        and (value is not None or (name in CLEARABLE_CENSUS_FIELDS and name in mapped))
     }
     if not changes:
         return  # An identical row stays with the import that first supplied it.

@@ -300,3 +300,53 @@ def test_daylight_saving_shift_is_flagged():
     assert "N1 on 2026-04-04" in daylight_saving_warnings([overnight], "Australia/Sydney")[0]
     assert daylight_saving_warnings([overnight], "Australia/Brisbane") == []
     assert daylight_saving_warnings([{**overnight, "date": date(2026, 8, 4)}], "Australia/Sydney") == []
+
+
+def test_a_closed_quarter_protects_the_evidence_it_cites(admin_client, monkeypatch):
+    app, ids, client, home = admin_client
+    monkeypatch.setenv("IMPORT_WORKER", "thread")
+    job, _ = run_import(app, ids, home, timesheet(("A", "2026-08-01")))
+    approve_everyone(home)
+    assert client.post("/api/reports/close", data={"q": "2026-Q1", "basis": "Lodged"}).status_code == 200
+    form = {"confirm": "delete", "reason": "Tidying"}
+    assert client.post(f"/api/audit/receipt/{job.receipt_id}/delete", data=form).status_code == 409
+    assert db.session.get(ImportReceipt, job.receipt_id) is not None
+    receipt_id = job.receipt_id
+    assert client.post(f"/api/audit/receipt/{receipt_id}/delete", data={**form, "override_closure": "1"}).status_code == 200
+
+
+def test_restore_checks_every_record_for_that_person(facility, web_app):  # noqa: F811
+    app, ids = web_app
+    home = Facility.query.filter_by(organization_id=ids["customer"]).one()
+    old = member(home, staff_id="R", source_role="Enrolled Nurse", role="EN")
+    new = member(home, staff_id="R")
+    common = dict(facility_id=home.id, date=date(2026, 8, 1), start_time=time(0), end_time=time(0), coverage_known=False)
+    voided = Shift(staff_id=old.id, duration_minutes=480, evidence_type="voided", prior_evidence_type="worked", **common)
+    db.session.add_all([voided, Shift(staff_id=new.id, duration_minutes=450, evidence_type="worked", **common)])
+    db.session.commit()
+    client = app.test_client()
+    sign_in_as(client, ids["admin"])
+    assert client.post(f"/api/audit/shift/{voided.id}/restore", data={"reason": "x"}).status_code == 409
+
+
+def test_a_forecast_makes_no_call_on_unverified_bed_days(facility):
+    from carelog.domain.compliance import compliance_pct, forecast_quarter
+    nurse = member(facility)
+    for day in range(1, 15):
+        db.session.add(ResidentDay(facility_id=facility.id, resident_id="R1", date=date(2026, 8, day),
+                                   occupied=True, service_type="permanent"))
+        db.session.add(ResidentDay(facility_id=facility.id, resident_id="R2", date=date(2026, 8, day), occupied=True))
+        shift(facility, nurse, date(2026, 8, day), time(8), time(16))
+    db.session.commit()
+    forecast = forecast_quarter(facility, date(2026, 8, 14))
+    assert forecast["on_track"] is None and forecast["provisional"] is True
+    assert compliance_pct(facility, date(2026, 8, 14)) is None
+
+
+def test_a_duration_row_next_door_leaves_a_midnight_gap_unassessed(facility):
+    nurse = member(facility)
+    shift(facility, nurse, date(2026, 8, 1), time(7), time(23, 59))
+    db.session.add(Shift(facility_id=facility.id, staff_id=nurse.id, date=date(2026, 7, 31), start_time=time(0),
+                         end_time=time(0), coverage_known=False, duration_minutes=480, evidence_type="worked"))
+    db.session.commit()
+    assert rn_coverage(facility.id, date(2026, 8, 1))["unassessed_minutes"] >= 420
