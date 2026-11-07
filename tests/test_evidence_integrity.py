@@ -258,7 +258,8 @@ def test_ambiguous_dates_and_non_direct_titles_need_review():
         assert classify(title)[1] == "pending"
 
 
-def test_agency_scenarios_remove_the_observed_nursing_roles(app, facility):
+def test_agency_scenarios_remove_the_observed_nursing_roles(app, facility, monkeypatch):
+    monkeypatch.setattr("carelog.domain.clock.facility_today", lambda _: date(2026, 8, 1))
     with app.app_context():
         day = date(2026, 8, 1)
         add_resident_days(facility.id, day, 1)

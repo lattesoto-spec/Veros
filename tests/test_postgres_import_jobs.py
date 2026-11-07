@@ -390,10 +390,10 @@ def test_additive_staff_review_metadata_preserves_credentials(pg_app):
     db.session.add(member)
     db.session.commit()
     member_id = member.id
-    for column in ("reviewed_at", "reviewed_by_user_id"):
+    for column in ("reviewed_at", "reviewed_by_user_id", "identity_aliases_json"):
         db.session.execute(text(f'ALTER TABLE staff DROP COLUMN "{column}"'))
     db.session.commit()
-    assert set(init_db()) == {"staff.reviewed_at", "staff.reviewed_by_user_id"}
+    assert set(init_db()) == {"staff.reviewed_at", "staff.reviewed_by_user_id", "staff.identity_aliases_json"}
     db.session.expire_all()
     retained = db.session.get(Staff, member_id)
     assert retained.registration_expiry == date(2027, 5, 31)

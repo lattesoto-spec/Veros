@@ -112,7 +112,8 @@ def test_weighted_quarter_result_not_mean_of_daily_ratios(app, facility):
         assert result["passed"] is None
 
 
-def test_forecast_qtd_uses_weighted_numerator_and_bed_days(app, facility):
+def test_forecast_qtd_uses_weighted_numerator_and_bed_days(app, facility, monkeypatch):
+    monkeypatch.setattr("carelog.domain.clock.facility_today", lambda _: date(2026, 7, 2))
     with app.app_context():
         worker = add_staff(facility.id, "P1", "PCW")
         start = date(2026, 7, 1)
@@ -152,7 +153,8 @@ def test_nurse_registration_needs_a_current_expiry(app, facility):
         assert counts_toward_care(rn, date(2026, 8, 1)) is False
 
 
-def test_report_and_compliance_use_same_eligible_minutes_and_agency_split(app, facility):
+def test_report_and_compliance_use_same_eligible_minutes_and_agency_split(app, facility, monkeypatch):
+    monkeypatch.setattr("carelog.domain.clock.facility_today", lambda _: date(2026, 7, 1))
     with app.app_context():
         day = date(2026, 7, 1)
         add_resident_days(facility.id, day, 1)

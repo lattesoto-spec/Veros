@@ -1,6 +1,7 @@
 
 
 import hashlib
+import json
 
 from flask import (
     Response,
@@ -29,7 +30,7 @@ from carelog.domain.compliance import (
 from carelog.domain.reports import available_quarters, build_quarterly_pdf
 from carelog.domain.targets import facility_for_period
 from carelog.models import AuditLog, QuarterClosure, db
-from carelog.services.closure import close_quarter, closure_statuses
+from carelog.services.closure import ClosureReviewRequired, close_quarter, closure_preview, closure_statuses
 from carelog.services.workspace import _storage, current_facility
 from carelog.storage import StorageError
 from carelog.services.periods import reporting_range
@@ -116,7 +117,13 @@ def report_close():
         return {"error": "Record why this quarter is being closed, such as the submission it supports."}, 400
     try:
         year, quarter = _parse_quarter(form_data().get("q"))
-        closure = close_quarter(facility, year, quarter, current_user(), basis)
+        closure = close_quarter(facility, year, quarter, current_user(), basis,
+                                acknowledged=form_data().get("acknowledge_limitations") == "1",
+                                review_fingerprint=form_data().get("review_fingerprint"))
+    except ClosureReviewRequired as error:
+        from carelog.api.responses import serialize
+        db.session.rollback()
+        return {"error": str(error), "preview": serialize(error.preview)}, 409
     except ValueError as error:
         return {"error": str(error) or "Pick a valid quarter."}, 400
     except StorageError:
@@ -125,6 +132,8 @@ def report_close():
     auth.record(
         "quarter_closed", "quarter_closure", closure.id,
         f"{year}-Q{quarter}; provisional={closure.provisional}; "
+        f"missing worked dates={len(json.loads(closure.figures_json).get('missing_worked_dates', []))}; "
+        f"limitations acknowledged={form_data().get('acknowledge_limitations') == '1'}; "
         f"statement SHA-256 {closure.pdf_sha256}; basis: {basis}",
     )
     db.session.commit()
@@ -132,12 +141,25 @@ def report_close():
     return navigate(url_for("api.reports_view"))
 
 
+@bp.get("/reports/closure-preview")
+@require("review_eligibility")
+def report_closure_preview():
+    facility = current_facility()
+    if not facility:
+        abort(404)
+    try:
+        year, quarter = _parse_quarter(request.args.get("q"))
+    except (TypeError, ValueError):
+        return {"error": "Pick a valid quarter."}, 400
+    return resource("closure_preview", preview=closure_preview(facility, year, quarter))
+
+
 @bp.route("/reports/closure/<int:closure_id>.pdf")
 @require("export_data")
 def report_closure_pdf(closure_id):
     facility = current_facility()
     closure = (
-        QuarterClosure.query.filter_by(id=closure_id, facility_id=facility.id).first()
+        QuarterClosure.query.filter_by(id=closure_id, facility_id=facility.id, organization_id=facility.organization_id).first()
         if facility
         else None
     )

@@ -18,7 +18,7 @@ from carelog.domain.care_minutes import (
 from carelog.domain import eligibility
 from carelog.models import CareEpisode, Resident, ResidentDay, Shift, Staff, db
 
-CALC_VERSION = "2026.11.10"
+CALC_VERSION = "2026.11.11"
 
 # Canonical reporting buckets. The mapping engine normalizes to PCW; the
 # government statement calls the bucket PCA — they are the same bucket.
@@ -323,23 +323,27 @@ def detect_gaps(facility, today: date) -> list[dict]:
     care_target = approved.ancc_target if approved else 0
     rn_target = approved.rn_target if approved else 0
 
-    # Quarter-to-date position
+    # Position over the full calendar quarter once it has ended.
     fc = forecast_quarter(facility, today)
-    if fc and fc["qtd_days"] > 0 and approved:
-        exact = quarter_totals(fid, quarter_bounds(today)[0], today)
+    position_end = assessment_end(facility, today)
+    exact = quarter_totals(fid, quarter_bounds(today)[0], position_end)
+    if exact["bed_days"] > 0 and approved:
         bd = exact["bed_days"]
+        period = f"for {quarter_bounds(today)[0].isoformat()} to {position_end.isoformat()}"
+        def shortfall_message(label, minutes, target):
+            ratio = Decimal(minutes) / Decimal(bd)
+            deficit = Decimal(str(target)) * bd - Decimal(minutes)
+            return (f"{label}: averaging {ratio:.1f} of {Decimal(str(target)):.1f} "
+                    f"mins/occupied bed day {period}; {deficit.normalize():f} total minutes short "
+                    "using exact comparisons before display rounding.")
         if Decimal(exact["total_minutes"]) < Decimal(str(care_target)) * bd:
             alerts.append(
                 {
                     "severity": "high",
-                    "message": (
-                        f"Facility is below its AN-ACC target: averaging "
-                        f"{fc['qtd_avg']:.0f} of {care_target:.0f} "
-                        f"mins/resident/day this quarter."
-                    ),
+                    "message": shortfall_message("Facility is below its AN-ACC target", exact["total_minutes"], care_target),
                 }
             )
-        elif fc["projected_avg"] < care_target:
+        elif fc and fc["on_track"] is False:
             when = (
                 f"in {fc['days_until_breach']} day(s)"
                 if fc["days_until_breach"]
@@ -360,22 +364,14 @@ def detect_gaps(facility, today: date) -> list[dict]:
             alerts.append(
                 {
                     "severity": "high",
-                    "message": (
-                        f"RN minutes below target: averaging {fc['qtd_rn_avg']:.0f} "
-                        f"of {rn_target * RN_ONLY_FRACTION:.1f} required "
-                        f"RN-only mins/bed-day this quarter."
-                    ),
+                    "message": shortfall_message("RN minutes below target", exact["rn_minutes"], Decimal(str(rn_target)) * Decimal("0.9")),
                 }
             )
         if Decimal(exact["rn_en_minutes"]) < Decimal(str(rn_target)) * bd:
             alerts.append(
                 {
                     "severity": "high",
-                    "message": (
-                        f"RN + EN minutes below target: averaging "
-                        f"{fc['qtd_rn_en_avg']:.0f} of {rn_target:.0f} "
-                        f"mins/bed-day this quarter."
-                    ),
+                    "message": shortfall_message("RN + EN minutes below target", exact["rn_en_minutes"], rn_target),
                 }
             )
 
@@ -505,6 +501,10 @@ def forecast_quarter(
     if configured is None:
         return None
     q_end = _calendar_quarter_end(today)
+    from carelog.domain.clock import facility_today
+    calendar_today = facility_today(facility)
+    if q_end < calendar_today or today > calendar_today:
+        return None  # Missing historical dates are never projected as future days.
     qtd = [
         r for r in range_breakdown(facility.id, q_start, today) if r["residents"] > 0
     ]
@@ -546,7 +546,9 @@ def forecast_quarter(
     fut_per_res = fut_total / fut_res
     fut_rn_per_res = fut_rn / fut_res
 
-    m = max((q_end - today).days, 0)
+    projection_start = max(today + timedelta(days=1), calendar_today)
+    missing_elapsed_days = (projection_start - today).days - 1
+    m = max((q_end - projection_start).days + 1, 0)
     projected_bed_days = qtd_bed_days + fut_res * m
     projected = (qtd_total + fut_total * m) / projected_bed_days
     projected_rn = (qtd_rn + fut_rn * m) / projected_bed_days
@@ -569,6 +571,7 @@ def forecast_quarter(
         "q_end": q_end,
         "qtd_days": n,
         "days_remaining": m,
+        "missing_elapsed_days": missing_elapsed_days,
         "qtd_avg": round(qtd_avg, 1),
         "qtd_rn_avg": round(qtd_rn_avg, 1),
         "qtd_rn_en_avg": round(qtd_rn_en_avg, 1),
@@ -579,9 +582,9 @@ def forecast_quarter(
         "projected_rn_en_avg": round(projected_rn_en, 1),
         "days_until_breach": days_until_breach,
         # With unverified bed days the average is inflated, so no call is made.
-        "provisional": bool(census_issues),
-        "on_track": None if census_issues else projected >= target,
-        "rn_on_track": None if census_issues else (
+        "provisional": bool(census_issues) or missing_elapsed_days > 0,
+        "on_track": None if census_issues or missing_elapsed_days else projected >= target,
+        "rn_on_track": None if census_issues or missing_elapsed_days else (
             projected_rn >= configured.rn_target * RN_ONLY_FRACTION
             and projected_rn_en >= configured.rn_target
         ),
@@ -595,6 +598,13 @@ def _calendar_quarter_end(d: date) -> date:
     if end_month == 12:
         return date(d.year, 12, 31)
     return date(d.year, end_month + 1, 1) - timedelta(days=1)
+
+
+def assessment_end(facility, last_worked_date):
+    """Assess every date of an ended quarter; open periods stop at source data."""
+    from carelog.domain.clock import facility_today
+    end = _calendar_quarter_end(last_worked_date)
+    return end if end < facility_today(facility) else last_worked_date
 
 
 def compliance_pct(facility, today: date) -> float | None:
@@ -716,7 +726,17 @@ def quarterly_tests(facility, start: date, end: date) -> dict:
     missing_dates = [start + timedelta(days=i) for i in range((end - start).days + 1)
                      if start + timedelta(days=i) not in worked_dates]
     if missing_dates:
-        limitations.append("No worked-time evidence on: " + ", ".join(d.isoformat() for d in missing_dates) + ". Verify source completeness; absence is not proof of zero time.")
+        intervals = []
+        first = last = missing_dates[0]
+        for day in missing_dates[1:]:
+            if day == last + timedelta(days=1):
+                last = day
+            else:
+                intervals.append((first, last))
+                first = last = day
+        intervals.append((first, last))
+        ranges = "; ".join(a.isoformat() if a == b else f"{a.isoformat()} to {b.isoformat()}" for a, b in intervals)
+        limitations.append(f"No worked-time evidence on {len(missing_dates)} dates: {ranges}. Verify source completeness; absence is not proof of zero time.")
     complete_quarter = start == quarter_bounds(start)[0] and end == _calendar_quarter_end(start)
     from carelog.domain.clock import facility_today
     ended_quarter = _calendar_quarter_end(start) < facility_today(facility)

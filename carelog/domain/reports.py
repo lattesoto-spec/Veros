@@ -131,6 +131,9 @@ def statement_end(facility_id: int, start: date, end: date) -> date:
     by future occupied-bed days, so figures stop at the last actual-worked date.
     Readiness checks still assess the complete statement period.
     """
+    from carelog.domain.clock import facility_today
+    if end < facility_today(facility_id):
+        return end
     latest_worked = _latest_worked(facility_id, start, end)
     return min(latest_worked, end) if latest_worked else start
 

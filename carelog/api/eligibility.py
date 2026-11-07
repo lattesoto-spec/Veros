@@ -268,3 +268,38 @@ def eligibility_decide(staff_id):
     db.session.commit()
     flash(f"{member.name} marked {decision}. Care minutes recalculated on next view.")
     return navigate(url_for("api.eligibility_queue"))
+
+
+@bp.post("/eligibility/<int:staff_id>/name-alias")
+@require("review_eligibility")
+def staff_name_alias(staff_id):
+    import re
+    from carelog.models import Facility
+
+    facility = current_facility()
+    if not facility:
+        abort(404)
+    db.session.query(Facility).filter_by(id=facility.id).with_for_update().first()
+    member = Staff.query.filter_by(id=staff_id, facility_id=facility.id).first()
+    if member is None:
+        abort(404)
+    alias = " ".join((form_data().get("alias") or "").split())
+    basis = (form_data().get("basis") or "").strip()
+    tokens = lambda text: sorted(re.findall(r"\w+", text.casefold()))
+    expected = tokens(member.name)
+    if not basis or len(expected) < 2 or tokens(alias) != expected:
+        return {"error": "Record a basis and a formatting variant of the same full name, such as Jane Smith / SMITH, Jane. Different people require distinct source identifiers."}, 400
+    versions = Staff.query.filter_by(facility_id=facility.id, staff_id=member.staff_id).all()
+    if any(tokens(row.name) != expected for row in versions):
+        return {"error": "This source ID already has conflicting identities. Contact support before linking any names."}, 409
+    actor = current_user()
+    decision = {"name": alias, "basis": basis, "user_id": actor.id, "recorded_at": datetime.utcnow().isoformat()}
+    for row in versions:
+        aliases = row.identity_aliases
+        if not any(existing["name"].casefold() == alias.casefold() for existing in aliases):
+            row.identity_aliases_json = json.dumps(aliases + [decision])
+    auth.record("staff_name_alias_recorded", "staff", member.id,
+                f"Source ID {member.staff_id}; canonical name {member.name}; alias {alias}; basis: {basis}")
+    db.session.commit()
+    flash("Name-format alias recorded. Retry the retained import; the canonical identity and credentials are unchanged.")
+    return navigate(url_for("api.eligibility_queue"))

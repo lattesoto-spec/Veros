@@ -253,6 +253,12 @@ class Staff(db.Model):
     # Every decision has a reviewer; only an approval has an approval stamp.
     reviewed_at = db.Column(db.DateTime)
     reviewed_by_user_id = db.Column(db.Integer, db.ForeignKey("users.id"))
+    identity_aliases_json = db.Column(db.Text)
+
+    @property
+    def identity_aliases(self):
+        import json
+        return json.loads(self.identity_aliases_json or "[]")
 
     # Evidence of entitlement to work in the counted role.
     employment_type = db.Column(db.Text)  # employee | agency | contractor

@@ -11,6 +11,7 @@ import uuid
 from datetime import datetime
 
 from flask import current_app
+from sqlalchemy import select
 
 from carelog.domain.clock import facility_today
 from carelog.domain.compliance import CALC_VERSION, quarterly_tests
@@ -23,6 +24,7 @@ from carelog.domain.reports import (
 from carelog.models import (
     RETIRED_EVIDENCE,
     ImportReceipt,
+    Facility,
     QuarterClosure,
     ResidentDay,
     Shift,
@@ -38,6 +40,8 @@ def _figures(facility, start, end) -> dict:
     return {
         "provisional": result["provisional"],
         "limitations": result["limitations"],
+        "missing_worked_dates": result["missing_worked_dates"],
+        "assessment_end": end.isoformat(),
         "bed_days": float(totals["bed_days"]),
         "total_minutes": float(totals["total_minutes"]),
         "rn_minutes": float(totals["rn_minutes"]),
@@ -65,7 +69,10 @@ def _sources(facility, start, end) -> list[dict]:
         ).distinct()
     }
     sources = []
-    for receipt in ImportReceipt.query.filter(ImportReceipt.id.in_(contributing - {None})).order_by(ImportReceipt.id):
+    for receipt in ImportReceipt.query.filter(
+        ImportReceipt.id.in_(contributing - {None}), ImportReceipt.facility_id == facility.id,
+        ImportReceipt.organization_id == facility.organization_id,
+    ).order_by(ImportReceipt.id):
         for outcome in json.loads(receipt.summary_json or "[]"):
             sources.append(
                 {
@@ -77,14 +84,42 @@ def _sources(facility, start, end) -> list[dict]:
     return sources
 
 
-def close_quarter(facility, year, quarter, actor, basis) -> QuarterClosure:
+class ClosureReviewRequired(ValueError):
+    def __init__(self, message, preview):
+        super().__init__(message)
+        self.preview = preview
+
+
+def closure_preview(facility, year, quarter):
+    from carelog.ingestion.review import state_fingerprint
+
+    start, end = financial_quarter_bounds(year, quarter)
+    figures = _figures(facility, start, end)
+    identity = f"{state_fingerprint(facility.id)}|{CALC_VERSION}|{year}-Q{quarter}|{json.dumps(figures, sort_keys=True)}"
+    return {
+        "q": f"{year}-Q{quarter}", "start": start, "end": end,
+        "can_close": end < facility_today(facility),
+        "provisional": figures["provisional"], "limitations": figures["limitations"],
+        "missing_worked_dates": figures["missing_worked_dates"],
+        "review_fingerprint": hashlib.sha256(identity.encode()).hexdigest(),
+    }
+
+
+def close_quarter(facility, year, quarter, actor, basis, *, acknowledged=False, review_fingerprint=None) -> QuarterClosure:
     start, end = financial_quarter_bounds(year, quarter)
     if end >= facility_today(facility):
         raise ValueError("A quarter can be closed once it has ended.")
+    db.session.execute(select(Facility).where(Facility.id == facility.id).with_for_update())
+    preview = closure_preview(facility, year, quarter)
+    if review_fingerprint != preview["review_fingerprint"]:
+        raise ClosureReviewRequired("Review the current quarter evidence before closing. Its evidence may have changed.", preview)
+    if preview["provisional"] and not acknowledged:
+        raise ClosureReviewRequired("Acknowledge the missing dates and every listed evidence limitation before closing a provisional statement.", preview)
+    figures = _figures(facility, start, end)
+    figures["limitations_acknowledged"] = bool(acknowledged)
     pdf = build_quarterly_pdf(facility, year, quarter)
     key = f"closures/{facility.id}/{year}-Q{quarter}-{uuid.uuid4().hex[:12]}.pdf"
     build_storage(current_app.config["UPLOADS_DIR"]).put(key, pdf, "application/pdf")
-    figures = _figures(facility, start, end)
     closure = QuarterClosure(
         organization_id=facility.organization_id,
         facility_id=facility.id,
@@ -108,7 +143,7 @@ def close_quarter(facility, year, quarter, actor, basis) -> QuarterClosure:
 def closure_statuses(facility) -> list[dict]:
     """The latest closure of each quarter, including changes to its evidence basis."""
     latest = {}
-    for closure in QuarterClosure.query.filter_by(facility_id=facility.id).order_by(
+    for closure in QuarterClosure.query.filter_by(facility_id=facility.id, organization_id=facility.organization_id).order_by(
         QuarterClosure.closed_at
     ):
         latest[(closure.year, closure.quarter)] = closure
@@ -139,6 +174,7 @@ def closure_statuses(facility) -> list[dict]:
                 "basis": closure.basis,
                 "calc_version": closure.calc_version,
                 "provisional": closure.provisional,
+                "missing_worked_dates": closed.get("missing_worked_dates", []),
                 "tests": closed["tests"],
                 "source_files": len(json.loads(closure.sources_json)),
                 "pdf_sha256": closure.pdf_sha256,

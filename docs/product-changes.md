@@ -28,6 +28,18 @@ The complete UI-ordered feature inventory lives in `FEATURES.md` in the independ
 
 `CALC_VERSION` is `2026.11.10`. Existing stored evidence is not rewritten automatically; providers should review earlier fractional or clock-like break imports against their originals and use a corrected reviewed import or row correction where needed.
 
+## Messy exports and complete historical assessments (UI order)
+
+1. **Dashboard / Care minutes:** an ended quarter is assessed through its calendar end, including trailing missing dates and all evidenced bed days. Missing dates are returned individually and summarised as consecutive ranges for readable warnings and PDFs. Provisional verdicts remain withheld. Alerts use one decimal for displayed ratios, exact total-minute shortfalls and explicit period dates.
+2. **Imports:** reviewers can select several valid status values; the include rule combines them with OR. Unselected statuses remain excluded. A new valid value reopens review even if the old filter would otherwise remove every row, and prior choices remain available with per-file line counts. Known rejected/pending/cancelled/no-show statuses cannot be selected into worked time.
+3. **Imports:** words inside prose comments are not status signals. Content-based candidates use exact categorical values, and a reviewer can record that an unnamed candidate is not a work-status column. That interpretation is audited and remembered. A column already established as a work-status field cannot bypass its exclusions this way.
+4. **Eligibility:** record an audited full-name formatting alias, such as Jane Smith / SMITH, Jane, then retry the retained import. Only variants containing the same full-name tokens are allowed; different people and differing Ahpra numbers remain rejected. Canonical names, credentials and approvals are preserved across role versions. Alias decisions appear in provider history. Bulk registration-directory imports are now signposted in Eligibility and the import guide.
+5. **Scenarios:** ended quarters have no forecast. In an open quarter, already elapsed missing dates are not projected as future days; they keep the projection provisional. Planning requires a current-quarter baseline.
+6. **Reports / Closed quarters:** preview the full quarter's missing dates and limitations before closing. A provisional statement requires explicit acknowledgement. The backend checks the preview's facility/figure fingerprint under the facility lock; changed evidence requires a fresh review. Issued figures retain the missing-date list and acknowledgement. Closed statements remain reproducible and are not represented as approval or submission readiness.
+7. **Reports:** historical board outputs retain all three tests and target evidence without a future projection. Preparation date is separate from the latest included data date. Board and quarterly PDF layouts were rendered and visually checked using synthetic evidence.
+
+`CALC_VERSION` is `2026.11.11`. Numerical golden fixtures remain unchanged; historical default assessment periods now include the complete quarter. Forecast tests explicitly freeze their synthetic provider date inside the open quarter.
+
 ## 2026-11-07
 
 1. **Imports / Facilities / Settings:** explicitly validate both verified facility targets before any mutation. Non-finite, missing, non-positive or inconsistent targets are rejected. Synthetic two-file demo sources generate in temporary test directories.

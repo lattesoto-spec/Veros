@@ -231,6 +231,14 @@ def test_deleting_needs_a_recorded_reason(admin_client):
     assert db.session.get(ImportReceipt, receipt.id) is not None
 
 
+def closure_form(client, basis, q="2026-Q1"):
+    response = client.get(f"/api/reports/closure-preview?q={q}")
+    assert response.status_code == 200
+    preview = response.json["data"]["preview"]
+    return {"q": q, "basis": basis, "review_fingerprint": preview["review_fingerprint"],
+            "acknowledge_limitations": "1"}
+
+
 def test_closed_quarter_keeps_figures_and_statement_and_shows_later_movement(admin_client, monkeypatch):
     app, ids, client, home = admin_client
     monkeypatch.setenv("IMPORT_WORKER", "thread")
@@ -242,7 +250,7 @@ def test_closed_quarter_keeps_figures_and_statement_and_shows_later_movement(adm
     approve_everyone(home)
 
     assert client.post("/api/reports/close", data={"q": "2026-Q1"}).status_code == 400
-    assert client.post("/api/reports/close", data={"q": "2026-Q1", "basis": "QFR lodged"}).status_code == 200
+    assert client.post("/api/reports/close", data=closure_form(client, "QFR lodged")).status_code == 200
     statuses = client.get("/api/reports").json["data"]["closures"]
     assert statuses[0]["label"] == "FY2026-27 Q1" and statuses[0]["moved"] is False
     assert statuses[0]["source_files"] == 1
@@ -272,7 +280,7 @@ def test_closure_names_census_files_and_matches_the_statement(admin_client, monk
     db.session.commit()
     run_import(app, ids, home, timesheet(("A", "2026-08-01")))
     approve_everyone(home)
-    assert client.post("/api/reports/close", data={"q": "2026-Q1", "basis": "Lodged"}).status_code == 200
+    assert client.post("/api/reports/close", data=closure_form(client, "Lodged")).status_code == 200
     closure = QuarterClosure.query.one()
     assert "census.csv" in {s["filename"] for s in json.loads(closure.sources_json)}
     from carelog.domain.reports import compute_quarter_stats
@@ -291,7 +299,7 @@ def test_closed_quarter_flags_readiness_changes_without_changed_minutes(admin_cl
     monkeypatch.setenv("IMPORT_WORKER", "thread")
     nurse = member(home)
     complete_quarter(home, nurse)
-    assert client.post("/api/reports/close", data={"q": "2026-Q1", "basis": "Board statement"}).status_code == 200
+    assert client.post("/api/reports/close", data=closure_form(client, "Board statement")).status_code == 200
     before = client.get("/api/reports").json["data"]["closures"][0]
     issued = client.get(f"/api/reports/closure/{before['id']}.pdf").data
     figures = QuarterClosure.query.one().figures_json
@@ -312,7 +320,7 @@ def test_closed_quarter_flags_new_sources_and_calculation_version(admin_client, 
     monkeypatch.setenv("IMPORT_WORKER", "thread")
     nurse = member(home)
     complete_quarter(home, nurse)
-    assert client.post("/api/reports/close", data={"q": "2026-Q1", "basis": "Board statement"}).status_code == 200
+    assert client.post("/api/reports/close", data=closure_form(client, "Board statement")).status_code == 200
     before = client.get("/api/reports").json["data"]["closures"][0]
     receipt = ImportReceipt(facility_id=home.id, organization_id=ids["customer"],
                             summary_json=json.dumps([{"filename": "verified-census.csv", "sha256": "abc"}]))
@@ -348,7 +356,7 @@ def test_a_closed_quarter_protects_the_evidence_it_cites(admin_client, monkeypat
     monkeypatch.setenv("IMPORT_WORKER", "thread")
     job, _ = run_import(app, ids, home, timesheet(("A", "2026-08-01")))
     approve_everyone(home)
-    assert client.post("/api/reports/close", data={"q": "2026-Q1", "basis": "Lodged"}).status_code == 200
+    assert client.post("/api/reports/close", data=closure_form(client, "Lodged")).status_code == 200
     form = {"confirm": "delete", "reason": "Tidying"}
     assert client.post(f"/api/audit/receipt/{job.receipt_id}/delete", data=form).status_code == 409
     assert db.session.get(ImportReceipt, job.receipt_id) is not None
@@ -370,7 +378,8 @@ def test_restore_checks_every_record_for_that_person(facility, web_app):  # noqa
     assert client.post(f"/api/audit/shift/{voided.id}/restore", data={"reason": "x"}).status_code == 409
 
 
-def test_a_forecast_makes_no_call_on_unverified_bed_days(facility):
+def test_a_forecast_makes_no_call_on_unverified_bed_days(facility, monkeypatch):
+    monkeypatch.setattr("carelog.domain.clock.facility_today", lambda _: date(2026, 8, 14))
     from carelog.domain.compliance import compliance_pct, forecast_quarter
     nurse = member(facility)
     for day in range(1, 15):

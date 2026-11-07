@@ -25,6 +25,7 @@ from carelog.domain.care_minutes import (
 )
 from carelog.domain.compliance import (
     CALC_VERSION,
+    assessment_end,
     compliance_pct,
     detect_gaps,
     evidence_summary,
@@ -77,18 +78,20 @@ def compliance_view():
     today = _latest_data_date(facility)
     fc = forecast_quarter(facility, today)
     q_start, _ = quarter_bounds(today)
+    end = assessment_end(facility, today)
     return resource(
         "compliance",
         facility=facility_for_period(facility, today),
         today=today,
-        tests=quarterly_tests(facility, q_start, today),
+        tests=quarterly_tests(facility, q_start, end),
         forecast=fc,
         alerts=detect_gaps(facility, today),
         coverage=rn_coverage(facility.id, today),
-        months=monthly_breakdown(facility.id, fc["q_start"], today) if fc else [],
+        months=monthly_breakdown(facility.id, q_start, end),
         week=range_breakdown(facility.id, today - timedelta(days=6), today),
         calc_version=CALC_VERSION,
-        evidence=evidence_summary(facility.id, q_start, today),
+        evidence=evidence_summary(facility.id, q_start, end),
+        assessment_end=end,
         historical_period=q_start < quarter_bounds(facility_today(facility))[0],
         current_q_start=quarter_bounds(facility_today(facility))[0],
     )
@@ -213,6 +216,8 @@ def scenarios():
             result = forecast_quarter(facility, today, adjustments=params)
         except (TypeError, ValueError) as error:
             errors.append(str(error) or "Scenario inputs must be whole numbers.")
+    elif request.method == "POST":
+        errors.append("A current-quarter worked baseline is required. Ended quarters cannot be projected as future staffing.")
     return resource(
         "scenarios",
         facility=facility_for_period(facility, today),
@@ -255,6 +260,7 @@ def dashboard():
     )
 
     q_start, q_end = quarter_bounds(today)
+    q_end = assessment_end(facility, today)
     q_rows = range_stats(
         facility.id, q_start, q_end, facility.ancc_target, facility.rn_target
     )
@@ -302,8 +308,8 @@ def dashboard():
     # lists the stored objects; here a recorded retention location is enough.
     with_files = sum(1 for r in receipts if r.source_path)
     audit_readiness = round(with_files / len(receipts) * 100) if receipts else None
-    evidence = evidence_summary(facility.id, q_start, today)
-    tests = quarterly_tests(facility, q_start, today)
+    evidence = evidence_summary(facility.id, q_start, q_end)
+    tests = quarterly_tests(facility, q_start, q_end)
     nurses = Staff.query.filter(
         Staff.facility_id == facility.id, Staff.role.in_(["RN", "EN"])
     ).all()

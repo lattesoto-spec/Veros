@@ -13,6 +13,7 @@ from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, Tabl
 
 from carelog.domain.compliance import (
     CALC_VERSION,
+    assessment_end,
     compliance_pct,
     detect_gaps,
     forecast_quarter,
@@ -223,12 +224,14 @@ def board_pdf(facility, today: date) -> bytes:
     pct = compliance_pct(facility, today)
     cov = rn_coverage(facility.id, today)
     alerts = detect_gaps(facility, today)
-    tests = quarterly_tests(facility, fc["q_start"], today) if fc else None
-    evidence = evidence_summary(facility.id, fc["q_start"], today) if fc else None
+    from carelog.domain.care_minutes import quarter_bounds
+    tests = quarterly_tests(facility, quarter_bounds(today)[0], assessment_end(facility, today))
+    evidence = evidence_summary(facility.id, quarter_bounds(today)[0], assessment_end(facility, today))
 
+    from carelog.domain.clock import facility_today
     elements = [
         Paragraph(f"{escape(facility.name)} - Board Care Minutes Report", h1),
-        Paragraph(today.strftime("Prepared %d %B %Y"), small),
+        Paragraph(f"Prepared {facility_today(facility).strftime('%d %B %Y')}; actual-worked data through {today.strftime('%d %B %Y')}", small),
         Spacer(1, 6 * mm),
     ]
 
@@ -366,7 +369,19 @@ def board_pdf(facility, today: date) -> bytes:
                 )
             )
     else:
-        elements.append(Paragraph("Insufficient data for quarter analysis.", body))
+        elements.append(Paragraph("No current-quarter forecast is available. Historical missing dates are evidence gaps, not future staffing days.", body))
+        reference = tests["target_reconciliation"]
+        elements.append(Paragraph(f"Target quarter {reference['target_quarter']}; source: {escape(reference['target_source'] or 'Not approved')}.", small))
+        rows = [["Quarterly test", "Achieved", "Required", "Result"]]
+        rows.extend([[r["label"], r["achieved"], r["target"] if r["target"] is not None else "Not approved",
+                      "PROVISIONAL" if r["passed"] is None else "PASS" if r["passed"] else "FAIL"] for r in tests["tests"]])
+        historic_tests = Table(rows, colWidths=[65 * mm, 30 * mm, 30 * mm, 30 * mm], repeatRows=1, hAlign="LEFT")
+        historic_tests.setStyle(TableStyle([
+            ("FONTSIZE", (0, 0), (-1, -1), 9), ("GRID", (0, 0), (-1, -1), 0.4, colors.lightgrey),
+            ("BACKGROUND", (0, 0), (-1, 0), colors.whitesmoke),
+        ]))
+        elements.append(historic_tests)
+        elements.append(Paragraph(f"{len(tests['missing_worked_dates'])} dates lack worked-time evidence in the assessment period.", body))
 
     elements.append(Paragraph("Risks and alerts", styles["Heading3"]))
     for a in alerts:

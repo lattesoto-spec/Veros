@@ -328,7 +328,7 @@ def import_resolve_hold(job_id):
     data = form_data()
     kind, name, sheet, value = (data.get(k) or "" for k in ("kind", "file", "sheet", "value"))
     basis = (data.get("basis") or "").strip()
-    if not basis or not value:
+    if not basis or (not value and not (kind == "status" and data.getlist("values"))):
         return {"error": "Choose an answer and record its basis."}, 400
     review = json.loads(job.review_json or "{}")
     hold = next(
@@ -369,12 +369,24 @@ def import_resolve_hold(job_id):
         else:
             return {"error": "Choose the break column or confirm these times already exclude breaks."}, 400
     elif kind == "status":
-        if value == "all" and hold.get("allow_all"):
+        if value == "not_status" and data.getlist("values"):
+            return {"error": "Either select worked statuses or mark this as a non-status column, not both."}, 400
+        target.get("status_review_required", {}).pop(hold["column"], None)
+        if value == "not_status" and hold.get("can_ignore"):
+            target.setdefault("non_status_columns", {})[hold["column"]] = basis
+        elif value == "all" and hold.get("allow_all"):
             target.setdefault("status_attestations", {})[hold["column"]] = {"basis": basis, "values": hold["options"]}
-        elif value in hold["options"]:
-            target.setdefault("status_filters", []).append({"column": hold["column"], "include_values": [value]})
         else:
-            return {"error": "Choose an eligible status from this sheet. Rejected, pending and cancelled lines cannot count."}, 400
+            selected = sorted(set(data.getlist("values") or ([value] if value else [])))
+            if not selected or not set(selected) <= set(hold["options"]):
+                return {"error": "Choose one or more eligible statuses. Rejected, pending and cancelled lines cannot count."}, 400
+            target["status_filters"] = [f for f in target.get("status_filters", []) if f["column"] != hold["column"]]
+            target["status_filters"].append({"column": hold["column"], "include_values": selected})
+            if target.get("row_filter", {}).get("column") == hold["column"]:
+                target.pop("row_filter")
+            target.setdefault("status_decisions", {})[hold["column"]] = {
+                "included": selected, "seen": hold["options"], "basis": basis,
+            }
     elif kind == "site" and value == "all":
         target["single_site"] = basis
     elif kind == "site" and value in hold["options"]:
@@ -384,7 +396,8 @@ def import_resolve_hold(job_id):
     if not _requeue_for_review(job, {name: spec}):
         db.session.rollback()
         return {"error": "This import has moved on. Reload its status."}, 409
-    auth.record("import_hold_resolved", "import_job", job.id, f"{kind} on {sheet}: {value}; basis: {basis}")
+    answer_detail = json.dumps(data.getlist("values")) if kind == "status" and data.getlist("values") else value
+    auth.record("import_hold_resolved", "import_job", job.id, f"{kind} on {sheet} {hold.get('field', '')}: {answer_detail}; basis: {basis}")
     db.session.commit()
     import_jobs.dispatch_job(current_app._get_current_object(), job.id)
     return navigate(url_for("api.import_status", job_id=job.id))
@@ -697,6 +710,7 @@ def audit():
                     "target_approved",
                     "target_corrected",
                     "eligibility_decided",
+                    "staff_name_alias_recorded",
                     "import_approved",
                     "import_cancelled",
                     "import_retried",

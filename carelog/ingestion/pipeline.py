@@ -39,7 +39,7 @@ from .paycodes import candidate_columns, pay_column, split_records
 from .presets import matching_spec
 from .quality import _minutes as record_minutes, check_shifts, daylight_saving_warnings
 from .reader import read_upload, rebuild_with_header
-from .statuses import disallowed, prepare_status_filters, status_columns
+from .statuses import STATUS_COLUMNS, disallowed, known_columns, prepare_status_filters, status_columns
 from .durations import needs_unit_review
 
 
@@ -330,11 +330,13 @@ def _validate_staff_identity(directory, rec, filename):
     for existing in directory.get(sid, []):
         old_name = " ".join((existing.name or "").split()).casefold()
         old_registration = (existing.registration_number or "").strip().casefold()
-        if name and old_name and old_name != sid.casefold() and name != old_name:
+        aliases = {" ".join(alias["name"].split()).casefold() for alias in existing.identity_aliases}
+        if name and old_name and old_name != sid.casefold() and name != old_name and name not in aliases:
             raise MappingError(
                 f"{filename}: staff ID {sid} is recorded as {existing.name!r}, "
                 f"but this file names {rec['staff_name']!r}. Nothing was imported. "
-                "Correct the source, or use distinct staff identifiers across payroll and agency systems."
+                "For a name-format difference, record a verified alias in Eligibility review and retry. "
+                "For different people, use distinct identifiers across payroll and agency systems."
             )
         if registration and old_registration and registration != old_registration:
             raise MappingError(
@@ -380,7 +382,7 @@ def _add_staff_record(facility, directory, sid, name, role, raw_role, status, re
     member = Staff(
         facility_id=facility.id,
         staff_id=sid,
-        name=name,
+        name=previous.name if previous and previous.name != sid else name,
         role=role,
         source_role=raw_role,
         eligibility_status=status,
@@ -394,6 +396,7 @@ def _add_staff_record(facility, directory, sid, name, role, raw_role, status, re
         for inherited in (
             "registration_number", "registration_expiry", "employment_type",
             "classification", "credential_gaps_json",
+            "identity_aliases_json",
         ):
             setattr(member, inherited, getattr(previous, inherited))
     db.session.add(member)
@@ -438,7 +441,7 @@ def _import_staff(facility, records: list[dict], outcome: ImportOutcome):
                 facility, directory, sid, name, role, raw_role, status, reason
             )
         else:
-            if rec.get("staff_name"):
+            if rec.get("staff_name") and member.name in ("", sid):
                 member.name = name
             if member.approved_at is None and member.reviewed_at is None and raw_role:
                 member.role = role
@@ -527,12 +530,22 @@ def _review_holds(spec, sheets, filename) -> list[dict]:
                     "kind": "breaks", "file": filename, "sheet": sheet.name,
                     "options": candidate_columns(sheet.headers, sheet.rows, mapped),
                 })
-            for header in status_columns(sheet):
-                filters = [target.get("row_filter", {})] + target.get("status_filters", [])
-                if any(f.get("column") == header and f.get("include_values")
-                       and all(str(v).strip() and not disallowed(v) for v in f["include_values"]) for f in filters):
-                    continue
+            recognised = known_columns(target)
+            for header in status_columns(sheet, target.get("non_status_columns", {}), recognised):
                 values = sorted({str(r.get(header) or "").strip() for r in sheet.rows})
+                options = [v for v in values if v and not disallowed(v)]
+                filters = [target.get("row_filter", {})] + target.get("status_filters", [])
+                safe_filters = [{v.casefold() for v in f["include_values"]} for f in filters
+                                if f.get("column") == header and f.get("include_values")
+                                and all(str(v).strip() and not disallowed(v) for v in f["include_values"])]
+                included = set.intersection(*safe_filters) if safe_filters else set()
+                pending = target.get("status_review_required", {}).get(header, {})
+                prior = pending.get("included", [])
+                options = sorted(set(options) | set(prior))
+                decision = target.get("status_decisions", {}).get(header, {})
+                reviewed = {v.casefold() for v in decision.get("seen", [])} if decision.get("basis") else set()
+                if not pending and safe_filters and {v.casefold() for v in options} <= included | reviewed:
+                    continue
                 attestation = target.get("status_attestations", {}).get(header)
                 if (isinstance(attestation, dict) and attestation.get("basis")
                     and set(values) <= set(attestation.get("values", []))
@@ -540,7 +553,10 @@ def _review_holds(spec, sheets, filename) -> list[dict]:
                     continue
                 holds.append({
                     "kind": "status", "file": filename, "sheet": sheet.name,
-                    "column": header, "options": [v for v in values if v and not disallowed(v)],
+                    "column": header, "options": options,
+                    "selected": [v for v in options if v.casefold() in included | {p.casefold() for p in prior}],
+                    "counts": {v: sum(str(r.get(header) or "").strip() == v for r in sheet.rows) for v in options},
+                    "can_ignore": normalize_header(header) not in STATUS_COLUMNS and header not in recognised,
                     "excluded": [v or "Blank" for v in values if disallowed(v) or not v],
                     "allow_all": bool(values) and all(v and not disallowed(v) for v in values),
                 })
@@ -737,7 +753,7 @@ def _import_shifts(
                 facility, directory, sid, name, role, raw_role, status, reason
             )
         else:
-            if rec.get("staff_name"):
+            if rec.get("staff_name") and staff.name in ("", sid):
                 staff.name = name
             # Any human decision is permanent until a human changes it. An
             # excluded worker must not become approved merely because a file

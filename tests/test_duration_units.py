@@ -135,7 +135,9 @@ def test_dashboard_identifies_an_ended_quarter_and_missing_current_evidence(home
     data = client.get("/api/dashboard").json["data"]
     assert data["historical_period"] is True and data["current_q_start"] == "2026-10-01"
     assert data["tests"]["ended_quarter"] is True
-    assert data["tests"]["period_label"] == "Incomplete ended quarter"
+    assert data["tests"]["totals"]["end"] == "2026-09-30"
+    assert "2026-09-30" in data["tests"]["missing_worked_dates"]
+    assert data["tests"]["passed"] is None
     run_import(app, ids, facility, timesheet(("A", "2026-11-01")))
     data = client.get("/api/dashboard").json["data"]
     assert data["historical_period"] is False and data["tests"]["ended_quarter"] is False
