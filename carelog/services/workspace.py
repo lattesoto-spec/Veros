@@ -161,25 +161,28 @@ def _delete_facility_data(facility_ids):
         )
 
 
-def _purge_evidence(receipts) -> int:
-    """Delete retained source files for the given receipts.
+def _purge_evidence(receipts, facility_ids=None) -> int:
+    """Purge receipt and failed/cancelled job sources before deleting their records.
 
-    Storage failures are logged rather than raised: the database deletion is
-    the part the user asked for, and a leftover blob must not block it.
+    Fail visibly if storage cannot confirm deletion; keep the database history
+    available so the operator can investigate and retry.
     """
-    from flask import current_app
-
-    removed = 0
+    removed, handled = 0, set()
     for receipt in receipts:
         if not receipt.source_path:
             continue
-        try:
-            store = _storage_for(receipt)
-            removed += store.delete([o.key for o in _receipt_files(receipt)])
-        except StorageError as e:
-            current_app.logger.warning(
-                "Could not delete evidence for receipt %s: %s", receipt.id, e
-            )
+        store = _storage_for(receipt)
+        prefix = os.path.basename(receipt.source_path.rstrip("/")) if os.path.isabs(receipt.source_path) else receipt.source_path
+        removed += store.delete([item.key for item in store.list(prefix)])
+        handled.add(receipt.source_path)
+    jobs = ImportJob.query.filter(ImportJob.facility_id.in_(facility_ids)).all() if facility_ids is not None else (
+        ImportJob.query.filter(ImportJob.receipt_id.in_([r.id for r in receipts])).all() if receipts else []
+    )
+    store = _storage()
+    for job in jobs:
+        if job.storage_prefix and job.storage_prefix not in handled:
+            removed += store.delete([item.key for item in store.list(job.storage_prefix)])
+            handled.add(job.storage_prefix)
     return removed
 
 

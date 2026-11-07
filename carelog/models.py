@@ -276,6 +276,7 @@ class ImportReceipt(db.Model):
     resident_days_imported = db.Column(db.Integer, nullable=False, default=0)
     care_episodes_imported = db.Column(db.Integer, nullable=False, default=0)
     evidence_type = db.Column(db.Text, nullable=False, default="unverified")
+    original_evidence_type = db.Column(db.Text)
     first_shift_date = db.Column(db.Date)
     last_shift_date = db.Column(db.Date)
     # Audit trail
@@ -284,6 +285,17 @@ class ImportReceipt(db.Model):
     mapping_ids = db.Column(db.Text)      # FormatMapping ids used, comma-separated
     calc_version = db.Column(db.Text)
     summary_json = db.Column(db.Text)     # per-file outcome snapshot for the summary page
+
+    @property
+    def active_care_rows(self):
+        return sum(model.query.filter_by(import_receipt_id=self.id).count()
+                   for model in (Shift, ResidentDay, CareEpisode))
+
+    @property
+    def record_status(self):
+        original = self.shifts_imported + self.resident_days_imported + self.care_episodes_imported
+        active = self.active_care_rows
+        return "Superseded" if original and active == 0 else "Partly superseded" if active < original else "Current"
 
 
 class ImportJob(db.Model):
@@ -304,6 +316,9 @@ class ImportJob(db.Model):
     error = db.Column(db.Text)
     receipt_id = db.Column(db.Integer, db.ForeignKey("import_receipts.id"))
     files_json = db.Column(db.Text, nullable=False, default="[]")  # [{filename, stage, detail}]
+    review_json = db.Column(db.Text)
+    approved_at = db.Column(db.DateTime)
+    reviewed_by_user_id = db.Column(db.Integer, db.ForeignKey("users.id"))
     storage_prefix = db.Column(db.Text, nullable=False, default="")
     evidence_type = db.Column(db.Text, nullable=False, default="unverified")
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
@@ -311,13 +326,20 @@ class ImportJob(db.Model):
 
     def as_dict(self) -> dict:
         import json as _json
+        from carelog.ingestion.review import public_review
+
+        stalled = self.status in {"queued", "running"} and (datetime.utcnow() - self.updated_at).total_seconds() > 900
 
         return {
             "id": self.id,
-            "status": self.status,
+            "status": "stalled" if stalled else self.status,
             "error": self.error,
             "receipt_id": self.receipt_id,
             "files": _json.loads(self.files_json or "[]"),
+            "created_at": self.created_at.isoformat(),
+            "updated_at": self.updated_at.isoformat(),
+            "approved_at": self.approved_at.isoformat() if self.approved_at else None,
+            "review": public_review(_json.loads(self.review_json)) if self.review_json else None,
         }
 
 

@@ -26,6 +26,8 @@ CareMin continues to own evidence classification, role eligibility, strict requi
 
 A job atomically claims its queued status, locks the destination facility in PostgreSQL, and commits the entire batch's care records, mapping changes and receipt together. Progress writes use a separate session so a status update cannot commit partial care data. Failed batches roll back their care changes and retain their source files and failure status. Duplicate filenames in a batch are rejected to avoid overwriting retained evidence.
 
+The initial invocation prepares an interpretation review, then rolls back every proposed care/receipt/mapping write. Its specifications, evidence classification and replacement impact are stored on the job. A provider confirms or cancels. Confirmation reuses the reviewed specifications and verifies the facility-state fingerprint under its row lock before committing the batch. A changed snapshot requires a new review. Failed/cancelled jobs remain visible with original downloads; a 15-minute progress timeout is shown as stalled and recovery prepares a fresh review from retained files.
+
 A local process uses a worker thread; Vercel invokes the authenticated worker endpoint with `WORKER_SECRET`. This remains an HTTP dispatch mechanism rather than a durable queue: operators must investigate a job stuck in queued/running after a host failure. A production queue/retry policy is a future improvement.
 
 ## Calculation invariants

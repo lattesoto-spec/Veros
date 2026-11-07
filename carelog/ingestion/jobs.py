@@ -35,6 +35,7 @@ from .analyzer import AnalyzerError
 from .mapping import MappingError
 from .pipeline import ingest_file
 from .reader import FileReadError
+from .review import state_fingerprint
 
 # Guards the shift-replacing import against a concurrent second import in the
 # same process. Cross-process safety comes from a job claim and a facility row lock.
@@ -63,22 +64,18 @@ def start_job(app, facility_id: int, payloads: list[tuple[str, bytes]], storage,
               organization_id: int | None = None, user_id: int | None = None) -> str:
     """Persist the uploads as audit evidence, record the job, dispatch it."""
     names = [os.path.basename(name) for name, _ in payloads]
-    if not names or any(not name for name in names) or len(set(names)) != len(names):
+    if not names or any(not name or any(ord(c) < 32 for c in name) or "\\" in name for name in names) or len(set(names)) != len(names):
         raise FileReadError("Each uploaded file needs a distinct filename; no files were imported.")
     if worker_mode() == "invoke" and not os.environ.get("WORKER_SECRET"):
         raise FileReadError("The import worker is not configured. Contact platform support.")
     job_id = uuid.uuid4().hex[:12]
     prefix = f"imports/job-{job_id}"
-    for fname, data in payloads:
-        safe = os.path.basename(fname) or "upload"
-        storage.put(f"{prefix}/{safe}", data)
-
     job = ImportJob(
         id=job_id,
         organization_id=organization_id,
         facility_id=facility_id,
         started_by_user_id=user_id,
-        status="queued",
+        status="retaining",
         evidence_type="auto",
         storage_prefix=prefix,
         files_json=json.dumps(
@@ -88,11 +85,23 @@ def start_job(app, facility_id: int, payloads: list[tuple[str, bytes]], storage,
     db.session.add(job)
     db.session.commit()
 
+    try:
+        for fname, data in payloads:
+            storage.put(f"{prefix}/{os.path.basename(fname)}", data)
+    except Exception:
+        _fail(job_id, "Some source files could not be retained. No care data was imported. Retry the upload.")
+        raise
+    _touch(job, status="queued")
+    dispatch_job(app, job_id)
+    return job_id
+
+
+def dispatch_job(app, job_id):
     if worker_mode() == "invoke":
         _dispatch_http(job_id)
     else:
         threading.Thread(target=_run_in_app, args=(app, job_id), daemon=True).start()
-    return job_id
+
 
 
 def _dispatch_http(job_id: str):
@@ -117,9 +126,11 @@ def _dispatch_http(job_id: str):
         )
         if response.status_code >= 400:
             _fail(job_id, "The import worker could not be started. Contact platform support.")
-    except httpx.HTTPError:
-        # Expected: the worker keeps running server-side after we stop waiting.
+    except httpx.ReadTimeout:
+        # A read timeout can mean the worker is still processing the request.
         pass
+    except httpx.HTTPError:
+        _fail(job_id, "The import worker could not be reached. Your files are retained. Retry from import history.")
 
 
 def _self_url() -> str:
@@ -156,8 +167,27 @@ def run_job(job_id: str):
         job = db.session.get(ImportJob, job_id)
         # Serialize replacement imports for one facility across processes.
         db.session.execute(select(Facility).where(Facility.id == job.facility_id).with_for_update())
-        _process(job)
-        _touch(job, status="done")
+        baseline = state_fingerprint(job.facility_id)
+        review = json.loads(job.review_json) if job.review_json else None
+        if job.approved_at and (not review or review["state_fingerprint"] != baseline):
+            raise FileReadError("Facility evidence changed since this review. Nothing was imported. Retry to review the current effect.")
+        prepared = _process(job, review=review if job.approved_at else None)
+        if not job.approved_at:
+            files = json.loads(job.files_json)
+            for state in files:
+                state["stage"] = "ready for review"
+            db.session.rollback()
+            job = db.session.get(ImportJob, job_id)
+            prepared["state_fingerprint"] = baseline
+            _touch(job, status="review", review_json=json.dumps(prepared), files_json=json.dumps(files), receipt_id=None)
+        else:
+            # A recovery action may have superseded a stalled worker. Lock and
+            # re-check its state before committing any care data.
+            status = db.session.execute(select(ImportJob.status).where(ImportJob.id == job_id).with_for_update()).scalar_one()
+            if status != "running":
+                db.session.rollback()
+                return
+            _touch(job, status="done")
     except AnalyzerError as e:
         # Provider users need an actionable result, not platform vendor names,
         # credentials or model diagnostics. The detailed cause remains in the
@@ -185,7 +215,7 @@ def run_job(job_id: str):
         _RUN_LOCK.release()
 
 
-def _process(job: ImportJob):
+def _process(job: ImportJob, review=None):
     from carelog.storage import build_storage
     from flask import current_app
 
@@ -209,6 +239,7 @@ def _process(job: ImportJob):
     db.session.flush()
 
     outcomes = []
+    reviewed = {o["filename"]: o["spec"] for o in review["outcomes"]} if review else {}
     for state in files:
         def progress(stage, state=state):
             state["stage"] = stage
@@ -218,6 +249,7 @@ def _process(job: ImportJob):
         data = storage.get(f"{job.storage_prefix}/{os.path.basename(state['filename'])}")
         outcome = ingest_file(
             facility, state["filename"], data, receipt=receipt, progress=progress,
+            reviewed_spec=reviewed.get(state["filename"]),
         )
         outcomes.append(outcome)
         state["stage"] = "done"
@@ -245,6 +277,7 @@ def _process(job: ImportJob):
         else ("mixed" if shift_types else "not applicable")
     )
     job.evidence_type = receipt.evidence_type
+    receipt.original_evidence_type = receipt.evidence_type
     receipt.first_shift_date = min((o.first_shift_date for o in outcomes if o.first_shift_date), default=None)
     receipt.last_shift_date = max((o.last_shift_date for o in outcomes if o.last_shift_date), default=None)
     receipt.source_path = job.storage_prefix
@@ -252,7 +285,18 @@ def _process(job: ImportJob):
     receipt.summary_json = json.dumps(_summarize(outcomes))
     job.receipt_id = receipt.id
     job.files_json = json.dumps(files)
-    # run_job commits receipt, care rows and done status together.
+    # run_job either rolls this entire transaction back for review, or commits
+    # receipt, care rows, mapping changes and done status together.
+    return {"outcomes": _summarize(outcomes), "impact": {
+        "shifts_imported": receipt.shifts_imported,
+        "shifts_replaced": sum(o.shifts_replaced for o in outcomes),
+        "residents_imported": receipt.residents_imported,
+        "resident_days_imported": receipt.resident_days_imported,
+        "care_episodes_imported": receipt.care_episodes_imported,
+        "care_episodes_replaced": sum(o.care_episodes_replaced for o in outcomes),
+        "first_date": receipt.first_shift_date.isoformat() if receipt.first_shift_date else None,
+        "last_date": receipt.last_shift_date.isoformat() if receipt.last_shift_date else None,
+    }}
 
 
 def _progress(job_id, files):

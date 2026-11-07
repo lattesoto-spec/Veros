@@ -130,6 +130,12 @@ def test_demo_api_from_organisation_to_pdf(monkeypatch, tmp_path):
     with app.app_context():
         jobs.run_job(job_id)
         job = db.session.get(ImportJob, job_id)
+        assert job.status == "review", job.error
+        assert ImportReceipt.query.count() == 0
+    assert client.post(f"/api/import/{job_id}/confirm").status_code == 200
+    with app.app_context():
+        jobs.run_job(job_id)
+        job = db.session.get(ImportJob, job_id)
         assert job.status == "done", job.error
         receipt = db.session.get(ImportReceipt, job.receipt_id)
         assert receipt.shifts_imported > 0

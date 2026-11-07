@@ -11,6 +11,7 @@ def register_api(app):
     for module in (
         "diagnostics",
         "eligibility",
+        "evidence",
         "facilities",
         "imports",
         "integrations",

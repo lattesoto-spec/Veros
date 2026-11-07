@@ -1,6 +1,8 @@
 import hmac
 import json
 import os
+from datetime import datetime, timedelta
+from sqlalchemy import update
 
 from flask import (
     Response,
@@ -35,6 +37,7 @@ from carelog.models import (
     ImportReceipt,
     ResidentDay,
     Shift,
+    AuditLog,
     db,
 )
 from carelog.services.targets import target_details, save_target
@@ -61,6 +64,7 @@ def universal_import():
             facility=facility,
             facilities=org_facilities(),
             errors=[],
+            jobs=[job.as_dict() for job in ImportJob.query.filter_by(facility_id=facility.id).order_by(ImportJob.created_at.desc()).limit(30)] if facility else [],
         )
 
     errors = []
@@ -163,6 +167,7 @@ def import_run(job_id):
 
 
 @bp.route("/import/status/<job_id>")
+@require("view_audit")
 def import_status(job_id):
     job = import_jobs.get_job(job_id)
     if not job:
@@ -171,7 +176,81 @@ def import_status(job_id):
     return resource("import_status", job=owned_or_404(job).as_dict())
 
 
+@bp.route("/import/<job_id>/confirm", methods=["POST"])
+@require("import_data")
+def import_confirm(job_id):
+    job = owned_or_404(import_jobs.get_job(job_id))
+    changed = db.session.execute(update(ImportJob).where(
+        ImportJob.id == job.id, ImportJob.status == "review"
+    ).values(status="queued", approved_at=datetime.utcnow(), reviewed_by_user_id=current_user().id,
+             updated_at=datetime.utcnow()))
+    if changed.rowcount != 1:
+        db.session.rollback()
+        return {"error": "This import is no longer awaiting review. Reload its status."}, 409
+    auth.record("import_approved", "import_job", job.id, "Reviewed column mapping, evidence class, dates and replacement scope")
+    db.session.commit()
+    import_jobs.dispatch_job(current_app._get_current_object(), job.id)
+    return navigate(url_for("api.import_status", job_id=job.id))
+
+
+@bp.route("/import/<job_id>/cancel", methods=["POST"])
+@require("import_data")
+def import_cancel(job_id):
+    job = owned_or_404(import_jobs.get_job(job_id))
+    changed = db.session.execute(update(ImportJob).where(
+        ImportJob.id == job.id, ImportJob.status == "review"
+    ).values(status="cancelled", updated_at=datetime.utcnow()))
+    if changed.rowcount != 1:
+        db.session.rollback()
+        return {"error": "Only an import awaiting review can be cancelled."}, 409
+    auth.record("import_cancelled", "import_job", job.id, "No care data committed; sources retained")
+    db.session.commit()
+    return navigate(url_for("api.import_status", job_id=job.id))
+
+
+@bp.route("/import/<job_id>/retry", methods=["POST"])
+@require("import_data")
+def import_retry(job_id):
+    job = owned_or_404(import_jobs.get_job(job_id))
+    cutoff = datetime.utcnow() - timedelta(minutes=15)
+    if job.status not in {"failed", "cancelled"}:
+        changed = db.session.execute(update(ImportJob).where(
+            ImportJob.id == job.id, ImportJob.status.in_(["queued", "running"]), ImportJob.updated_at < cutoff
+        ).values(status="failed", error="Superseded by a recovery attempt; original sources retained."))
+        if changed.rowcount != 1:
+            db.session.rollback()
+            return {"error": "This import is still active or already completed. Reload its status."}, 409
+        db.session.commit()
+    try:
+        files = json.loads(job.files_json)
+        payloads = [(os.path.basename(f["filename"]), _storage().get(f"{job.storage_prefix}/{os.path.basename(f['filename'])}")) for f in files]
+        new_id = import_jobs.start_job(current_app._get_current_object(), job.facility_id, payloads, _storage(),
+                                       organization_id=current_organization_id(), user_id=current_user().id)
+    except (FileReadError, StorageError) as error:
+        return {"error": str(error)}, 400
+    auth.record("import_retried", "import_job", new_id, f"Retained sources from {job.id}; review required again")
+    db.session.commit()
+    return navigate(url_for("api.import_status", job_id=new_id))
+
+
+@bp.route("/audit/job/<job_id>/file/<path:filename>")
+@require("download_evidence")
+def audit_job_file(job_id, filename):
+    job = owned_or_404(import_jobs.get_job(job_id))
+    names = {os.path.basename(f["filename"]) for f in json.loads(job.files_json)}
+    if filename not in names:
+        abort(404)
+    try:
+        contents = _storage().get(f"{job.storage_prefix}/{filename}")
+    except StorageError:
+        return {"error": "The retained file could not be retrieved. Retry or contact support with this import reference."}, 502
+    from io import BytesIO
+    from flask import send_file
+    return send_file(BytesIO(contents), as_attachment=True, download_name=filename, mimetype="application/octet-stream")
+
+
 @bp.route("/import/status/<job_id>.json")
+@require("view_audit")
 def import_status_json(job_id):
     job = import_jobs.get_job(job_id)
     if not job:
@@ -216,6 +295,10 @@ def audit():
         files_by_receipt=files_by_receipt,
         readiness=round(with_files / len(receipts) * 100) if receipts else None,
         calc_version=CALC_VERSION,
+        jobs=[job.as_dict() for job in ImportJob.query.filter_by(facility_id=facility.id).order_by(ImportJob.created_at.desc()).limit(100)],
+        decisions=AuditLog.query.filter(AuditLog.organization_id == current_organization_id(), AuditLog.action.in_([
+            "target_approved", "target_corrected", "eligibility_decided", "import_approved", "import_cancelled", "import_retried", "evidence_classified"
+        ])).order_by(AuditLog.created_at.desc()).limit(100).all(),
     )
 
 
@@ -248,7 +331,10 @@ def delete_receipt(receipt_id):
         flash('Type "delete" to confirm. Nothing was deleted.')
         return navigate(url_for("api.audit"))
 
-    files = _purge_evidence([receipt])
+    try:
+        files = _purge_evidence([receipt])
+    except StorageError:
+        return {"error": "Evidence storage could not confirm deletion. The receipt was kept; investigate storage and retry."}, 502
     shifts = Shift.query.filter_by(import_receipt_id=receipt.id).delete(
         synchronize_session=False
     )

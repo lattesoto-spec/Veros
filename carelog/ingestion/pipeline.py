@@ -45,6 +45,8 @@ class ImportOutcome:
     residents_imported: int = 0
     resident_days_imported: int = 0
     care_episodes_imported: int = 0
+    shifts_replaced: int = 0
+    care_episodes_replaced: int = 0
     row_errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     first_shift_date: date | None = None
@@ -56,7 +58,7 @@ class ImportOutcome:
 
 
 def get_or_create_mapping(sheets, filename: str, progress=None,
-                          organization_id=None) -> tuple[FormatMapping, bool, dict | None]:
+                          organization_id=None, reviewed_spec=None) -> tuple[FormatMapping, bool, dict | None]:
     """Returns (mapping, reused, ai_usage).
 
     Learned specs are per-organization: a spec names the columns of a
@@ -68,7 +70,7 @@ def get_or_create_mapping(sheets, filename: str, progress=None,
         fingerprint=fp, organization_id=organization_id
     ).first()
     built_in = matching_spec(sheets)
-    if stored:
+    if stored and reviewed_spec is None:
         try:
             stored_spec = json.loads(stored.spec_json)
         except (TypeError, json.JSONDecodeError):
@@ -86,7 +88,7 @@ def get_or_create_mapping(sheets, filename: str, progress=None,
         if progress:
             progress("refreshing stored format")
 
-    spec = built_in
+    spec = reviewed_spec if reviewed_spec is not None else built_in
     if spec:
         usage = {"calls": 0, "input_tokens": 0, "output_tokens": 0,
                  "method": "built-in exact mapping"}
@@ -116,7 +118,7 @@ def get_or_create_mapping(sheets, filename: str, progress=None,
 
 
 def ingest_file(facility, filename: str, data: bytes, receipt=None, progress=None,
-                evidence_type: str | None = None) -> ImportOutcome:
+                evidence_type: str | None = None, reviewed_spec=None) -> ImportOutcome:
     """`receipt` (optional ImportReceipt) stamps audit lineage onto every shift.
     `progress` (optional callable taking a stage string) receives live status
     updates for the background-job status page."""
@@ -124,6 +126,7 @@ def ingest_file(facility, filename: str, data: bytes, receipt=None, progress=Non
     mapping, reused, usage = get_or_create_mapping(
         sheets, filename, progress=progress,
         organization_id=getattr(facility, "organization_id", None),
+        reviewed_spec=reviewed_spec,
     )
     spec = json.loads(mapping.spec_json)
     if progress:
@@ -253,10 +256,16 @@ def _import_shifts(facility, records: list[dict], outcome: ImportOutcome,
                 from sqlalchemy import or_
                 query = query.filter(or_(Shift.import_receipt_id != receipt_id,
                                          Shift.import_receipt_id.is_(None)))
-            query.delete(synchronize_session=False)
+            outcome.shifts_replaced += query.delete(synchronize_session=False)
     db.session.flush()
 
     staff_cache = {s.staff_id: s for s in Staff.query.filter_by(facility_id=facility.id).all()}
+    existing_by_staff = {}
+    if records:
+        earliest, latest = min(r["date"] for r in records), max(r["date"] for r in records)
+        for existing in Shift.query.filter(Shift.facility_id == facility.id, Shift.evidence_type == evidence_type,
+                                            Shift.date >= earliest - timedelta(days=1), Shift.date <= latest + timedelta(days=1)).all():
+            existing_by_staff.setdefault(existing.staff_id, []).append(existing)
     for rec in records:
         sid = str(rec["staff_id"]).strip()
         role = (rec.get("role") or "OTHER").strip().upper() or "OTHER"
@@ -299,7 +308,20 @@ def _import_shifts(facility, records: list[dict], outcome: ImportOutcome,
 
 
         d = rec["date"]
-        db.session.add(Shift(
+        previous = existing_by_staff.setdefault(staff.id, [])
+        for old in previous:
+            if (not coverage_known or not old.coverage_known) and old.date == d:
+                raise MappingError(f"{outcome.filename}, row {rec.get('_source_row', '?')}: duration-only rows overlap a staff/date group; correct the source before importing.")
+            if coverage_known and old.coverage_known and old.start_time != old.end_time:
+                left, right = datetime.combine(d, start), datetime.combine(d, end)
+                if right < left:
+                    right += timedelta(days=1)
+                old_left, old_right = datetime.combine(old.date, old.start_time), datetime.combine(old.date, old.end_time)
+                if old_right < old_left:
+                    old_right += timedelta(days=1)
+                if left < old_right and old_left < right:
+                    raise MappingError(f"{outcome.filename}, row {rec.get('_source_row', '?')}: duplicate or overlapping staff time across source files; nothing was imported.")
+        shift = Shift(
             staff_id=staff.id,
             facility_id=facility.id,
             date=d,
@@ -318,7 +340,9 @@ def _import_shifts(facility, records: list[dict], outcome: ImportOutcome,
             source_file=rec.get("_source_file"),
             source_sheet=rec.get("_source_sheet"),
             source_page=rec.get("_source_page"),
-        ))
+        )
+        db.session.add(shift)
+        previous.append(shift)
         outcome.shifts_imported += 1
         if outcome.first_shift_date is None or d < outcome.first_shift_date:
             outcome.first_shift_date = d
@@ -386,7 +410,7 @@ def _import_care_episodes(facility, records: list[dict], outcome: ImportOutcome)
             from sqlalchemy import or_
             query = query.filter(or_(CareEpisode.import_receipt_id != receipt_id,
                                      CareEpisode.import_receipt_id.is_(None)))
-        query.delete(synchronize_session=False)
+        outcome.care_episodes_replaced += query.delete(synchronize_session=False)
 
     for rec in records:
         minutes = rec.get("minutes")

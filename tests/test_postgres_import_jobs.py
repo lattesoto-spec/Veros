@@ -2,6 +2,7 @@
 
 import json
 import os
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -80,6 +81,16 @@ def test_postgres_batch_rollback_and_success_provenance(pg_app):
     jobs.run_job(good_id)
     db.session.expire_all()
     job = db.session.get(ImportJob, good_id)
+    assert job.status == "review"
+    assert Shift.query.count() == 0
+    assert ImportReceipt.query.count() == 0
+    assert job.as_dict()["review"]["impact"]["shifts_imported"] > 0
+    job.status = "queued"
+    job.approved_at = datetime.utcnow()
+    db.session.commit()
+    jobs.run_job(good_id)
+    db.session.expire_all()
+    job = db.session.get(ImportJob, good_id)
     assert job.status == "done"
     receipt = db.session.get(ImportReceipt, job.receipt_id)
     assert receipt.shifts_imported == Shift.query.count() > 0
@@ -142,3 +153,39 @@ def test_additive_target_history_migration_keeps_legacy_values_unapproved(pg_app
     assert "facility_targets" in inspect(db.engine).get_table_names()
     assert db.session.get(Facility, facility.id).ancc_target == 215
     assert FacilityTarget.query.count() == 0
+
+
+def test_additive_review_migration_preserves_jobs(pg_app):
+    from sqlalchemy import text
+
+    _, facility, _ = pg_app
+    db.session.add(ImportJob(id="retained-job", facility_id=facility.id, storage_prefix="imports/job-retained"))
+    db.session.commit()
+    for column in ("review_json", "approved_at", "reviewed_by_user_id"):
+        db.session.execute(text(f"ALTER TABLE import_jobs DROP COLUMN {column}"))
+    db.session.execute(text("ALTER TABLE import_receipts DROP COLUMN original_evidence_type"))
+    db.session.commit()
+    assert set(init_db()) == {"import_jobs.review_json", "import_jobs.approved_at", "import_jobs.reviewed_by_user_id", "import_receipts.original_evidence_type"}
+    assert db.session.get(ImportJob, "retained-job").storage_prefix == "imports/job-retained"
+
+
+def test_review_cannot_commit_after_facility_evidence_changes(pg_app):
+    from carelog.models import Resident
+
+    app, facility, storage = pg_app
+    source = Path(__file__).parents[1] / "sample_data/demo_video/caremin_demo_actual_worked_export.xlsx"
+    job_id = jobs.start_job(app, facility.id, [(source.name, source.read_bytes())], storage,
+                            organization_id=facility.organization_id)
+    jobs.run_job(job_id)
+    job = db.session.get(ImportJob, job_id)
+    assert job.status == "review"
+    db.session.add(Resident(facility_id=facility.id, resident_id="NEW", name="New resident"))
+    job.status, job.approved_at = "queued", datetime.utcnow()
+    db.session.commit()
+    jobs.run_job(job_id)
+    db.session.expire_all()
+    job = db.session.get(ImportJob, job_id)
+    assert job.status == "failed"
+    assert "changed since" in job.error
+    assert Shift.query.count() == ImportReceipt.query.count() == 0
+    assert storage.get(f"imports/job-{job_id}/{source.name}") == source.read_bytes()

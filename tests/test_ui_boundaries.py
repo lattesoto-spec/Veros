@@ -334,3 +334,46 @@ def test_quarter_targets_preserve_history_and_require_correction_basis(web_app):
         october = FacilityTarget.query.filter_by(facility_id=home_id, quarter_start=date(2026, 10, 1)).one()
         assert (october.ancc_target, october.rn_target) == (225, 46)
         assert october.approved_by_user_id == ids["admin"]
+
+
+def test_source_trace_and_evidence_decisions_are_scoped_and_reversible(web_app):
+    from carelog.models import ImportReceipt
+
+    app, ids = web_app
+    with app.app_context():
+        home = Facility.query.filter_by(organization_id=ids["customer"]).one()
+        member = Staff(facility_id=home.id, staff_id="P1", name="Care Worker", role="PCW", eligibility_status="approved")
+        receipt = ImportReceipt(facility_id=home.id, organization_id=ids["customer"], evidence_type="unverified", shifts_imported=1)
+        db.session.add_all([member, receipt])
+        db.session.flush()
+        receipt_id = receipt.id
+        db.session.add(Shift(facility_id=home.id, staff_id=member.id, date=date(2026, 8, 1), start_time=time(8), end_time=time(16),
+                             evidence_type="unverified", import_receipt_id=receipt.id, source_file="source.csv", source_sheet="Worked", source_row=7))
+        db.session.commit()
+    client = app.test_client()
+    sign_in_as(client, ids["admin"])
+    trace = client.get("/api/audit/records?start=2026-08-01&end=2026-08-01")
+    assert trace.status_code == 200
+    row = trace.json["data"]["records"][0]
+    assert row["shift"]["source_row"] == 7
+    assert row["minutes"] == 480
+    assert row["counted"] is False
+    assert client.post(f"/api/audit/receipt/{receipt_id}/evidence", data={"evidence_type": "worked"}).status_code == 400
+    for evidence in ("worked", "unverified"):
+        assert client.post(f"/api/audit/receipt/{receipt_id}/evidence", data={"evidence_type": evidence, "reason": "Source verified against approved attendance export"}).status_code == 200
+        with app.app_context():
+            assert Shift.query.filter_by(import_receipt_id=receipt_id).one().evidence_type == evidence
+    decisions = client.get("/api/audit").json["data"]["decisions"]
+    assert any(row["action"] == "evidence_classified" for row in decisions)
+    sign_in_as(client, ids["outsider"])
+    assert client.post(f"/api/audit/receipt/{receipt_id}/evidence", data={"evidence_type": "worked", "reason": "Not owned"}).status_code == 404
+    assert client.get("/api/audit/records?start=2026-08-01&end=2026-08-01").json["data"]["total"] == 0
+
+
+@pytest.mark.parametrize("query", ["start=bad", "start=2026-08-02&end=2026-08-01", "start=2020-01-01&end=2026-08-01"])
+def test_invalid_reporting_ranges_are_rejected_visibly(web_app, query):
+    app, ids = web_app
+    client = app.test_client()
+    sign_in_as(client, ids["admin"])
+    for route in ("/api/export/daily.csv", "/api/export/summary.xlsx", "/api/audit/records"):
+        assert client.get(f"{route}?{query}").status_code == 400

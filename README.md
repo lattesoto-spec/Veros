@@ -50,6 +50,8 @@ Unit tests use disposable SQLite fixtures only. PostgreSQL integration tests req
 
 See [two-repository migration](docs/repository-split.md), [deployment](docs/deployment.md), [architecture and API contract](docs/architecture.md) and [access roles](docs/access.md).
 
+See [product changes in UI order](docs/product-changes.md) for the current monitoring, target evidence, import review and provider traceability behavior. The full feature inventory is `FEATURES.md` in the independent frontend repository.
+
 ## Scope
 
 Only eligible actual worked time counts; rostered/unverified shifts and clinical care episodes remain separate. Resident-day ledgers are supported, with admission/discharge estimates used when ledger evidence is absent. Human review of completeness, eligibility and configured targets remains necessary. This prototype is not represented as GPMS-ready.

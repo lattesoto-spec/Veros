@@ -7,6 +7,7 @@ from flask import (
 )
 
 from carelog import auth
+from carelog.storage import StorageError
 from carelog.api import bp
 from carelog.api.responses import form_data, navigate, resource
 from carelog.auth import (
@@ -151,7 +152,10 @@ def clear():
         if facility_ids
         else []
     )
-    files = _purge_evidence(receipts)
+    try:
+        files = _purge_evidence(receipts, facility_ids=facility_ids)
+    except StorageError:
+        return {"error": "Evidence storage could not confirm deletion. Database records were kept; investigate storage and retry."}, 502
     if facility_ids:
         _delete_facility_data(facility_ids)
         Facility.query.filter(Facility.id.in_(facility_ids)).delete(

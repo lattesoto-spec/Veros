@@ -1,0 +1,35 @@
+"""Import review snapshots; care and mappings remain uncommitted until approval."""
+
+import hashlib
+import json
+
+from sqlalchemy import select
+
+from carelog.models import CareEpisode, FacilityTarget, Resident, ResidentDay, Shift, Staff, db
+
+
+def state_fingerprint(facility_id):
+    digest = hashlib.sha256()
+    for model in (Staff, Resident, Shift, ResidentDay, CareEpisode, FacilityTarget):
+        rows = db.session.execute(select(*model.__table__.columns).where(
+            model.facility_id == facility_id).order_by(model.id)).all()
+        digest.update(model.__tablename__.encode())
+        for row in rows:
+            digest.update(json.dumps(list(row), default=str, ensure_ascii=True).encode())
+    return digest.hexdigest()
+
+
+def public_review(review):
+    files = []
+    for outcome in review.get("outcomes", []):
+        columns = []
+        for target in outcome.get("spec", {}).get("targets", []):
+            for field, rule in target.get("fields", {}).items():
+                columns.append({"sheet": target.get("sheet"), "kind": target.get("kind"),
+                                "field": field, "source": rule.get("column") or ", ".join(rule.get("columns", []))
+                                or f"Fixed value: {rule.get('value', '')}", "format": rule.get("format")})
+        files.append({"filename": outcome["filename"], "columns": columns,
+                      "results": outcome["results"], "warnings": outcome.get("warnings", []),
+                      "row_errors": outcome.get("row_errors", [])})
+    return {"files": files, "impact": review.get("impact", {}),
+            "basis": "Replaces only supplied staff/date/evidence groups and resident/date episode groups. Other dates and staff are preserved. Resident census rows update by resident and date."}

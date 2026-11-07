@@ -1,7 +1,8 @@
-from datetime import datetime, timedelta
+
 
 from flask import (
     Response,
+    abort,
     flash,
     request,
     url_for,
@@ -24,6 +25,7 @@ from carelog.domain.compliance import (
 from carelog.domain.reports import available_quarters, build_quarterly_pdf
 from carelog.domain.targets import facility_for_period
 from carelog.services.workspace import current_facility
+from carelog.services.periods import reporting_range
 
 
 @bp.route("/export/daily.csv")
@@ -95,14 +97,10 @@ def reports_view():
 
 
 def _export_range(facility):
-    def _parse(name, fallback):
-        try:
-            return datetime.strptime(request.args.get(name, ""), "%Y-%m-%d").date()
-        except ValueError:
-            return fallback
-
-    latest = _latest_data_date(facility)
-    return _parse("start", latest - timedelta(days=89)), _parse("end", latest)
+    try:
+        return reporting_range(request.args, _latest_data_date(facility))
+    except ValueError as error:
+        abort(400, description=str(error))
 
 
 @bp.route("/report/quarter.pdf")
@@ -116,7 +114,7 @@ def quarterly_report():
         year_str, q_str = q.split("-Q")
         year = int(year_str)
         quarter = int(q_str)
-        if quarter not in (1, 2, 3, 4):
+        if quarter not in (1, 2, 3, 4) or not 2000 <= year <= 2100:
             raise ValueError
     except (ValueError, AttributeError):
         flash("Pick a valid quarter to generate a report.")
