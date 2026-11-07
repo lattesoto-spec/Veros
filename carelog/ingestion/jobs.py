@@ -45,7 +45,7 @@ from carelog.models import (
 
 from .analyzer import AnalyzerError
 from .mapping import MappingError
-from .pipeline import ingest_file, retire_shifts
+from .pipeline import MappingRequired, ingest_file, retire_shifts
 from .reader import FileReadError
 from .review import state_fingerprint
 
@@ -283,6 +283,9 @@ def run_job(job_id: str):
                     )
                 )
             _touch(job, status="done")
+    except MappingRequired:
+        db.session.rollback()
+        _await_mapping(job_id)
     except AnalyzerError as e:
         # Provider users need an actionable result, not platform vendor names,
         # credentials or model diagnostics. The detailed cause remains in the
@@ -291,10 +294,10 @@ def run_job(job_id: str):
             "Import mapping service failed for %s: %s", job_id, e
         )
         db.session.rollback()
-        _fail(
+        _await_mapping(
             job_id,
-            "CareMin could not safely interpret this file structure. Nothing was "
-            "imported. Contact platform support and include this import reference.",
+            "Automatic mapping could not interpret this file, so nothing was "
+            "imported. Choose its columns below.",
         )
     except (FileReadError, MappingError) as e:
         db.session.rollback()
@@ -579,6 +582,14 @@ def _progress(job_id, files):
             .values(files_json=json.dumps(files), updated_at=datetime.utcnow())
         )
         progress_session.commit()
+
+
+def _await_mapping(job_id: str, message: str | None = None):
+    job = db.session.get(ImportJob, job_id)
+    files = json.loads(job.files_json)
+    for state in files:
+        state["stage"] = "needs column mapping"
+    _touch(job, status="mapping", error=message, files_json=json.dumps(files))
 
 
 def _fail(job_id: str, message: str):

@@ -79,3 +79,11 @@ Original source files remain retained on failure. Changes to care data and recei
 - A `pay_category` column lets payroll carry several duration lines for one person and day, capped at 24 hours. Without it, identical lines remain rejected.
 - Duration minutes floor without binary-float loss and break minutes round up. `CALC_VERSION` is `2026.11.6`.
 - The dashboard no longer lists storage per receipt; the audit page remains the authority on retained files.
+
+## Private by default, mappable by anyone
+
+- `Organization.ai_mapping_enabled` is off by default. Only an administrator can change it, with a recorded basis. An organisation that has not opted in makes no external call.
+- When opted in, the analyzer receives column names and masked value shapes. Name-like headers and pre-header banner text are masked, validation feedback no longer quotes source values, and the file name is reduced to its type. Each disclosure is audited in a separate session before the request is sent, so a failed call is still on record.
+- An unfamiliar layout, or an analyzer failure, puts the job in `mapping` rather than `failed`. `GET/POST /api/import/<id>/mapping` shows the raw grid and accepts the reviewer's header row, record type, columns, date format and row filter. `ingestion/manual.py` validates the choices and builds an ordinary mapping spec, which is then reviewed and confirmed like any other import.
+- Direct-care and occupied-bed-day fields are required in a manual mapping. "Every row" is an explicit reviewer choice, shown as a fixed value at review.
+- The built-in daily care layout now records occupancy as a real boolean; it would otherwise have been rejected by census validation.

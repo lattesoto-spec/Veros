@@ -11,12 +11,16 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 from math import ceil, floor
 
+from sqlalchemy.orm import Session
+
 from carelog.domain.clock import facility_today
 from carelog.domain.eligibility import classify
 from carelog.models import (
     SUPERSEDED,
+    AuditLog,
     CareEpisode,
     FormatMapping,
+    Organization,
     Resident,
     ResidentDay,
     Shift,
@@ -24,7 +28,7 @@ from carelog.models import (
     db,
 )
 
-from .analyzer import generate_mapping_spec
+from .analyzer import ai_ready, generate_mapping_spec
 from .evidence import classify_shift_evidence
 from .fingerprint import fingerprint
 from .mapping import MappingError, TargetResult, apply_header_overrides, run_spec
@@ -34,6 +38,32 @@ from .reader import read_upload
 
 
 MAPPING_SPEC_VERSION = 2
+
+
+class MappingRequired(Exception):
+    """No trusted interpretation exists; a person must choose the columns."""
+
+
+def _ai_mapping_allowed(organization_id) -> bool:
+    organization = (
+        db.session.get(Organization, organization_id) if organization_id else None
+    )
+    return bool(organization and organization.ai_mapping_enabled and ai_ready())
+
+
+def _record_disclosure(organization_id, filename, sheets, model):
+    """Audit the external call outside the import, which may yet roll back."""
+    with Session(db.engine) as session:
+        session.add(
+            AuditLog(
+                organization_id=organization_id,
+                action="external_disclosure",
+                entity="format_mapping",
+                entity_id=filename,
+                detail=f"Masked structure of {len(sheets)} sheet(s) sent to {model}; no data values disclosed",
+            )
+        )
+        session.commit()
 
 
 def _whole_minutes(value) -> int:
@@ -114,9 +144,17 @@ def get_or_create_mapping(
         if progress:
             progress("matched built-in format")
     else:
+        if not _ai_mapping_allowed(organization_id):
+            raise MappingRequired(filename)
         if progress:
             progress("learning format (AI)")
-        spec, usage = generate_mapping_spec(sheets, filename)
+        spec, usage = generate_mapping_spec(
+            sheets,
+            filename,
+            on_disclosure=lambda model: _record_disclosure(
+                organization_id, filename, sheets, model
+            ),
+        )
     spec["schema_version"] = MAPPING_SPEC_VERSION
     if stored:
         mapping = stored

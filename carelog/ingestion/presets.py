@@ -130,7 +130,7 @@ def matching_spec(sheets) -> dict | None:
                     "date": {"column": "Date", "parse": "date"},
                     "resident_id": {"column": "Resident ID"},
                     "resident_name": {"column": "Resident Name"},
-                    "occupied": {"source": "constant", "value": True},
+                    "occupied": {"source": "constant", "value": "true", "parse": "boolean"},
                     "service_type": {"source": "constant", "value": "an_acc"},
                 },
             })

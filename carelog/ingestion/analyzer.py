@@ -13,6 +13,7 @@ import anthropic
 import httpx
 
 from .mapping import apply_header_overrides, run_spec, validate_results
+from .masking import mask_header, mask_problem, mask_row, mask_value
 from .reader import Sheet
 
 # Haiku keeps per-format learning cheap; the validate-and-retry loop below
@@ -125,7 +126,9 @@ Rules:
   hours). Omit the field when there is no break column.
 - is_agency: map a column that flags agency/contractor workers (value_map to booleans);
   omit when there is no such signal.
-- Dates in Australian exports are usually day-first when ambiguous.
+- Data values are masked to their shape: letters become a/A and digits become 9, so
+  "04/08/2026" appears as "99/99/9999". Category words such as Yes, No and Approved stay readable.
+- Dates in Australian exports are usually day-first when ambiguous. Choose a format explicitly.
 - role: staff classification (RN/EN/PCW etc.), not a department name, if both exist.
 - Each sheet's reported column_types (inferred from the data) are hints for choosing parse modes."""
 
@@ -135,18 +138,25 @@ def _structure_payload(sheets: list[Sheet]) -> str:
 
     doc = []
     for s in sheets:
+        headers = {header: mask_header(header) for header in s.headers}
         doc.append({
             "sheet": s.name,
             "detected_header_row": s.header_row_index,
-            "headers": s.headers,
-            "column_types": infer_column_types(s),
+            "headers": list(headers.values()),
+            "column_types": {
+                headers.get(header, header): kind
+                for header, kind in infer_column_types(s).items()
+            },
             "row_count": len(s.rows),
-            "sample_rows": s.rows[:SAMPLE_ROWS],
-            "notes": s.notes,
-            # The unprocessed top of the sheet. `headers` above is a guess made
-            # from this; if the guess is wrong, say so via header_row.
+            "sample_rows": [
+                {headers.get(key, key): mask_value(value) for key, value in row.items()}
+                for row in s.rows[:SAMPLE_ROWS]
+            ],
+            # The top of the sheet with data values masked. `headers` above is
+            # a guess made from this; if the guess is wrong, say so via header_row.
             "grid_preview": [
-                {"row": i, "cells": cells} for i, cells in enumerate(s.preview)
+                {"row": i, "cells": mask_row(cells, i <= s.header_row_index)}
+                for i, cells in enumerate(s.preview)
             ],
         })
     return json.dumps(doc, indent=2, ensure_ascii=False, default=str)
@@ -256,9 +266,14 @@ def _clean_spec(spec: dict) -> dict:
     return {"targets": targets, "reasoning": spec.get("reasoning", "")}
 
 
-def generate_mapping_spec(sheets: list[Sheet], filename: str = "") -> tuple[dict, dict]:
+def generate_mapping_spec(
+    sheets: list[Sheet], filename: str = "", on_disclosure=None
+) -> tuple[dict, dict]:
     """Ask Claude for a mapping spec; validate it against the actual file; retry
-    once with error feedback. Returns (spec, usage_info)."""
+    once with error feedback. Returns (spec, usage_info).
+
+    Only masked structure leaves CareMin. `on_disclosure` is called before
+    anything is sent, so a failed request is still on the record."""
     api_key = resolve_api_key()
     if not api_key:
         raise AnalyzerError(
@@ -286,14 +301,16 @@ def generate_mapping_spec(sheets: list[Sheet], filename: str = "") -> tuple[dict
     messages = [{
         "role": "user",
         "content": (
-            f"File name: {filename or 'upload'}\n\n"
-            f"Structure and sample rows:\n{structure}\n\n"
+            f"File type: {os.path.splitext(filename)[1].lower() or 'unknown'}\n\n"
+            f"Structure, with data values masked to their shape:\n{structure}\n\n"
             "Produce the mapping spec."
         ),
     }]
 
     usage = {"calls": 0, "input_tokens": 0, "output_tokens": 0}
     last_problems: list[str] = []
+    if on_disclosure:
+        on_disclosure(model)
     for attempt in range(2):
         try:
             # One plain streaming request; _extract_json tolerates prose or
@@ -361,7 +378,7 @@ def generate_mapping_spec(sheets: list[Sheet], filename: str = "") -> tuple[dict
             "role": "user",
             "content": (
                 "That spec failed validation against the real file:\n- "
-                + "\n- ".join(problems)
+                + "\n- ".join(mask_problem(problem) for problem in problems)
                 + "\nFix the spec and return the corrected version."
             ),
         })

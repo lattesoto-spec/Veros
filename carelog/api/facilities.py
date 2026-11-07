@@ -22,6 +22,7 @@ from carelog.domain.care_minutes import (
 from carelog.domain.compliance import (
     quarterly_tests,
 )
+from carelog.ingestion.analyzer import ai_ready
 from carelog.models import (
     RETIRED_EVIDENCE,
     CareEpisode,
@@ -87,7 +88,29 @@ def settings():
         "settings",
         facility=facility,
         organization=db.session.get(Organization, current_organization_id()),
+        ai_service_configured=ai_ready(),
     )
+
+
+@bp.post("/settings/ai-mapping")
+@require("manage_users")
+def ai_mapping_setting():
+    """Administrator choice, because it decides what may leave the organisation."""
+    organization = db.session.get(Organization, current_organization_id())
+    enabled = form_data().get("enabled") == "1"
+    basis = (form_data().get("basis") or "").strip()
+    if not basis:
+        return {"error": "Record the basis for this privacy decision."}, 400
+    organization.ai_mapping_enabled = enabled
+    auth.record(
+        "ai_mapping_changed",
+        "organization",
+        organization.id,
+        f"{'Enabled' if enabled else 'Disabled'} masked AI file mapping; basis: {basis}",
+    )
+    db.session.commit()
+    flash(f"AI-assisted file mapping is {'on' if enabled else 'off'}.")
+    return navigate(url_for("api.settings"))
 
 
 @bp.route("/facility", methods=["GET"])

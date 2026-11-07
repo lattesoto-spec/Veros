@@ -19,7 +19,7 @@ Set Preview and Production separately; Preview must use its own database and Blo
 | `WORKER_SECRET` | Import worker shared secret |
 | `IMPORT_WORKER=invoke` | Serverless worker dispatch |
 | `AUTO_INIT_DB=0` | Migrate in build, not on runtime startup |
-| `ANTHROPIC_API_KEY` | Unfamiliar format mappings |
+| `ANTHROPIC_API_KEY` | Optional. AI-suggested mappings for organisations that opt in; reviewers can map any layout without it |
 | Blob read/write token | Retained source evidence; integration-prefixed tokens supported |
 | `VERCEL_AUTOMATION_BYPASS_SECRET` | If backend deployment protection blocks worker self-invocation |
 

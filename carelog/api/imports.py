@@ -30,7 +30,10 @@ from carelog.domain.compliance import (
     CALC_VERSION,
 )
 from carelog.ingestion import jobs as import_jobs
-from carelog.ingestion.reader import FileReadError
+from carelog.ingestion.fingerprint import fingerprint
+from carelog.ingestion.manual import build_spec, describe_file, public_catalogue
+from carelog.ingestion.presets import matching_spec
+from carelog.ingestion.reader import FileReadError, read_upload
 from carelog.models import (
     CareEpisode,
     Facility,
@@ -39,6 +42,7 @@ from carelog.models import (
     ResidentDay,
     Shift,
     AuditLog,
+    FormatMapping,
     db,
 )
 from carelog.services.targets import target_details, save_target
@@ -232,18 +236,109 @@ def import_confirm(job_id):
     return navigate(url_for("api.import_status", job_id=job.id))
 
 
+def _job_sheets(job):
+    """Read each retained source of a job for the mapping page."""
+    for state in json.loads(job.files_json):
+        name = os.path.basename(state["filename"])
+        data = _storage().get(f"{job.storage_prefix}/{name}")
+        _verify_retained(state.get("sha256"), data, "import_job", job.id, name)
+        yield name, read_upload(name, data)
+
+
+def _known_spec(job, name, sheets):
+    """The interpretation a file would currently use, if it has one."""
+    manual = json.loads(job.manual_specs_json or "{}")
+    if name in manual:
+        return manual[name]
+    review = json.loads(job.review_json) if job.review_json else {}
+    for outcome in review.get("outcomes", []):
+        if outcome["filename"] == name:
+            return outcome["spec"]
+    stored = FormatMapping.query.filter_by(
+        fingerprint=fingerprint(sheets), organization_id=job.organization_id
+    ).first()
+    return json.loads(stored.spec_json) if stored else matching_spec(sheets)
+
+
+@bp.route("/import/<job_id>/mapping", methods=["GET", "POST"])
+@require("import_data")
+@require("view_records")
+def import_mapping(job_id):
+    """Show the raw grid and let a person say what each column means."""
+    job = owned_or_404(import_jobs.get_job(job_id))
+    if job.status not in {"mapping", "review"}:
+        return navigate(url_for("api.import_status", job_id=job.id))
+    try:
+        files = list(_job_sheets(job))
+    except (FileReadError, StorageError) as error:
+        return {"error": str(error)}, 502
+    if request.method == "GET":
+        return resource(
+            "import_mapping",
+            job=job.as_dict(),
+            catalogue=public_catalogue(),
+            files=[
+                describe_file(name, sheets, spec is not None, (spec or {}).get("targets"))
+                for name, sheets, spec in (
+                    (name, sheets, _known_spec(job, name, sheets)) for name, sheets in files
+                )
+            ],
+        )
+    try:
+        submitted = json.loads(form_data().get("mapping") or "{}")
+    except json.JSONDecodeError:
+        return {"error": "The column mapping could not be read. Reload and try again."}, 400
+    specs, problems = {}, []
+    for name, sheets in files:
+        if name in submitted:
+            spec, file_problems = build_spec(submitted[name], sheets)
+            problems += file_problems
+            specs[name] = spec
+        elif _known_spec(job, name, sheets) is None:
+            problems.append(f"{name}: choose what this file contains.")
+    if problems:
+        return {"error": " ".join(problems[:6])}, 400
+    changed = db.session.execute(
+        update(ImportJob)
+        .where(ImportJob.id == job.id, ImportJob.status.in_(["mapping", "review"]))
+        .values(
+            status="queued",
+            error=None,
+            review_json=None,
+            approved_at=None,
+            receipt_id=None,
+            manual_specs_json=json.dumps(
+                {**json.loads(job.manual_specs_json or "{}"), **specs}
+            ),
+            updated_at=datetime.utcnow(),
+        )
+    )
+    if changed.rowcount != 1:
+        db.session.rollback()
+        return {"error": "This import has moved on. Reload its status."}, 409
+    auth.record(
+        "import_mapping_saved",
+        "import_job",
+        job.id,
+        "Column mapping chosen by reviewer for " + ", ".join(sorted(specs)),
+    )
+    db.session.commit()
+    import_jobs.dispatch_job(current_app._get_current_object(), job.id)
+    return navigate(url_for("api.import_status", job_id=job.id))
+
+
 @bp.route("/import/<job_id>/cancel", methods=["POST"])
 @require("import_data")
 def import_cancel(job_id):
     job = owned_or_404(import_jobs.get_job(job_id))
     changed = db.session.execute(
         update(ImportJob)
-        .where(ImportJob.id == job.id, ImportJob.status == "review")
+        .where(ImportJob.id == job.id, ImportJob.status.in_(["review", "mapping"]))
         .values(status="cancelled", updated_at=datetime.utcnow())
     )
     if changed.rowcount != 1:
         db.session.rollback()
-        return {"error": "Only an import awaiting review can be cancelled."}, 409
+        return {"error": "Only an import awaiting mapping or review can be cancelled."}, 409
     auth.record(
         "import_cancelled",
         "import_job",
@@ -402,6 +497,9 @@ def audit():
                     "import_cancelled",
                     "import_retried",
                     "evidence_classified",
+                    "import_mapping_saved",
+                    "ai_mapping_changed",
+                    "external_disclosure",
                     "shift_voided",
                     "shift_restored",
                     "import_period_replaced",

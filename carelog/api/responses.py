@@ -10,7 +10,7 @@ from flask_wtf.csrf import generate_csrf
 from werkzeug.datastructures import MultiDict
 
 MODEL_FIELDS = {
-    "Organization": "id name created_at timezone",
+    "Organization": "id name created_at timezone ai_mapping_enabled",
     "User": "id organization_id email name role is_active is_superuser created_at last_login_at must_change_password mfa_enabled mfa_enrolled_at",
     "Facility": "id organization_id name ancc_target rn_target target_history",
     "FacilityTarget": "id quarter_start ancc_target rn_target source approved_by_user_id approved_at",
