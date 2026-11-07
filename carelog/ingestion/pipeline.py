@@ -186,8 +186,11 @@ def ingest_file(
             r.evidence_basis = basis
             from .quality import validate_shifts
 
-            validate_shifts(r.records, evidence_type=auto_type)
-            outcome.warnings.extend(check_shifts(r.records))
+            from carelog.domain.clock import facility_today
+
+            local_today = facility_today(facility)
+            validate_shifts(r.records, evidence_type=auto_type, today=local_today)
+            outcome.warnings.extend(check_shifts(r.records, today=local_today))
             _import_shifts(facility, r.records, outcome, evidence_type=auto_type)
         elif r.kind == "staff":
             continue

@@ -141,7 +141,7 @@ def update_targets():
 
 
 @bp.route("/clear", methods=["POST"])
-@require("manage_facility")
+@require("delete_organization_data")
 def clear():
     """Delete this organization's care data, including retained evidence."""
     if not _confirmed(request):
@@ -326,9 +326,13 @@ def facility_delete(facility_id):
         return navigate(url_for("api.facilities_view"))
 
     name = facility.name
-    files = _purge_evidence(
-        ImportReceipt.query.filter_by(facility_id=facility.id).all()
-    )
+    try:
+        files = _purge_evidence(
+            ImportReceipt.query.filter_by(facility_id=facility.id).all(),
+            facility_ids=[facility.id],
+        )
+    except StorageError:
+        return {"error": "Evidence storage could not confirm deletion. Database records were kept; investigate storage and retry."}, 502
     _delete_facility_data([facility.id])
     db.session.delete(facility)
     auth.record(

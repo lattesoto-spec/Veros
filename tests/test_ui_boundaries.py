@@ -1,4 +1,5 @@
 import importlib
+import time as time_module
 from datetime import date, time
 
 import pytest
@@ -91,6 +92,7 @@ def sign_in_as(client, user_id):
         session.clear()
         session["user_id"] = user_id
         session["auth_version"] = 1
+        session["last_activity_at"] = time_module.time()
 
 
 def test_api_errors_and_login_are_json(web_app):
@@ -641,3 +643,100 @@ def test_bulk_eligibility_is_atomic_and_requires_effective_approval_dates(web_ap
             member.eligibility_status
             for member in Staff.query.filter(Staff.id.in_(selected))
         } == {"excluded"}
+
+
+def test_evidence_owner_guard_denies_null_and_foreign_facility(web_app):
+    from carelog.models import ImportJob
+    app, ids = web_app
+    with app.app_context():
+        home = Facility.query.filter_by(organization_id=ids["customer"]).one()
+        db.session.add_all([
+            ImportJob(id="null-owner", facility_id=home.id, organization_id=None, status="failed"),
+            ImportJob(id="foreign-home", facility_id=ids["other_facility"], organization_id=ids["customer"], status="failed"),
+        ])
+        db.session.commit()
+    client = app.test_client()
+    sign_in_as(client, ids["admin"])
+    assert client.get("/api/import/status/null-owner").status_code == 404
+    assert client.get("/api/import/status/foreign-home").status_code == 404
+    from carelog.services.ownership import reconcile_evidence_owners
+    assert reconcile_evidence_owners() == {"repairable": 1, "quarantined": 0, "conflicts": 1}
+    assert db.session.get(ImportJob, "null-owner").organization_id is None
+    reconcile_evidence_owners(apply=True)
+    assert client.get("/api/import/status/null-owner").status_code == 200
+    assert client.get("/api/import/status/foreign-home").status_code == 404
+
+
+def test_facility_delete_purges_failed_sources_and_preserves_db_on_storage_failure(web_app, monkeypatch, tmp_path):
+    from carelog.models import ImportJob
+    from carelog.storage import LocalStorage, StorageError
+    app, ids = web_app
+    storage = LocalStorage(str(tmp_path))
+    monkeypatch.setattr("carelog.services.workspace._storage", lambda: storage)
+    with app.app_context():
+        home = Facility.query.filter_by(organization_id=ids["customer"]).one()
+        home_id = home.id
+        db.session.add(ImportJob(id="failed-source", facility_id=home.id, organization_id=ids["customer"], status="failed", storage_prefix="imports/job-failed-source"))
+        db.session.commit()
+    key = storage.put("imports/job-failed-source/private.csv", b"synthetic private evidence")
+    client = app.test_client()
+    sign_in_as(client, ids["admin"])
+    original_delete = storage.delete
+    def unavailable(keys):
+        raise StorageError("offline")
+    monkeypatch.setattr(storage, "delete", unavailable)
+    assert client.post(f"/api/facilities/{home_id}/delete", data={"confirm": "delete"}).status_code == 502
+    with app.app_context():
+        assert db.session.get(Facility, home_id) is not None
+        assert db.session.get(ImportJob, "failed-source") is not None
+    monkeypatch.setattr(storage, "delete", original_delete)
+    assert client.post(f"/api/facilities/{home_id}/delete", data={"confirm": "delete"}).status_code == 200
+    assert storage.list("imports/job-failed-source") == []
+    with app.app_context():
+        assert db.session.get(Facility, home_id) is None
+        assert db.session.get(ImportJob, "failed-source") is None
+
+
+def test_clinical_review_permission_and_admin_only_workspace_delete(web_app):
+    app, ids = web_app
+    # The fixture's application context is shared with test requests, so roles
+    # change on that session rather than through a second, stale identity map.
+    reviewer = db.session.get(auth.User, ids["admin"])
+    reviewer.role = "clinical_manager"
+    db.session.commit()
+    client = app.test_client()
+    sign_in_as(client, ids["admin"])
+    assert "review_eligibility" in auth.ROLES["clinical_manager"]["permissions"]
+    assert "review_eligibility" in auth.ROLES["compliance_officer"]["permissions"]
+    assert client.post("/api/clear", data={"confirm": "delete"}).status_code == 403
+    reviewer.role = "facility_manager"
+    db.session.commit()
+    assert client.post("/api/clear", data={"confirm": "delete"}).status_code == 403
+    assert Facility.query.filter_by(organization_id=ids["customer"]).count() == 1
+
+
+def test_session_expires_after_thirty_minutes_without_requests(web_app):
+    app, ids = web_app
+    client = app.test_client()
+    sign_in_as(client, ids["admin"])
+    assert client.get("/api/dashboard").status_code == 200
+
+    with client.session_transaction() as session:
+        session["last_activity_at"] = time_module.time() - 1799
+    assert client.get("/api/dashboard").status_code == 200
+
+    with client.session_transaction() as session:
+        session["last_activity_at"] = time_module.time() - 1801
+    response = client.get("/api/dashboard")
+    assert response.status_code == 401
+    assert response.json["navigate"].startswith("/login")
+    assert client.get("/api/dashboard").status_code == 401
+
+
+def test_session_without_activity_timestamp_is_not_trusted(web_app):
+    app, ids = web_app
+    client = app.test_client()
+    sign_in_as(client, ids["admin"])
+    with client.session_transaction() as session:
+        del session["last_activity_at"]
+    assert client.get("/api/dashboard").status_code == 401

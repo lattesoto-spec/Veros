@@ -162,7 +162,7 @@ def test_imports_preserve_other_dates_and_reimport_idempotently(app, facility):
     [
         {"break_minutes": -120},
         {"end_time": time(8)},
-        {"date": date.today() + timedelta(days=1)},
+        {"date": date(2026, 8, 2)},
     ],
 )
 def test_bad_worked_rows_are_rejected(change):
@@ -173,7 +173,7 @@ def test_bad_worked_rows_are_rejected(change):
         "end_time": time(16),
     }
     with pytest.raises(MappingError):
-        validate_shifts([{**row, **change}])
+        validate_shifts([{**row, **change}], today=date(2026, 8, 1))
 
 
 def test_duplicate_and_overlapping_rows_are_rejected():

@@ -1,3 +1,4 @@
+from carelog.domain.clock import facility_today
 from datetime import date, datetime, timedelta
 
 from flask import (
@@ -61,11 +62,11 @@ def index():
 def _latest_data_date(facility):
     latest = (
         Shift.query.filter_by(facility_id=facility.id, evidence_type="worked")
-        .filter(Shift.date <= date.today())
+        .filter(Shift.date <= facility_today(facility))
         .order_by(Shift.date.desc())
         .first()
     )
-    return latest.date if latest else date.today()
+    return latest.date if latest else facility_today(facility)
 
 
 @bp.route("/compliance")
@@ -237,11 +238,11 @@ def dashboard():
 
     latest_worked_shift = (
         Shift.query.filter_by(facility_id=facility.id, evidence_type="worked")
-        .filter(Shift.date <= date.today())
+        .filter(Shift.date <= facility_today(facility))
         .order_by(Shift.date.desc())
         .first()
     )
-    today = latest_worked_shift.date if latest_worked_shift else date.today()
+    today = latest_worked_shift.date if latest_worked_shift else facility_today(facility)
 
     today_stats = daily_stats(
         facility.id, today, facility.ancc_target, facility.rn_target
@@ -293,7 +294,7 @@ def dashboard():
     alerts = detect_gaps(facility, today)
     last_receipt = _latest_receipt(facility)
     data_age_days = (
-        (date.today() - last_receipt.imported_at.date()).days if last_receipt else None
+        (facility_today(facility) - last_receipt.imported_at.date()).days if last_receipt else None
     )
     receipts = ImportReceipt.query.filter_by(facility_id=facility.id).all()
     with_files = sum(1 for r in receipts if _receipt_files(r))
@@ -348,7 +349,7 @@ def dashboard():
         facility=facility_for_period(facility, today),
         today=today,
         has_worked_data=latest_worked_shift is not None,
-        worked_data_age_days=(date.today() - today).days
+        worked_data_age_days=(facility_today(facility) - today).days
         if latest_worked_shift
         else None,
         setup_checks=setup_checks,

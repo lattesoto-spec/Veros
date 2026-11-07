@@ -123,14 +123,8 @@ class VercelBlobStorage(Storage):
     JavaScript SDK uses: a PUT to the store host carrying the token, the API
     version, and the store's access mode.
 
-    The access mode is fixed when a store is created, and sending the wrong one
-    is rejected. Rather than make that an operator's problem, an upload that is
-    refused for a mode mismatch is retried once with the other mode and the
-    correct value is remembered — so VERCEL_BLOB_ACCESS only exists to skip
-    that one wasted round trip. VERCEL_BLOB_API_VERSION is likewise a safety
-    valve if Vercel moves the protocol. /debug/storage reports which variable
-    the token came from, the store id inside it, and whether the mode was
-    corrected.
+    Care evidence requires a private store. An access mismatch fails closed;
+    neither errors nor retries may change the configured access policy.
     """
 
     BASE = "https://blob.vercel-storage.com"
@@ -153,6 +147,8 @@ class VercelBlobStorage(Storage):
         # examples pass <PREFIX>_STORE_ID alongside the credential.
         self._store_id = self.normalize_store_id(store_id) if store_id else None
         # Must match how the store was created; a mismatch is rejected with 403.
+        if access != "private":
+            raise StorageError("Care evidence requires a private Vercel Blob store; configure VERCEL_BLOB_ACCESS=private.")
         self.access = access
 
     @staticmethod
@@ -251,17 +247,8 @@ class VercelBlobStorage(Storage):
     def put(self, key, data, content_type="application/octet-stream"):
         r = self._put_once(key, data, content_type, self.access)
 
-        # A store's access mode is fixed at creation and the API names the
-        # mismatch precisely, so correct it rather than making an operator
-        # guess at a config value the service already knows.
         if r.status_code in (400, 403) and self._is_access_mismatch(r):
-            corrected = "private" if self.access == "public" else "public"
-            retry = self._put_once(key, data, content_type, corrected)
-            if retry.status_code < 300:
-                self.access = corrected      # remember for this process
-                self.access_corrected = True
-                return key
-            r = retry
+            raise StorageError("Vercel Blob access mismatch. Care evidence requires a private store; no upload was retried with public access.")
 
         if r.status_code == 403:
             detail = self._explain(r)

@@ -60,6 +60,8 @@ PERMISSIONS = (
     "import_data",        # upload rosters, run imports
     "view_audit",         # audit trail and evidence list
     "download_evidence",  # download the retained source files
+    "review_eligibility", # clinical/compliance evidence decisions
+    "delete_organization_data", # administrator-only destructive workspace reset
     "manage_facility",    # targets, facility details
     "manage_integrations",
     "manage_users",       # invite, edit, deactivate users
@@ -76,20 +78,20 @@ ROLES: dict[str, dict] = {
         "description": "Runs the facility day to day: imports, targets, integrations.",
         "permissions": {
             "view_records", "view_dashboard", "run_scenarios", "export_data", "import_data",
-            "view_audit", "download_evidence", "manage_facility", "manage_integrations",
+            "view_audit", "download_evidence", "manage_facility", "manage_integrations", "review_eligibility",
         },
     },
     "clinical_manager": {
         "label": "Clinical Manager",
         "description": "Reviews care minutes and models staffing changes.",
-        "permissions": {"view_records", "view_dashboard", "run_scenarios", "export_data", "view_audit"},
+        "permissions": {"view_records", "view_dashboard", "run_scenarios", "export_data", "view_audit", "review_eligibility"},
     },
     "compliance_officer": {
         "label": "Compliance Officer",
         "description": "Prepares evidence for regulators; can import and export.",
         "permissions": {
             "view_records", "view_dashboard", "export_data", "import_data", "view_audit",
-            "download_evidence", "run_scenarios",
+            "download_evidence", "run_scenarios", "review_eligibility",
         },
     },
     "auditor": {
@@ -145,6 +147,12 @@ def current_user() -> User | None:
     if user is None or not user.is_active or \
             session.get("auth_version") != user.auth_version:
         return None
+    now = time.time()
+    last_activity = session.get("last_activity_at")
+    if not isinstance(last_activity, (int, float)) or now - last_activity > current_app.config.get("SESSION_IDLE_SECONDS", 1800):
+        session.clear()
+        return None
+    session["last_activity_at"] = now
     return user
 
 
@@ -235,11 +243,15 @@ def owned_or_404(obj):
         abort(404)
     org_id = current_organization_id()
     owner = getattr(obj, "organization_id", None)
-    # Rows created before organizations existed carry NULL; treat them as
-    # belonging to whoever is looking, since a single-tenant database only
-    # ever had one customer in it.
-    if owner is not None and owner != org_id:
+    # Unassigned legacy evidence is quarantined until its facility ownership
+    # is explicitly reconciled. A NULL value is never a wildcard tenant.
+    if org_id is None or owner is None or owner != org_id:
         abort(404)
+    facility_id = getattr(obj, "facility_id", None)
+    if facility_id is not None:
+        from carelog.models import Facility
+        if not Facility.query.filter_by(id=facility_id, organization_id=org_id).first():
+            abort(404)
     return obj
 
 
@@ -585,6 +597,7 @@ def _finalize_login(user: User, method: str, remember_device: bool = False):
     session.clear()
     session["user_id"] = user.id
     session["auth_version"] = user.auth_version
+    session["last_activity_at"] = time.time()
     session.permanent = True
     user.last_login_at = datetime.utcnow()
     record_auth("login", user, f"second_step={method}")

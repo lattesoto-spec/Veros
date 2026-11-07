@@ -17,7 +17,6 @@ Two rules follow, and both are deliberately conservative:
 """
 
 import re
-from datetime import date
 
 # Reporting buckets. The mapping engine normalises to PCW; the government
 # statement calls the same bucket PCA.
@@ -148,8 +147,11 @@ def counts_toward_care(staff, on_day=None) -> bool:
         return False
     if getattr(staff, "eligibility_status", PENDING) != APPROVED:
         return False
-    if classify(getattr(staff, "source_role", None) or staff.role)[1] == EXCLUDED:
+    source_status = classify(getattr(staff, "source_role", None) or staff.role)[1]
+    if source_status == EXCLUDED:
         return False
+    if source_status == PENDING and not getattr(staff, "approved_at", None):
+        return False  # old automatic classifications do not establish a review
     if bucket_for(staff.role) not in ELIGIBLE_BUCKETS:
         return False
     if registration_problem(staff, on_day):
@@ -175,7 +177,9 @@ def registration_problem(staff, on_day=None) -> str | None:
     expiry = getattr(staff, "registration_expiry", None)
     if not expiry:
         return f"{bucket} has no Ahpra registration expiry recorded"
-    check_day = on_day or date.today()
+    from carelog.domain.clock import facility_today
+
+    check_day = on_day or facility_today(staff.facility_id)
     if expiry < check_day:
         return f"{bucket} Ahpra registration expired on {expiry.isoformat()}"
     return None

@@ -16,6 +16,13 @@ from carelog.models import (
 
 
 def register_cli(app):
+    @app.cli.command("reconcile-evidence-owners")
+    @click.option("--apply", is_flag=True, help="Commit audited ownership inherited from an explicitly owned facility")
+    def reconcile_evidence_owners_command(apply):
+        """Dry-run legacy ownership repair; unassigned/conflicting homes stay quarantined."""
+        from carelog.services.ownership import reconcile_evidence_owners
+        click.echo({"applied": apply, **reconcile_evidence_owners(apply=apply)})
+
     @app.cli.command("init-db")
     def init_db_command():
         """Create any missing tables and columns."""

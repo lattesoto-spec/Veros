@@ -1,3 +1,4 @@
+import time
 """Integration checks against a disposable local PostgreSQL database only."""
 
 import json
@@ -276,6 +277,7 @@ def test_period_queries_stay_bounded_as_more_dates_are_added(pg_app):
     client = app.test_client()
     with client.session_transaction() as session:
         session["user_id"], session["auth_version"] = user.id, 1
+        session["last_activity_at"] = time.time()
     measurements = []
     for start, stop in [(0, 31), (31, 61)]:
         for offset in range(start, stop):

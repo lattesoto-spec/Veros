@@ -1,4 +1,5 @@
 """Exercise the exact two-file upload inputs through the real mapping and reports."""
+import time
 
 from datetime import date
 from io import BytesIO
@@ -99,6 +100,7 @@ def test_demo_api_from_organisation_to_pdf(monkeypatch, tmp_path):
     with client.session_transaction() as state:
         state["user_id"] = owner_id
         state["auth_version"] = 1
+        state["last_activity_at"] = time.time()
     created = client.post("/api/platform/organizations/create", data={
         "name": "Banksia Demo Organisation", "admin_name": "Demo Admin",
         "admin_email": "demo@example.test", "password": "Temporary123!",

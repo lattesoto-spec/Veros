@@ -1,3 +1,4 @@
+import time
 import pyotp
 import pytest
 from cryptography.fernet import Fernet
@@ -263,6 +264,7 @@ def test_csrf_logout_method_and_legacy_session_are_rejected(auth_app):
         state.clear()
         state["user_id"] = ids["user"]
         state["auth_version"] = 1
+        state["last_activity_at"] = time.time()
     client.get("/api/mfa/challenge")
     with client.session_transaction() as state:
         assert state["user_id"] == ids["user"]
@@ -296,6 +298,7 @@ def test_admin_mfa_reset_is_tenant_scoped_and_revokes_target_sessions(auth_app):
     with client.session_transaction() as state:
         state["user_id"] = ids["user"]
         state["auth_version"] = 1
+        state["last_activity_at"] = time.time()
 
     page = client.get("/api/admin/users")
     token = csrf_token(page)
@@ -384,6 +387,7 @@ def test_admin_can_issue_confirmed_temporary_password(auth_app):
     with client.session_transaction() as state:
         state["user_id"] = ids["user"]
         state["auth_version"] = 1
+        state["last_activity_at"] = time.time()
 
     page = client.get("/api/admin/users")
     response = client.post(

@@ -1,3 +1,5 @@
+import json
+from carelog.domain.clock import facility_today
 from datetime import date, datetime, timedelta
 
 from flask import (
@@ -96,7 +98,7 @@ def eligibility_queue():
 
 
 @bp.post("/eligibility/bulk")
-@require("manage_facility")
+@require("review_eligibility")
 def bulk_eligibility():
     facility = current_facility()
     if not facility:
@@ -159,7 +161,7 @@ def bulk_eligibility():
 
 
 @bp.route("/eligibility/<int:staff_id>", methods=["POST"])
-@require("manage_facility")
+@require("review_eligibility")
 def eligibility_decide(staff_id):
     facility = current_facility()
     if facility:
@@ -173,6 +175,10 @@ def eligibility_decide(staff_id):
     )
     if member is None:
         abort(404)
+    before = {key: str(getattr(member, key, None)) for key in (
+        "role", "eligibility_status", "eligible_from", "eligible_to",
+        "registration_expiry", "employment_type",
+    )}
     decision = (form_data().get("decision") or "").strip()
     if decision not in (el.APPROVED, el.EXCLUDED, el.PENDING):
         abort(400)
@@ -207,6 +213,8 @@ def eligibility_decide(staff_id):
     )
     if eligible_from and eligible_to and eligible_from > eligible_to:
         return {"error": "Eligible-to must be on or after eligible-from."}, 400
+    if decision == el.APPROVED and eligible_from is None:
+        return {"error": "Approval requires an explicit eligible-from date."}, 400
     member.eligibility_status = decision
     member.role = mapped_role
     reason = (form_data().get("reason") or "").strip()
@@ -224,7 +232,7 @@ def eligibility_decide(staff_id):
         form_data().get("employment_type") or ""
     ).strip() or member.employment_type
 
-    problem = el.registration_problem(member, member.eligible_from or date.today())
+    problem = el.registration_problem(member, member.eligible_from or facility_today(facility))
     if decision == el.APPROVED and problem:
         flash(f"Cannot approve: {problem}.")
         return navigate(url_for("api.eligibility_queue"))
@@ -235,8 +243,8 @@ def eligibility_decide(staff_id):
         "eligibility_decided",
         "staff",
         member.id,
-        f"{member.name} ({member.source_role or member.role}) -> {member.role}/{decision}: "
-        f"{member.eligibility_reason}",
+        json.dumps({"before": before, "after": {key: str(getattr(member, key, None)) for key in before},
+                    "basis": member.eligibility_reason}),
     )
     db.session.commit()
     flash(f"{member.name} marked {decision}. Care minutes recalculated on next view.")

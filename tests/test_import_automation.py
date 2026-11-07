@@ -1,5 +1,5 @@
 import json
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 from carelog.domain.compliance import day_breakdown, rn_coverage
@@ -169,6 +169,7 @@ def test_realistic_workbook_imports_credentials_and_countable_rn_minutes(app, fa
             if member.source_role in ("Registered Nurse – Level 1", "Personal Care Worker Grade 2"):
                 assert member.eligibility_status == "pending"
                 member.eligibility_status = "approved"
+                member.approved_at = datetime(2026, 8, 1)
                 member.eligibility_reason = "Synthetic test: reviewer confirmed direct-care duties"
         db.session.commit()
         rn = Staff.query.filter_by(facility_id=facility.id, role="RN").first()

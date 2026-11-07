@@ -58,3 +58,12 @@ Original source files remain retained on failure. Changes to care data and recei
 - Eligibility automatically approves only exact, unambiguous titles. Modified or management nursing titles require a recorded reviewer decision; pending titles remain withheld regardless of their current reporting bucket. Daily, eligibility-header and evidence-summary withheld totals reconcile.
 - Dashboard / Care minutes / Facilities distinguish partial-period on-track/below comparisons from completed quarterly pass/fail. Missing worked dates, withheld eligibility and worked minutes on zero-occupancy dates are explicit limitations; report readiness includes those limitations. Missing approved targets serialize as null. Daily statuses use each date's approved quarterly target, and alerts compare exact minutes before display rounding.
 - Scenarios retain zero-minute occupied days in the trailing baseline. Settings accepts targets to two decimal places. `CALC_VERSION` is `2026.11.5`.
+
+## Privacy, tenancy and access boundaries
+
+- Evidence requires a private Vercel Blob store. An access-mode mismatch fails closed; uploads are never retried with public access.
+- `owned_or_404` denies NULL-owned evidence and evidence whose facility belongs to another organisation. `flask reconcile-evidence-owners` dry-runs legacy repair and, with `--apply`, inherits only a verified facility owner under audit.
+- Facility deletion purges failed and cancelled upload sources and keeps database records if storage cannot confirm deletion.
+- Organisation-wide deletion is administrator-only. Clinical Managers and Compliance Officers can record eligibility decisions; individual decisions now audit before/after values and require an explicit approval start date. Legacy automatic classifications of pending titles do not count until reviewed.
+- Sessions expire after 30 idle minutes, and a session without an activity timestamp is not trusted.
+- Calendar boundaries use the organisation's timezone rather than server UTC.

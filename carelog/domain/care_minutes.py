@@ -6,8 +6,8 @@ from carelog.models import Resident, ResidentDay, db
 
 
 def _minutes_between(start: time, end: time) -> int:
-    s = datetime.combine(date.today(), start)
-    e = datetime.combine(date.today(), end)
+    s = datetime.combine(date(2000, 1, 1), start)
+    e = datetime.combine(date(2000, 1, 1), end)
     if e < s:
         e += timedelta(days=1)
     return int((e - s).total_seconds() // 60)

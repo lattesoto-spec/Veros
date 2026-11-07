@@ -14,8 +14,10 @@ KNOWN_ROLES = {"RN", "EN", "PCW", "PCA", "AIN", "ADMIN", "OTHER", ""}
 MAX_WARNINGS_PER_KIND = 10
 
 
-def validate_shifts(records, evidence_type="worked"):
+def validate_shifts(records, evidence_type="worked", today=None):
     """Reject a batch rather than count duplicate or impossible care evidence."""
+    from carelog.domain.clock import organization_today
+    today = today or organization_today()
     seen, spans = set(), {}
     for rec in records:
         where = f"{rec.get('_source_file') or 'Source'} / {rec.get('_source_sheet') or 'shifts'} / row {rec.get('_source_row', '?')}"
@@ -24,7 +26,7 @@ def validate_shifts(records, evidence_type="worked"):
         problem = None
         if rec["date"].year < 2000:
             problem = "date is outside the supported care-evidence period"
-        elif evidence_type == "worked" and rec["date"] > date.today():
+        elif evidence_type == "worked" and rec["date"] > today:
             problem = "actual-worked date is in the future"
         elif rec.get("break_minutes", 0) < 0:
             problem = "negative break"
@@ -79,7 +81,8 @@ def _minutes(rec) -> float | None:
 
 
 def check_shifts(records: list[dict], today: date | None = None) -> list[str]:
-    today = today or date.today()
+    from carelog.domain.clock import organization_today
+    today = today or organization_today()
     warnings: dict[str, list[str]] = {}
 
     def warn(kind: str, msg: str):

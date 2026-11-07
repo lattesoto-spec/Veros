@@ -1,5 +1,5 @@
+from carelog.domain.clock import facility_today
 import os
-from datetime import date
 
 from flask import (
     session,
@@ -52,7 +52,7 @@ def workspace_context(facility: Facility | None) -> dict:
         return {}
     latest = (
         Shift.query.filter_by(facility_id=facility.id, evidence_type="worked")
-        .filter(Shift.date <= date.today())
+        .filter(Shift.date <= facility_today(facility))
         .order_by(Shift.date.desc())
         .first()
     )
