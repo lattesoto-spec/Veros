@@ -134,6 +134,7 @@ def test_closure_requires_missing_date_acknowledgement_and_a_current_snapshot(ho
     monkeypatch.setattr("carelog.services.closure.facility_today", lambda _: date(2026, 11, 7))
     run_import(app, ids, facility, timesheet(("A", "2026-08-25")))
     _, client = prepare(home, timesheet(("B", "2026-08-26")))
+    approve_everyone(facility)  # Pending staff minutes do not evidence a date.
     form = closure_form(client, "Board draft")
     preview = client.get("/api/reports/closure-preview?q=2026-Q1").json["data"]["preview"]
     assert len(preview["missing_worked_dates"]) == 91 and "2026-09-30" in preview["missing_worked_dates"]
@@ -155,6 +156,7 @@ def test_current_quarter_forecast_does_not_project_already_elapsed_missing_dates
     app, ids, facility = home
     monkeypatch.setattr("carelog.domain.clock.facility_today", lambda _: date(2026, 8, 5))
     run_import(app, ids, facility, timesheet(("A", "2026-08-01")))
+    approve_everyone(facility)  # Only countable time evidences a date.
     forecast = forecast_quarter(facility, date(2026, 8, 1))
     assert forecast["missing_elapsed_days"] == 3
     assert forecast["days_remaining"] == 57

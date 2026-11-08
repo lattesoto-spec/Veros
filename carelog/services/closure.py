@@ -47,7 +47,8 @@ def _figures(facility, start, end) -> dict:
         "rn_minutes": float(totals["rn_minutes"]),
         "rn_en_minutes": float(totals["rn_en_minutes"]),
         "tests": [
-            {key: test[key] for key in ("key", "label", "achieved", "target", "passed")}
+            {key: test[key] for key in ("key", "label", "achieved", "target", "passed",
+                                  "display_achieved", "display_basis", "assessment_value_available")}
             for test in result["tests"]
         ],
     }

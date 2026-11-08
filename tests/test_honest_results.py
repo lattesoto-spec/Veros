@@ -427,3 +427,99 @@ def test_complete_evidence_displays_the_assessment_value(facility):
     assert total["assessment_value_available"] is True
     assert total["display_achieved"] == total["achieved"]
     assert total["display_shortfall_minutes"] == total["shortfall_minutes"]
+
+
+def _fill(facility, staff, first, last, minutes, residents=1):
+    day = first
+    while day <= last:
+        for index in range(residents):
+            db.session.add(ResidentDay(facility_id=facility.id, resident_id=f"R{index}", date=day,
+                                       occupied=True, service_type="permanent"))
+        db.session.add(Shift(facility_id=facility.id, staff_id=staff.id, date=day, start_time=time(0),
+                             end_time=time(1), duration_minutes=minutes, evidence_type="worked"))
+        day = date.fromordinal(day.toordinal() + 1)
+    db.session.commit()
+
+
+def test_confirmed_shortfall_across_a_complete_multi_day_period_is_still_reported(facility, monkeypatch):
+    monkeypatch.setattr("carelog.domain.clock.facility_today", lambda _facility: date(2026, 7, 3))
+    nurse = member(facility)
+    _fill(facility, nurse, date(2026, 7, 1), date(2026, 7, 3), 10)
+    messages = [alert["message"] for alert in detect_gaps(facility, date(2026, 7, 3))]
+    assert any("below its AN-ACC target" in m and "total minutes short" in m for m in messages)
+    assert not any("cannot be assessed" in m for m in messages)
+
+
+def test_pending_minutes_withhold_the_shortfall_instead_of_declaring_one(facility, monkeypatch):
+    monkeypatch.setattr("carelog.domain.clock.facility_today", lambda _facility: date(2026, 7, 3))
+    nurse = member(facility)
+    pending = member(facility, staff_id="N2", name="Pending nurse", eligibility_status="pending", approved_at=None)
+    _fill(facility, nurse, date(2026, 7, 1), date(2026, 7, 3), 10)
+    for day in (1, 2, 3):
+        shift(facility, pending, date(2026, 7, day), time(0), time(23, 59))
+    db.session.commit()
+    messages = [alert["message"] for alert in detect_gaps(facility, date(2026, 7, 3))]
+    assert any("cannot be assessed" in m for m in messages)
+    assert not any("below its AN-ACC target" in m or "total minutes short" in m for m in messages)
+
+
+def test_pending_nurse_time_does_not_evidence_a_date(facility):
+    nurse = member(facility)
+    pending = member(facility, staff_id="N2", name="Pending nurse", eligibility_status="pending", approved_at=None)
+    complete_quarter(facility, nurse)
+    Shift.query.filter_by(date=date(2026, 8, 1), staff_id=nurse.id).delete()
+    shift(facility, pending, date(2026, 8, 1), time(8), time(9))
+    db.session.commit()
+    result = quarterly_tests(facility, date(2026, 7, 1), date(2026, 9, 30))
+    assert "2026-08-01" in result["missing_worked_dates"]
+    assert result["tests"][0]["assessment_value_available"] is False
+
+
+def _incomplete_quarter(facility):
+    nurse = member(facility)
+    complete_quarter(facility, nurse)
+    Shift.query.filter(Shift.date >= date(2026, 9, 1)).delete()
+    db.session.commit()
+
+
+def test_excel_export_labels_recorded_dates_and_withholds_the_shortfall(facility):
+    from io import BytesIO
+    from openpyxl import load_workbook
+    from carelog.domain.exports import summary_xlsx
+    _incomplete_quarter(facility)
+    sheet = load_workbook(BytesIO(summary_xlsx(facility, date(2026, 7, 1), date(2026, 9, 30))))["Compliance tests"]
+    rows = list(sheet.iter_rows(values_only=True))
+    header, first = rows[0], rows[1]
+    assert "Basis" in header
+    assert first[header.index("Basis")] == "Recorded dates only; not a quarter result"
+    assert first[header.index("Shortfall total minutes")] == "Not assessable"
+    assert first[header.index("Shortfall per OBD")] == "Not assessable"
+
+
+def test_regulatory_pdf_table_does_not_print_a_shortfall_for_incomplete_evidence(facility):
+    from carelog.domain.reports import _compliance_tests_table
+    _incomplete_quarter(facility)
+    table = _compliance_tests_table({"tests": quarterly_tests(facility, date(2026, 7, 1), date(2026, 9, 30))})
+    first = table._cellvalues[1]
+    assert "recorded dates only" in first[1] and first[4].startswith("Not assessable")
+
+
+def test_import_preview_positions_carry_the_recorded_dates_basis(facility):
+    from carelog.ingestion.jobs import _test_positions
+    _incomplete_quarter(facility)
+    positions = _test_positions(facility.id, [(date(2026, 7, 1), date(2026, 9, 30))])
+    test = positions[0]["tests"][0]
+    assert test["assessment_value_available"] is False and test["display_achieved"] > test["achieved"]
+
+
+def test_forecast_is_provisional_when_a_quarter_to_date_date_has_no_countable_time(facility, monkeypatch):
+    from carelog.domain.compliance import forecast_quarter, compliance_pct
+    monkeypatch.setattr("carelog.domain.clock.facility_today", lambda _facility: date(2026, 7, 10))
+    nurse = member(facility)
+    _fill(facility, nurse, date(2026, 7, 1), date(2026, 7, 10), 3000)
+    Shift.query.filter_by(date=date(2026, 7, 5)).delete()
+    db.session.commit()
+    forecast = forecast_quarter(facility, date(2026, 7, 10))
+    assert forecast["provisional"] is True and forecast["on_track"] is None
+    assert any("no countable worked time" in limit for limit in forecast["limitations"])
+    assert compliance_pct(facility, date(2026, 7, 10)) is None

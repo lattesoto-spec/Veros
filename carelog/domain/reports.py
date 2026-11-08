@@ -34,6 +34,7 @@ from reportlab.platypus import (
 )
 from sqlalchemy import func
 from carelog.domain import eligibility
+from carelog.domain.compliance import present_test
 from carelog.domain.care_minutes import active_residents_on
 from carelog.models import Facility, ImportReceipt, Shift, Staff, db
 
@@ -658,23 +659,14 @@ def _compliance_tests_table(stats: dict) -> Table:
             if row["passed"] is not None
             else "PROVISIONAL"
         )
-        shortfall = row["shortfall_minutes"]
-        shortfall_text = (
-            "<0.001 min"
-            if shortfall and shortfall < 0.001
-            else (
-                f"{shortfall:,.3f}".rstrip("0").rstrip(".") + " min"
-                if shortfall
-                else "-"
-            )
-        )
+        shown = present_test(row)
         data.append(
             [
                 row["label"],
-                f"{row['achieved']:.1f}",
+                shown["achieved_label"],
                 f"{row['target']:.1f}" if row["target"] else "Not approved",
                 result,
-                shortfall_text,
+                shown["shortfall_label"],
             ]
         )
     table = Table(data, repeatRows=1, colWidths=[60 * mm, 27 * mm, 27 * mm, 25 * mm, 31 * mm])

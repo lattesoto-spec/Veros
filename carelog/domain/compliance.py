@@ -142,17 +142,18 @@ def range_breakdown(
         by_day.setdefault(shift.date, []).append((shift, staff))
     for row in ledger:
         census.setdefault(row.date, []).append(row)
+    from carelog.domain.care_minutes import census_day_issues
+
     out, day = [], start
     while day <= end:
-        out.append(
-            _day_from_rows(
-                day, by_day.get(day, []), census.get(day, []), residents, evidence_type
-            )
+        row = _day_from_rows(
+            day, by_day.get(day, []), census.get(day, []), residents, evidence_type
         )
-        from carelog.domain.care_minutes import census_day_issues
-        out[-1]["worked_evidence"] = any(eligibility.bucket_for(staff.role) in eligibility.ELIGIBLE_BUCKETS
-                                         for _, staff in by_day.get(day, []))
-        out[-1]["census_verified"] = not census_day_issues(day, census, residents)
+        # A date is evidenced only by minutes that count; a pending nurse's or
+        # a cleaner's shift does not show that the day's care time is complete.
+        row["worked_evidence"] = row["total_minutes"] > 0
+        row["census_verified"] = not census_day_issues(day, census, residents)
+        out.append(row)
         day += timedelta(days=1)
     return out
 
@@ -198,6 +199,13 @@ def monthly_breakdown(facility_id: int, start: date, end: date) -> list[dict]:
         m["rn_per_bed_day"] = round(m["rn_minutes"] / bd, 1) if bd else 0.0
         m["label"] = date(m["year"], m["month"], 1).strftime("%B %Y")
         m["observed"] = observed_position(m.pop("observed_rows"))
+        m["evidence_complete"] = m["observed"]["days"] >= m["days"]
+        m["evidence_note"] = (
+            "Complete"
+            if m["evidence_complete"]
+            else f"{m['observed']['days']} of {m['days']} dates have countable worked time and a reconciled census; "
+            "the others are included as zero minutes"
+        )
         out.append(m)
     return out
 
@@ -357,75 +365,89 @@ def detect_gaps(facility, today: date) -> list[dict]:
     care_target = approved.ancc_target if approved else 0
     rn_target = approved.rn_target if approved else 0
 
-    # Position over the full calendar quarter once it has ended.
+    # Position over the full calendar quarter once it has ended. The alert
+    # follows the quarter tests, so the register can never disagree with them.
     fc = forecast_quarter(facility, today)
     position_end = assessment_end(facility, today)
-    exact = quarter_totals(fid, quarter_bounds(today)[0], position_end)
-    if exact["bed_days"] > 0 and approved:
+    q_start = quarter_bounds(today)[0]
+    exact = quarter_totals(fid, q_start, position_end)
+    if approved and exact["bed_days"] == 0:
+        alerts.append(
+            {
+                "severity": "medium",
+                "message": "Quarter position cannot be assessed: no occupied bed days are recorded. Import a resident-day census.",
+            }
+        )
+    elif approved:
         bd = exact["bed_days"]
-        period = f"for {quarter_bounds(today)[0].isoformat()} to {position_end.isoformat()}"
+        period = f"for {q_start.isoformat()} to {position_end.isoformat()}"
+        tested = quarterly_tests(facility, q_start, position_end)
+        by_key = {t["key"]: t for t in tested["tests"]}
+        withheld = any(
+            t["target"] and t["passed"] is None and t["on_track"] is None
+            for t in tested["tests"]
+        )
+
         def shortfall_message(label, minutes, target):
             ratio = Decimal(minutes) / Decimal(bd)
             deficit = Decimal(str(target)) * bd - Decimal(minutes)
             return (f"{label}: averaging {ratio:.1f} of {Decimal(str(target)):.1f} "
                     f"mins/occupied bed day {period}; {deficit.normalize():f} total minutes short "
                     "using exact comparisons before display rounding.")
-        observed = exact["observed"]
-        incomplete = observed["days"] < observed["assessment_days"]
-        if incomplete:
-            gap = observed["assessment_days"] - observed["days"]
-            recorded = observed["total_per_bed_day"]
-            alerts.append(
-                {
-                    "severity": "medium",
-                    "message": (
-                        f"Quarter position cannot be assessed: {gap} of {observed['assessment_days']} dates "
-                        "lack worked evidence or a reconciled census, so no shortfall is confirmed or ruled out. "
-                        + (f"Recorded dates alone average {recorded:.1f} of {Decimal(str(care_target)):.1f} "
-                           "mins/occupied bed day; this is not a quarter result." if recorded is not None else "")
-                    ).strip(),
-                }
-            )
-        if incomplete:
-            pass
-        elif Decimal(exact["total_minutes"]) < Decimal(str(care_target)) * bd:
-            alerts.append(
-                {
-                    "severity": "high",
-                    "message": shortfall_message("Facility is below its AN-ACC target", exact["total_minutes"], care_target),
-                }
-            )
-        elif fc and fc["on_track"] is False:
-            when = (
-                f"in {fc['days_until_breach']} day(s)"
-                if fc["days_until_breach"]
-                else "by quarter end"
-            )
-            alerts.append(
-                {
-                    "severity": "high",
-                    "message": (
-                        f"Predicted breach: at current staffing the quarter average "
-                        f"falls below target {when} "
-                        f"(projected {fc['projected_avg']:.0f} vs target "
-                        f"{care_target:.0f})."
-                    ),
-                }
-            )
-        if not incomplete and Decimal(exact["rn_minutes"]) < Decimal(str(rn_target)) * Decimal("0.9") * bd:
-            alerts.append(
-                {
-                    "severity": "high",
-                    "message": shortfall_message("RN minutes below target", exact["rn_minutes"], Decimal(str(rn_target)) * Decimal("0.9")),
-                }
-            )
-        if not incomplete and Decimal(exact["rn_en_minutes"]) < Decimal(str(rn_target)) * bd:
-            alerts.append(
-                {
-                    "severity": "high",
-                    "message": shortfall_message("RN + EN minutes below target", exact["rn_en_minutes"], rn_target),
-                }
-            )
+
+        def below(key):
+            return by_key[key]["passed"] is False or by_key[key]["on_track"] is False
+
+        if withheld:
+            reasons = [
+                limit for limit in tested["limitations"]
+                if not limit.startswith(("Quarter to date", "Ended quarter"))
+            ]
+            observed = exact["observed"]
+            text = "Quarter position cannot be assessed: " + " ".join(reasons[:3])
+            if observed["days"] < observed["assessment_days"] and observed["total_per_bed_day"] is not None:
+                text += (f" Recorded dates alone average {observed['total_per_bed_day']:.1f} of "
+                         f"{Decimal(str(care_target)):.1f} mins/occupied bed day; this is not a quarter result.")
+            alerts.append({"severity": "medium", "message": text.strip()})
+        else:
+            if below("total_care"):
+                alerts.append(
+                    {
+                        "severity": "high",
+                        "message": shortfall_message("Facility is below its AN-ACC target", exact["total_minutes"], care_target),
+                    }
+                )
+            elif fc and fc["on_track"] is False:
+                when = (
+                    f"in {fc['days_until_breach']} day(s)"
+                    if fc["days_until_breach"]
+                    else "by quarter end"
+                )
+                alerts.append(
+                    {
+                        "severity": "high",
+                        "message": (
+                            f"Predicted breach: at current staffing the quarter average "
+                            f"falls below target {when} "
+                            f"(projected {fc['projected_avg']:.0f} vs target "
+                            f"{care_target:.0f})."
+                        ),
+                    }
+                )
+            if below("rn_only"):
+                alerts.append(
+                    {
+                        "severity": "high",
+                        "message": shortfall_message("RN minutes below target", exact["rn_minutes"], Decimal(str(rn_target)) * Decimal("0.9")),
+                    }
+                )
+            if below("rn_plus_en"):
+                alerts.append(
+                    {
+                        "severity": "high",
+                        "message": shortfall_message("RN + EN minutes below target", exact["rn_en_minutes"], rn_target),
+                    }
+                )
 
     # Tomorrow's rostered RN shortfall (only if the roster extends that far)
     tomorrow = today + timedelta(days=1)
@@ -524,7 +546,7 @@ def _trailing_baseline(facility_id: int, today: date, days: int = 14) -> dict | 
     rows = [
         r
         for r in range_breakdown(facility_id, today - timedelta(days=days - 1), today)
-        if r["residents"] > 0
+        if r["residents"] > 0 and r["worked_evidence"]
     ]
     if not rows:
         return None
@@ -622,6 +644,12 @@ def forecast_quarter(
     from carelog.domain.care_minutes import denominator_issues
 
     census_issues = denominator_issues(facility.id, q_start, today)
+    gap_dates = [r["date"] for r in qtd if r["residents"] > 0 and not r["worked_evidence"]]
+    if gap_dates:
+        census_issues.append(
+            f"{len(gap_dates)} date(s) in the quarter to date have occupied bed days but no countable worked time "
+            f"(first: {gap_dates[0].isoformat()}). The average is not a quarter position."
+        )
     if any(not row["residents"] and row["total_minutes"] for row in qtd):
         census_issues.append("Worked minutes occur on zero-occupancy dates; reconcile their allocation before relying on the forecast.")
     return {
@@ -678,6 +706,37 @@ def compliance_pct(facility, today: date) -> float | None:
     return round(fc["qtd_avg"] / target.ancc_target * 100, 1)
 
 
+def present_test(row: dict) -> dict:
+    """The one reading of a quarter test for every surface (UI, exports, PDFs).
+
+    A figure for recorded dates only is labelled as such, and a shortfall is
+    stated only when the evidence supports it; otherwise it is withheld.
+    """
+    recorded_only = row.get("assessment_value_available") is False
+    value = row.get("display_achieved") if recorded_only else row.get("achieved")
+    shortfall = row.get("display_shortfall_minutes", row.get("shortfall_minutes"))
+    if value is None:
+        achieved_label = "Not available"
+    elif recorded_only:
+        achieved_label = f"{value:.1f} (recorded dates only)"
+    else:
+        achieved_label = f"{value:.1f}"
+    if shortfall is None:
+        shortfall_label = "Not assessable (provisional evidence)"
+    elif shortfall < 0.001:
+        shortfall_label = "-" if not shortfall else "<0.001 min"
+    else:
+        shortfall_label = f"{shortfall:,.3f}".rstrip("0").rstrip(".") + " min"
+    return {
+        "achieved": value,
+        "achieved_label": achieved_label,
+        "recorded_only": recorded_only,
+        "basis": row.get("display_basis") or "",
+        "shortfall_minutes": shortfall,
+        "shortfall_label": shortfall_label,
+    }
+
+
 # ------------------------------------------------- legislated quarterly tests
 
 # A mainstream residential home must pass all three each quarter.
@@ -710,6 +769,7 @@ def quarter_totals(facility_id: int, start: date, end: date) -> dict:
         "agency_minutes": sum(r["agency_minutes"] for r in rows),
         "zero_bed_day_worked_dates": [r["date"].isoformat() for r in rows if r["residents"] == 0 and r["total_minutes"] > 0],
         "observed": observed_position(rows),
+        "evidenced_dates": {r["date"] for r in rows if r["worked_evidence"]},
     }
 
 
@@ -776,20 +836,9 @@ def quarterly_tests(facility, start: date, end: date) -> dict:
         limitations.append(f"{unresolved_clocks} clock interval(s) have ambiguous or nonexistent local times. They contribute zero minutes until corrected against elapsed-time evidence.")
     if t["zero_bed_day_worked_dates"]:
         limitations.append("Eligible worked minutes occur on zero-occupied-bed-day dates: " + ", ".join(t["zero_bed_day_worked_dates"]) + ". Reconcile their allocation before a verdict.")
-    # A date is only evidenced by care staff. One cleaner's shift does not show
-    # that the day's care time is complete.
-    worked_dates = {
-        day
-        for day, role in db.session.query(Shift.date, Staff.role)
-        .join(Staff, Shift.staff_id == Staff.id)
-        .filter(
-            Shift.facility_id == facility.id, Shift.evidence_type == "worked",
-            Shift.is_direct_care.is_(True), Shift.date >= start, Shift.date <= end,
-        )
-        .distinct()
-        .all()
-        if eligibility.bucket_for(role) in eligibility.ELIGIBLE_BUCKETS
-    }
+    # A date is evidenced only by minutes that count toward care. One cleaner's
+    # shift, or time for a nurse still pending review, does not complete a date.
+    worked_dates = t["evidenced_dates"]
     unverified = sum(
         worked_minutes(shift)
         for shift in Shift.query.filter(

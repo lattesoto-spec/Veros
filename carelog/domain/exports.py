@@ -12,6 +12,7 @@ from reportlab.lib.units import mm
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 from carelog.domain.compliance import (
+    present_test,
     CALC_VERSION,
     assessment_end,
     compliance_pct,
@@ -82,6 +83,7 @@ def summary_xlsx(facility, start: date, end: date) -> bytes:
             "Agency minutes",
             "Care mins / bed day",
             "RN mins / bed day",
+            "Evidence",
         ]
     )
     for c in wm[1]:
@@ -99,6 +101,7 @@ def summary_xlsx(facility, start: date, end: date) -> bytes:
                 m["agency_minutes"],
                 m["care_per_bed_day"],
                 m["rn_per_bed_day"],
+                m["evidence_note"],
             ]
         )
 
@@ -154,24 +157,28 @@ def summary_xlsx(facility, start: date, end: date) -> bytes:
             "Result",
             "Shortfall per OBD",
             "Shortfall total minutes",
+            "Basis",
         ]
     )
     for c in wt[1]:
         c.font = bold
     tests = quarterly_tests(facility, start, end)
     for row in tests["tests"]:
+        shown = present_test(row)
+        withheld = row.get("display_shortfall_minutes") is None
         wt.append(
             [
                 row["label"],
-                row["achieved"],
+                shown["achieved"] if shown["achieved"] is not None else "Not available",
                 row["target"],
                 "PASS"
                 if row["passed"]
                 else "FAIL"
                 if row["passed"] is not None
                 else "PROVISIONAL / NO TARGET",
-                row["shortfall"],
-                row["shortfall_minutes"],
+                "Not assessable" if withheld else row["shortfall"],
+                "Not assessable" if withheld else row["shortfall_minutes"],
+                shown["basis"] or "Assessment period",
             ]
         )
 
@@ -243,10 +250,11 @@ def board_pdf(facility, today: date) -> bytes:
                 small,
             )
         )
+        note = " (provisional)" if fc["provisional"] else ""
         kpi_rows = [
             [
                 "Quarter-to-date average",
-                f"{fc['qtd_avg']:.1f} mins/resident/day",
+                f"{fc['qtd_avg']:.1f}{note} mins/resident/day",
                 f"Target {tests['tests'][0]['target']:.1f}",
             ],
             [
@@ -256,12 +264,12 @@ def board_pdf(facility, today: date) -> bytes:
             ],
             [
                 "RN-only quarter-to-date",
-                f"{fc['qtd_rn_avg']:.1f} mins/bed-day",
+                f"{fc['qtd_rn_avg']:.1f}{note} mins/bed-day",
                 f"Required {tests['tests'][1]['target']:.1f}",
             ],
             [
                 "RN + EN quarter-to-date",
-                f"{fc['qtd_rn_en_avg']:.1f} mins/bed-day",
+                f"{fc['qtd_rn_en_avg']:.1f}{note} mins/bed-day",
                 f"Required {tests['tests'][2]['target']:.1f}",
             ],
             [
@@ -299,6 +307,7 @@ def board_pdf(facility, today: date) -> bytes:
                     "Care mins/bed day",
                     "RN mins/bed day",
                     "Agency mins",
+                    "Evidence",
                 ]
             ]
             for m in months:
@@ -309,9 +318,10 @@ def board_pdf(facility, today: date) -> bytes:
                         f"{m['care_per_bed_day']:.1f}",
                         f"{m['rn_per_bed_day']:.1f}",
                         m["agency_minutes"],
+                        "Complete" if m["evidence_complete"] else f"{m['observed']['days']} of {m['days']} dates",
                     ]
                 )
-            t2 = Table(rows, colWidths=[45 * mm, 30 * mm, 40 * mm, 35 * mm, 30 * mm])
+            t2 = Table(rows, colWidths=[35 * mm, 25 * mm, 35 * mm, 30 * mm, 25 * mm, 30 * mm])
             t2.setStyle(
                 TableStyle(
                     [
@@ -332,7 +342,7 @@ def board_pdf(facility, today: date) -> bytes:
                 test_rows.append(
                     [
                         row["label"],
-                        row["achieved"],
+                        present_test(row)["achieved_label"],
                         row["target"],
                         "PASS"
                         if row["passed"]
@@ -373,7 +383,7 @@ def board_pdf(facility, today: date) -> bytes:
         reference = tests["target_reconciliation"]
         elements.append(Paragraph(f"Target quarter {reference['target_quarter']}; source: {escape(reference['target_source'] or 'Not approved')}.", small))
         rows = [["Quarterly test", "Achieved", "Required", "Result"]]
-        rows.extend([[r["label"], r["achieved"], r["target"] if r["target"] is not None else "Not approved",
+        rows.extend([[r["label"], present_test(r)["achieved_label"], r["target"] if r["target"] is not None else "Not approved",
                       "PROVISIONAL" if r["passed"] is None else "PASS" if r["passed"] else "FAIL"] for r in tests["tests"]])
         historic_tests = Table(rows, colWidths=[65 * mm, 30 * mm, 30 * mm, 30 * mm], repeatRows=1, hAlign="LEFT")
         historic_tests.setStyle(TableStyle([

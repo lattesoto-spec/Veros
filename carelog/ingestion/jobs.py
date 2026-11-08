@@ -551,7 +551,8 @@ def _test_positions(facility_id, periods) -> list[dict]:
                 "tests": [
                     {
                         key: test[key]
-                        for key in ("key", "label", "achieved", "target", "on_track", "passed")
+                        for key in ("key", "label", "achieved", "target", "on_track", "passed",
+                                    "display_achieved", "display_basis", "assessment_value_available")
                     }
                     for test in result["tests"]
                 ],
