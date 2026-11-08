@@ -219,7 +219,8 @@ def test_restore_refuses_to_double_count_a_replacement_row(home):
     client = app.test_client()
     sign_in_as(client, ids["admin"])
     client.post(f"/api/audit/shift/{row.id}/void", data={"reason": "Wrong times"})
-    later = timesheet(("A", "2026-08-01")).replace(b"08:00,16:00", b"09:00,15:00")
+    # This correction changes clocks and their matching duration together.
+    later = timesheet(("A", "2026-08-01")).replace(b"08:00,16:00,8", b"09:00,15:00,6")
     run_import(app, ids, facility, later, name="right.csv")
     assert client.post(f"/api/audit/shift/{row.id}/restore", data={"reason": "oops"}).status_code == 409
     assert worked_total(facility) == 360

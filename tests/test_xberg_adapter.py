@@ -57,3 +57,24 @@ def test_archive_rejects_nested_archives():
 def test_document_without_structured_tables_fails_closed():
     with pytest.raises(FileReadError):
         read_upload("broken.pdf", b"%PDF-1.4\ninvalid document")
+
+
+def test_concurrent_first_extractions_load_the_real_native_parser():
+    """A cold process exercises first import and independent extraction loops."""
+    import subprocess
+    import sys
+    probe = '''
+from concurrent.futures import ThreadPoolExecutor
+from carelog.ingestion.reader import read_upload
+
+def parse(index):
+    data = f"Employee,Date,Minutes\\nE{index},2026-08-01,60\\n".encode()
+    sheet = read_upload(f"source-{index}.csv", data)[0]
+    assert sheet.rows[0]["Employee"] == f"E{index}"
+    assert sheet.parser == "xberg/1.3.9"
+
+with ThreadPoolExecutor(max_workers=8) as pool:
+    list(pool.map(parse, range(16)))
+'''
+    result = subprocess.run([sys.executable, '-c', probe], capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stderr

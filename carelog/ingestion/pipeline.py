@@ -251,7 +251,7 @@ def ingest_file(
         if r.kind == "shifts":
             sheet = next(s for s in mapped_sheets if s.name == r.sheet)
             target = next(t for t in spec["targets"] if t["kind"] == "shifts" and t["sheet"] == r.sheet)
-            organization = db.session.get(Organization, facility.organization_id)
+            organization = db.session.get(Organization, facility.organization_id) if facility.organization_id else None
             from .quality import apply_elapsed_minutes
             zone_name = target.get("clock_timezone") or (organization.timezone if organization else "Australia/Sydney")
             target["clock_timezone"] = zone_name
@@ -260,6 +260,8 @@ def ingest_file(
                 r.records, rules, record_minutes
             )
             r.pay_excluded_records = [rec for rec in ruled_out if rec.get("staff_id") and isinstance(rec.get("date"), date)]
+            from .reconciliation import duration_holds
+            outcome.holds.extend(duration_holds(r.records, target, sheet, filename))
             r.rows_filtered += sum(
                 item["rows"] for item in r.pay_categories if item["treatment"] != "worked"
             )

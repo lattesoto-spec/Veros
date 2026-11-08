@@ -17,7 +17,7 @@ from carelog.domain.care_minutes import (
 from carelog.domain import eligibility
 from carelog.models import CareEpisode, Resident, ResidentDay, Shift, Staff, db
 
-CALC_VERSION = "2026.11.12"
+CALC_VERSION = "2026.11.13"
 
 # Canonical reporting buckets. The mapping engine normalizes to PCW; the
 # government statement calls the bucket PCA — they are the same bucket.
@@ -535,7 +535,8 @@ def forecast_quarter(
     if q_end < calendar_today or today > calendar_today:
         return None  # Missing historical dates are never projected as future days.
     qtd = [
-        r for r in range_breakdown(facility.id, q_start, today) if r["residents"] > 0
+        r for r in range_breakdown(facility.id, q_start, today)
+        if r["residents"] > 0 or r["total_minutes"] > 0
     ]
     baseline = _trailing_baseline(facility.id, today)
     if not qtd or not baseline:
@@ -543,6 +544,8 @@ def forecast_quarter(
 
     n = len(qtd)
     qtd_bed_days = sum(r["residents"] for r in qtd)
+    if not qtd_bed_days:
+        return None
     qtd_total = sum(r["total_minutes"] for r in qtd)
     qtd_rn = sum(r["rn_minutes"] for r in qtd)
     qtd_en = sum(r["en_minutes"] for r in qtd)
@@ -594,6 +597,8 @@ def forecast_quarter(
     from carelog.domain.care_minutes import denominator_issues
 
     census_issues = denominator_issues(facility.id, q_start, today)
+    if any(not row["residents"] and row["total_minutes"] for row in qtd):
+        census_issues.append("Worked minutes occur on zero-occupancy dates; reconcile their allocation before relying on the forecast.")
     return {
         "calc_version": CALC_VERSION,
         "q_start": q_start,
@@ -612,6 +617,7 @@ def forecast_quarter(
         "days_until_breach": days_until_breach,
         # With unverified bed days the average is inflated, so no call is made.
         "provisional": bool(census_issues) or missing_elapsed_days > 0,
+        "limitations": census_issues,
         "on_track": None if census_issues or missing_elapsed_days else projected >= target,
         "rn_on_track": None if census_issues or missing_elapsed_days else (
             projected_rn >= configured.rn_target * RN_ONLY_FRACTION

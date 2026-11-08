@@ -184,7 +184,7 @@ def test_different_layouts_preserve_other_sources_and_refuse_overlaps(home):  # 
     app, ids, facility = home
     run_import(app, ids, facility, timesheet(("A", "2026-08-01")))
     source = timesheet(("A", "2026-08-01")).replace(b"Approval Status", b"Approval Status,Other").replace(b",Approved\n", b",Approved,agency\n")
-    job, client = prepare(home, source.replace(b"08:00,16:00", b"16:00,23:00"), name="agency_timesheet.csv")
+    job, client = prepare(home, source.replace(b"08:00,16:00,8", b"16:00,23:00,7"), name="agency_timesheet.csv")
     assert job.status == "review", job.error
     assert json.loads(job.review_json)["impact"]["shifts_replaced"] == 0
     assert json.loads(job.review_json)["impact"]["period_rows"] == 0

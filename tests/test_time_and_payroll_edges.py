@@ -14,7 +14,7 @@ from carelog.ingestion.review import public_review
 from carelog.models import Shift, Staff, db
 from carelog.services.workspace import workspace_context
 from tests.test_corrections import SPEC, approve_everyone, home  # noqa: F401
-from tests.test_source_questions import prepare, confirm
+from tests.test_source_questions import prepare, confirm, answer
 from tests.test_ui_boundaries import web_app  # noqa: F401
 from carelog.ingestion.reader import read_upload
 
@@ -35,6 +35,11 @@ def test_import_captures_elapsed_minutes_and_clock_change_coverage_is_unassessed
     data = b'Staff ID,Staff Name,Role,Work Date,Actual Start,Actual Finish,Paid Hours,Approval Status\nA,A Name,Registered Nurse,2026-10-03,23:00,07:30,8.5,Approved\n'
     job, client = prepare(home, data)
     assert job.status == 'review', job.error
+    # The source's 8.5 paid hours disagree with the 7.5 real elapsed hours.
+    assert client.post(f'/api/import/{job.id}/confirm').status_code == 409
+    assert answer(job, client, 'time_reconciliation', 'clocks_verified').status_code == 200
+    from carelog.ingestion import jobs
+    jobs.run_job(job.id)
     confirm(job, client)
     shift = Shift.query.one()
     assert shift.timezone_name == 'Australia/Sydney'

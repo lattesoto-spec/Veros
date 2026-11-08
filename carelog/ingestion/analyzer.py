@@ -91,7 +91,8 @@ Field spec language (per normalized field):
 - source: "column" (default) with "column"; "combine" with "columns" + optional "separator";
   or "constant" with "value".
 - parse: "date", "time", "datetime_date" (date part of a datetime column),
-  "datetime_time" (time part), "number", "duration", "boolean", or omit for text.
+  "datetime_time" (clock endpoint whose date is validated against the work date),
+  "number", "duration", "boolean", or omit for text.
 - format: optional strptime format for date/time parsing (the engine also tries common formats).
 - duration: returns minutes. Declare the SOURCE unit as "minutes", "hours" or "h:mm"
   only when the header establishes it; never guess a unit from masked values.

@@ -21,7 +21,7 @@ Normalized schemas produced:
 import re
 from math import isfinite
 from dataclasses import dataclass, field
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 
 from .reader import Sheet
 from .durations import duration_minutes
@@ -95,6 +95,7 @@ DATE_FORMATS = [
     "%Y/%m/%d",
     "%d %b %Y",
     "%d %B %Y",
+    "%d-%b-%Y",
     "%b %d, %Y",
     "%m/%d/%Y",
 ]
@@ -164,15 +165,61 @@ def parse_date_value(s: str, fmt: str | None = None) -> date:
     raise ValueError(f"unparseable date: {s!r}")
 
 
-def parse_time_value(s: str, fmt: str | None = None) -> time:
+def parse_time_value(s: str, fmt: str | None = None) -> time | datetime | str:
     s = s.strip()
-    formats = ([fmt] if fmt else []) + TIME_FORMATS + DATETIME_FORMATS
+    if s in ("24:00", "24:00:00"):
+        return "24:00"  # Converted only as a finish, with its next-day meaning.
+    numeric_date = re.match(r"(\d{1,2})[/.-](\d{1,2})[/.-]\d{2,4}[ T]", s)
+    if numeric_date and not fmt:
+        a, b = map(int, numeric_date.groups())
+        if a <= 12 and b <= 12 and a != b:
+            raise ValueError("ambiguous datetime: declare the source date convention")
+    dates = DATE_FORMATS
+    if fmt in ("day_first", "month_first"):
+        dates = [f for f in dates if not f.startswith("%m/%d")]
+        if fmt == "month_first":
+            dates = [f.replace("%d/%m", "%m/%d").replace("%d-%m", "%m-%d").replace("%d.%m", "%m.%d") for f in dates]
+    elif fmt:
+        dates = [fmt]
+    formats = TIME_FORMATS + [f + suffix for f in dates for suffix in
+                             (" %H:%M", " %H:%M:%S", "T%H:%M", "T%H:%M:%S", " %I:%M %p")]
+    if fmt and fmt not in ("day_first", "month_first"):
+        formats.insert(0, fmt)
     for f in formats:
         try:
-            return datetime.strptime(s, f).time()
+            parsed = datetime.strptime(s, f)
+            return parsed if "%Y" in f or "%y" in f else parsed.time()
         except ValueError:
             continue
     raise ValueError(f"unparseable time: {s!r}")
+
+
+def _normalise_clock_dates(record):
+    """Validate dates before reducing endpoints to the stored clock interval."""
+    day = record.get("date")
+    start, end = record.get("start_time"), record.get("end_time")
+    if not isinstance(day, date):
+        return
+    if start == "24:00":
+        raise ValueError("24:00 is a finish on the following midnight; use 00:00 with the correct work date for a start")
+    if isinstance(start, datetime) and start.date() != day:
+        raise ValueError("start datetime date disagrees with the work date; correct the source")
+    start_clock = start.time() if isinstance(start, datetime) else start
+    if end == "24:00":
+        end = datetime.combine(day + timedelta(days=1), time())
+    if isinstance(end, datetime):
+        if not isinstance(start_clock, time):
+            raise ValueError("a dated finish needs a start clock and work date")
+        actual = end - datetime.combine(day, start_clock)
+        if not timedelta(0) < actual < timedelta(days=1):
+            raise ValueError("dated clock interval must be positive and less than 24 hours; correct the source")
+        expected_end_day = day + timedelta(days=int(end.time() < start_clock))
+        if end.date() != expected_end_day:
+            raise ValueError("finish datetime date disagrees with its overnight clock interval")
+    if isinstance(start, datetime):
+        record["start_time"] = start.time()
+    if isinstance(end, datetime):
+        record["end_time"] = end.time()
 
 
 def parse_number(s: str) -> float:
@@ -408,6 +455,8 @@ def run_target(target: dict, sheets: list[Sheet], pay_rules=None) -> TargetResul
             if name not in allowed:
                 continue
             try:
+                if name in ("start_time", "end_time") and not fs.get("format") and fields_spec.get("date", {}).get("format"):
+                    fs = {**fs, "format": fields_spec["date"]["format"]}
                 record[name] = _extract_field(fs, row, sheet.headers, minute_field=name in ("minutes", "break_minutes"))
                 # Normalisation must never destroy the evidence used by the
                 # eligibility classifier. Preserve the exact source title.
@@ -421,7 +470,11 @@ def run_target(target: dict, sheets: list[Sheet], pay_rules=None) -> TargetResul
                 raise MappingError(f"{sheet.name}: {err}")
             result.row_errors.append(err)
             continue
-        problem = _check_record(kind, record)
+        try:
+            _normalise_clock_dates(record)
+            problem = _check_record(kind, record)
+        except ValueError as error:
+            problem = str(error)
         if problem:
             if target.get("fail_on_row_error"):
                 raise MappingError(f"{sheet.name}: Row {idx}: {problem}")
@@ -489,6 +542,21 @@ def run_spec(spec: dict, sheets: list[Sheet], pay_rules=None) -> list[TargetResu
     targets = spec.get("targets", [])
     if not targets:
         raise MappingError("spec has no targets")
+    conventions = {}
+    for target in targets:
+        sheet = _pick_sheet(target, sheets)
+        for field_name, rule in target.get("fields", {}).items():
+            if rule.get("format") or rule.get("parse") not in ("date", "datetime_date", "time", "datetime_time"):
+                continue
+            for row in sheet.rows:
+                raw = _raw_field(rule, row, sheet.headers)
+                numeric = re.match(r"(\d{1,2})[/.-](\d{1,2})[/.-]\d{2,4}(?:[ T]|$)", raw)
+                if numeric:
+                    a, b = map(int, numeric.groups())
+                    if (a > 12) != (b > 12):
+                        conventions.setdefault(sheet.source_file or "file", set()).add("day_first" if a > 12 else "month_first")
+    if any(len(orders) > 1 for orders in conventions.values()):
+        raise MappingError("Mixed day-first and month-first dates in this file. Correct the source or declare the date convention for each sheet; nothing was imported.")
     return [run_target(t, sheets, pay_rules) for t in targets]
 
 

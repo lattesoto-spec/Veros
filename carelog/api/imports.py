@@ -343,7 +343,13 @@ def import_resolve_hold(job_id):
     spec = outcome["spec"]
     target = next(t for t in spec["targets"] if t.get("sheet") == sheet
                   and (kind == "site" or t.get("kind") == hold.get("target_kind", "shifts")))
-    if kind == "time_units":
+    if kind == "time_reconciliation":
+        if value not in hold["options"]:
+            return {"error": "Correct the source or record why the verified clocks and breaks are authoritative."}, 400
+        target.setdefault("duration_reconciliation", {})[hold["column"]] = {
+            "fingerprint": hold["fingerprint"], "basis": basis, "choice": value,
+        }
+    elif kind == "time_units":
         if value not in hold["options"]:
             return {"error": "Choose minutes, hours or h:mm."}, 400
         rule = target["fields"][hold["field"]]

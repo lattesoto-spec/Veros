@@ -18,6 +18,10 @@ from carelog.models import (
 
 @pytest.fixture()
 def web_app(monkeypatch):
+    # These tests execute jobs explicitly; do not leave background workers
+    # running after a fixture's database and monkeypatches are torn down.
+    from carelog.ingestion import jobs
+    monkeypatch.setattr(jobs, "dispatch_job", lambda *args: None)
     monkeypatch.setenv("DATABASE_URL", "sqlite://")
     monkeypatch.setenv("AUTO_INIT_DB", "1")
     monkeypatch.setenv("SECRET_KEY", "ui-boundary-test")

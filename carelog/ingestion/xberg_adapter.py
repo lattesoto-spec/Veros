@@ -4,9 +4,22 @@ import asyncio
 import csv
 import importlib.metadata
 import json
+import threading
+import importlib
 from pathlib import Path
 
 XBERG_VERSION = "1.3.9"
+_PARSER_IMPORT_LOCK = threading.Lock()
+_parser = None
+
+
+def load_parser():
+    """Initialise the native extension once before concurrent extractions."""
+    global _parser
+    with _PARSER_IMPORT_LOCK:
+        if _parser is None:
+            _parser = importlib.import_module("xberg")
+        return _parser
 DOCUMENT_EXTENSIONS = (
     ".csv",
     ".tsv",
@@ -40,13 +53,10 @@ def extract_tables(filename, data):
     from .reader import FileReadError, _build_sheet, _find_header_row
 
     try:
-        from xberg import (
-            CsvConfig,
-            ExtractInput,
-            ExtractionConfig,
-            SecurityLimits,
-            extract,
-        )
+        parser = load_parser()
+        CsvConfig, ExtractInput = parser.CsvConfig, parser.ExtractInput
+        ExtractionConfig, SecurityLimits = parser.ExtractionConfig, parser.SecurityLimits
+        extract = parser.extract
     except ImportError as error:
         raise FileReadError(
             "The Xberg parser is unavailable. Install the pinned backend requirements."
