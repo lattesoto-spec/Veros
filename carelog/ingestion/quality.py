@@ -84,7 +84,9 @@ def _span(rec) -> tuple[datetime, datetime] | None:
 
 def _minutes(rec) -> float | None:
     span = _span(rec)
-    if span:
+    if rec.get("_elapsed_minutes") is not None:
+        gross = rec["_elapsed_minutes"]
+    elif span:
         gross = (span[1] - span[0]).total_seconds() / 60
     elif isinstance(rec.get("minutes"), (int, float)):
         gross = rec["minutes"]
@@ -93,8 +95,19 @@ def _minutes(rec) -> float | None:
     return gross - (rec.get("break_minutes") or 0)
 
 
+def apply_elapsed_minutes(records, zone_name):
+    from carelog.domain.intervals import elapsed_minutes
+    for rec in records:
+        if _span(rec):
+            try:
+                rec["_elapsed_minutes"] = elapsed_minutes(rec["date"], rec["start_time"], rec["end_time"], zone_name)
+                rec["_timezone_name"] = zone_name
+            except ValueError as error:
+                raise MappingError(f"Row {rec.get('_source_row', '?')}: {error}") from None
+
+
 def daylight_saving_warnings(records, zone_name) -> list[str]:
-    """Clock-face arithmetic is an hour out when a shift spans a clock change."""
+    """Explain the elapsed-time basis when a shift spans a clock change."""
     zone = ZoneInfo(zone_name)
     affected = []
     for rec in records:
@@ -104,8 +117,8 @@ def daylight_saving_warnings(records, zone_name) -> list[str]:
     if not affected:
         return []
     return [
-        "Daylight saving changed during these shifts, so their minutes may be an hour out. "
-        "Check them against the timesheet: " + ", ".join(affected[:10])
+        "Daylight saving changed during these shifts. Worked minutes use real elapsed time "
+        f"in {zone_name}; RN continuity on the clock-change date remains unassessed: " + ", ".join(affected[:10])
     ]
 
 

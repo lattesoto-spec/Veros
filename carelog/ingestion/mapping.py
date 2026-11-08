@@ -25,6 +25,7 @@ from datetime import date, datetime, time
 
 from .reader import Sheet
 from .durations import duration_minutes
+from .paycodes import WORKED, treatment
 
 SHIFT_FIELDS = [
     "staff_id",
@@ -128,6 +129,7 @@ class TargetResult:
     evidence_basis: str | None = None
     pay_categories: list[dict] = field(default_factory=list)
     excluded_records: list[dict] = field(default_factory=list)
+    pay_excluded_records: list[dict] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------- parsing
@@ -143,7 +145,14 @@ def parse_date_value(s: str, fmt: str | None = None) -> date:
             raise ValueError(
                 "ambiguous date: specify the source date format or use YYYY-MM-DD"
             )
-    formats = [fmt] if fmt else DATE_FORMATS + DATETIME_FORMATS
+    if fmt in ("day_first", "month_first"):
+        # One explicit file convention accepts ISO and timestamp variants too.
+        formats = [f for f in DATE_FORMATS + DATETIME_FORMATS
+                   if not f.startswith("%m/%d")]
+        if fmt == "month_first":
+            formats = [f.replace("%d/%m", "%m/%d").replace("%d-%m", "%m-%d").replace("%d.%m", "%m.%d") for f in formats]
+    else:
+        formats = [fmt] if fmt else DATE_FORMATS + DATETIME_FORMATS
     for f in formats:
         try:
             return datetime.strptime(s, f).date()
@@ -330,7 +339,7 @@ def _pick_sheet(target: dict, sheets: list[Sheet]) -> Sheet:
     return sheets[0]
 
 
-def run_target(target: dict, sheets: list[Sheet]) -> TargetResult:
+def run_target(target: dict, sheets: list[Sheet], pay_rules=None) -> TargetResult:
     kind = target.get("kind")
     if kind not in ("shifts", "staff", "residents", "resident_days", "care_episodes"):
         raise MappingError(f"unknown target kind: {kind!r}")
@@ -345,6 +354,7 @@ def run_target(target: dict, sheets: list[Sheet]) -> TargetResult:
     }[kind]
 
     result = TargetResult(kind=kind, sheet=sheet.name, records=[])
+    pay_rule = fields_spec.get("pay_category")
     for offset, row in enumerate(sheet.rows):
         idx = (
             sheet.source_rows[offset]
@@ -372,6 +382,26 @@ def run_target(target: dict, sheets: list[Sheet]) -> TargetResult:
                     except (ValueError, MappingError) as error:
                         raise MappingError(f"{sheet.name}: Row {idx}: {error}") from None
                     result.excluded_records.append(identity)
+            continue
+        category = _raw_field(pay_rule, row, sheet.headers) if kind == "shifts" and pay_rule else None
+        if category is not None and treatment(category, pay_rules or {}) != WORKED:
+            # Leave and unresolved pay lines are not worked evidence. Parse
+            # their replacement identity, not clocks/breaks they need not have.
+            try:
+                record = {name: _extract_field(fields_spec[name], row, sheet.headers)
+                          for name in ("staff_id", "staff_name", "date") if name in fields_spec}
+            except (ValueError, MappingError) as error:
+                result.row_errors.append(f"Row {idx}: {error}")
+                continue
+            record["pay_category"] = category
+            if "minutes" in fields_spec and _raw_field(fields_spec["minutes"], row, sheet.headers):
+                try:
+                    record["minutes"] = _extract_field(fields_spec["minutes"], row, sheet.headers, minute_field=True)
+                except (ValueError, MappingError):
+                    pass  # No interpreted duration is claimed for excluded time.
+            record.update(_source_file=sheet.source_file, _source_sheet=sheet.name,
+                          _source_page=sheet.source_page, _source_row=idx)
+            result.records.append(record)
             continue
         record, err = {}, None
         for name, fs in fields_spec.items():
@@ -455,11 +485,11 @@ def _check_record(kind: str, r: dict) -> str | None:
     return None
 
 
-def run_spec(spec: dict, sheets: list[Sheet]) -> list[TargetResult]:
+def run_spec(spec: dict, sheets: list[Sheet], pay_rules=None) -> list[TargetResult]:
     targets = spec.get("targets", [])
     if not targets:
         raise MappingError("spec has no targets")
-    return [run_target(t, sheets) for t in targets]
+    return [run_target(t, sheets, pay_rules) for t in targets]
 
 
 def validate_results(results: list[TargetResult]) -> list[str]:

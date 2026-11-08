@@ -13,7 +13,7 @@ from carelog.api.monitoring import _latest_data_date
 from carelog.api.responses import form_data, navigate, resource
 from carelog.auth import owned_or_404, require
 from carelog.domain.clock import facility_today
-from carelog.domain.compliance import worked_minutes
+from carelog.domain.compliance import time_evidence_problem, worked_minutes
 from carelog.domain.eligibility import counts_toward_care, registration_problem
 from carelog.ingestion.mapping import MappingError
 from carelog.ingestion.quality import validate_shifts
@@ -63,11 +63,13 @@ def evidence_records():
     records = []
     for shift, member in query.order_by(Shift.date.desc(), Shift.id).offset((page - 1) * 100).limit(100):
         eligible = shift.is_direct_care and counts_toward_care(member, shift.date)
-        counted = eligible and shift.evidence_type == "worked"
+        clock_problem = time_evidence_problem(shift)
+        counted = eligible and shift.evidence_type == "worked" and not clock_problem
         reason = "Eligible actual worked" if counted else (
             f"Voided: {shift.void_reason}" if shift.evidence_type == VOIDED
             else f"Replaced by import #{shift.superseded_by_receipt_id}" if shift.evidence_type == SUPERSEDED
             else f"{shift.evidence_type}: excluded from actual results" if shift.evidence_type != "worked"
+            else clock_problem if clock_problem
             else "Not direct care" if not shift.is_direct_care
             else registration_problem(member, shift.date) or
             ("Outside approved effective dates" if member.eligibility_status == "approved" else member.eligibility_reason)

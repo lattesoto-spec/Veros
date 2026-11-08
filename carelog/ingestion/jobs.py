@@ -411,6 +411,10 @@ def _process(job: ImportJob, review=None):
         "scopes": scopes,
         "dates": sorted(_evidence_dates(outcomes)),
         "impact": {
+            "staff_imported": sum(o.staff_imported for o in outcomes),
+            "staff_new": sum(o.staff_new for o in outcomes),
+            "staff_updated": sum(o.staff_updated for o in outcomes),
+            "staff_changes": [row for o in outcomes for row in o.staff_changes][:20],
             "shifts_imported": receipt.shifts_imported,
             "shifts_replaced": sum(o.shifts_replaced for o in outcomes),
             "replaced_sample": [row for o in outcomes for row in o.replaced_sample][:20],
@@ -449,7 +453,7 @@ def without_personal_samples(review_json):
         return review_json
     review = json.loads(review_json)
     review.pop("samples", None)
-    for name in ("period_sample", "replaced_sample", "census_changes", "void_matches", "holds"):
+    for name in ("period_sample", "replaced_sample", "staff_changes", "census_changes", "void_matches", "holds"):
         review.get("impact", {}).pop(name, None)
     return json.dumps(review)
 
@@ -459,7 +463,8 @@ def _shift_scopes(outcomes) -> list[dict]:
     scopes = []
     for outcome in outcomes:
         for result in outcome.results:
-            days = [rec["date"] for rec in result.records] if result.kind == "shifts" else []
+            days = [rec["date"] for rec in [*result.records, *result.excluded_records, *result.pay_excluded_records]
+                    if isinstance(rec.get("date"), date)] if result.kind == "shifts" else []
             if days:
                 scopes.append(
                     {
@@ -517,7 +522,7 @@ def _evidence_dates(outcomes) -> set[str]:
         rec["date"].isoformat()
         for outcome in outcomes
         for result in outcome.results
-        for rec in result.records
+        for rec in [*result.records, *result.excluded_records, *result.pay_excluded_records]
         if isinstance(rec.get("date"), date)
     }
 

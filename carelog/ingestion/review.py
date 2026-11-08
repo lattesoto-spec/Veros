@@ -19,6 +19,9 @@ def state_fingerprint(facility_id):
         for row in rows:
             digest.update(json.dumps(list(row), default=str, ensure_ascii=True).encode())
     organization_id = db.session.get(Facility, facility_id).organization_id
+    from carelog.models import Organization
+    organization = db.session.get(Organization, organization_id)
+    digest.update((organization.timezone if organization else "Australia/Sydney").encode())
     rules = PayCategoryRule.query.filter_by(organization_id=organization_id)
     digest.update(json.dumps(sorted((r.category, r.treatment) for r in rules)).encode())
     return digest.hexdigest()
@@ -44,7 +47,7 @@ def public_review(review, include_samples=False):
                       "row_errors": outcome.get("row_errors", [])})
     impact = dict(review.get("impact", {}))
     if not include_samples:
-        for private in ("period_sample", "replaced_sample", "census_changes", "void_matches", "holds"):
+        for private in ("period_sample", "replaced_sample", "staff_changes", "census_changes", "void_matches", "holds"):
             impact.pop(private, None)
     return {"files": files, "impact": impact, "effect": review.get("effect", []),
             "basis": "Replaces only supplied staff/date/evidence groups from the same source layout, and resident/date episode groups. Other layouts, dates and staff are preserved. Overlapping sources are rejected. Replaced shifts are retained and return if this import is later deleted. Resident census rows update by resident and date."}

@@ -171,7 +171,23 @@ def denominator_issues(facility_id, start, end):
                     f"{day}: {invalid} resident-day row(s) have unverified service or leave evidence"
                 )
         day += timedelta(days=1)
-    return issues
+    # Keep every affected date while presenting consecutive equal problems once.
+    grouped, other = {}, []
+    for issue in issues:
+        if len(issue) > 11 and issue[10:12] == ": ":
+            grouped.setdefault(issue[12:], []).append(date.fromisoformat(issue[:10]))
+        else:
+            other.append(issue)
+    for reason, days in grouped.items():
+        ranges, first, last = [], days[0], days[0]
+        for current in days[1:]:
+            if current != last + timedelta(days=1):
+                ranges.append(str(first) if first == last else f"{first} to {last}")
+                first = current
+            last = current
+        ranges.append(str(first) if first == last else f"{first} to {last}")
+        other.append(f"{', '.join(ranges)}: {reason}")
+    return other
 
 
 def _stats_from_breakdown(breakdown, ancc_target, rn_target):

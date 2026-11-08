@@ -6,6 +6,7 @@ recognised as worked or a person has said so. Anything else is held back.
 """
 
 from .fingerprint import normalize_header
+from math import isfinite
 
 WORKED = "worked"
 EXCLUDED = "excluded"
@@ -43,10 +44,6 @@ def key(category) -> str:
 # Terms that identify a category column by its values. Narrower than the list
 # above: "travel" or "meal" could appear in an unrelated column.
 _SHORT_CODES = {"al", "sl", "pl", "pcl", "lsl", "wc", "cl", "lwop", "phnw", "rdo"}
-_VALUE_SIGNALS = (
-    "leave", "lsl", "sick", "workers comp", "workcover", "training", "allowance",
-    "absence", "absent", "compassionate", "bereavement", "parental",
-)
 _MAX_CATEGORIES = 40
 
 
@@ -65,9 +62,10 @@ def pay_column(headers, rows=(), mapped=()) -> str | None:
         values = {key(row.get(header)) for row in rows} - {""}
         if not values or len(values) > _MAX_CATEGORIES:
             continue
-        if values & _SHORT_CODES or any(
-            signal in value for value in values for signal in _VALUE_SIGNALS
-        ):
+        if values & _SHORT_CODES or values & {
+            "annual leave", "personal leave", "sick leave", "long service leave",
+            "workers compensation", "training", "study leave", "allowance",
+        }:
             return header
     return None
 
@@ -115,7 +113,11 @@ def split_records(records, rules, minutes_of):
             label, {"category": label, "treatment": decision, "rows": 0, "minutes": 0}
         )
         entry["rows"] += 1
-        entry["minutes"] += int(minutes_of(record) or 0)
+        interpreted = minutes_of(record)
+        if interpreted is None or not isfinite(interpreted):
+            entry["minutes"] = None
+        elif entry["minutes"] is not None:
+            entry["minutes"] += int(interpreted)
         if decision == WORKED:
             kept.append(record)
         elif decision == EXCLUDED:

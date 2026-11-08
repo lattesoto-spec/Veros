@@ -100,6 +100,8 @@ KINDS = {
 
 DATE_FORMATS = [
     ["", "Detect it (dates that could be either way are rejected)"],
+    ["day_first", "Day first throughout (also accepts ISO dates and timestamps)"],
+    ["month_first", "Month first throughout (also accepts ISO dates and timestamps)"],
     ["%d/%m/%Y", "Day first: 31/08/2026"],
     ["%d/%m/%y", "Day first, short year: 31/08/26"],
     ["%d-%m-%Y", "Day first with dashes: 31-08-2026"],
@@ -124,6 +126,7 @@ def public_catalogue() -> dict:
         "date_formats": DATE_FORMATS,
         "always_true": ALWAYS_TRUE,
         "duration_units": [["minutes", "Minutes: 30"], ["hours", "Hours: 0.5"], ["h:mm", "Hours:minutes: 0:30"]],
+        "clock_timezones": [[zone, zone] for zone in ("Australia/Sydney", "Australia/Melbourne", "Australia/Brisbane", "Australia/Adelaide", "Australia/Darwin", "Australia/Perth", "Australia/Hobart", "Australia/Lord_Howe", "UTC")],
     }
 
 
@@ -188,6 +191,7 @@ def target_to_mapping(target, sheet) -> dict:
         "header_row": target.get("header_row", sheet.header_row_index),
         "fields": fields,
         "date_format": date_format,
+        "clock_timezone": target.get("clock_timezone", ""),
         "filter_column": row_filter.get("column", ""),
         "filter_values": ", ".join(row_filter.get("include_values") or []),
         "units": {name: rule.get("unit") or ("hours" if rule.get("multiply") == 60 else "")
@@ -260,6 +264,13 @@ def _build_target(mapping, sheet, problems):
     elif kind == "care_episodes" and sum(bool(chosen.get(name)) for name in ("minutes", "hours", "duration_hhmm")) > 1:
         problems.append(f"{label}: choose one duration column and unit, not several.")
     target = {"kind": kind, "sheet": sheet.name, "fields": fields}
+    if kind == "shifts" and mapping.get("clock_timezone"):
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+        try:
+            ZoneInfo(mapping["clock_timezone"])
+            target["clock_timezone"] = mapping["clock_timezone"]
+        except (ZoneInfoNotFoundError, ValueError, TypeError):
+            problems.append(f"{label}: choose a recognised source clock timezone.")
     if kind == "shifts" and chosen.get("break_minutes") == ALWAYS_TRUE:
         target["break_basis"] = "Reviewer confirmed these times already exclude unpaid breaks."
     if sheet.raw_rows:
@@ -295,7 +306,10 @@ def build_spec(mappings, sheets) -> tuple[dict | None, list[str]]:
         return None, problems
     spec = {"targets": targets, "reasoning": "reviewer-built mapping"}
     try:
-        results = run_spec(spec, apply_header_overrides(spec, sheets))
+        from .pipeline import _read_pay_columns
+        mapped_sheets = apply_header_overrides(spec, sheets)
+        _read_pay_columns(spec, mapped_sheets)
+        results = run_spec(spec, mapped_sheets)
     except MappingError as error:
         return None, [str(error)]
     for result in results:

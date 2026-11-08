@@ -91,6 +91,9 @@ class ImportOutcome:
     results: list[TargetResult]
     shifts_imported: int = 0
     staff_imported: int = 0
+    staff_new: int = 0
+    staff_updated: int = 0
+    staff_changes: list[dict] = field(default_factory=list)
     residents_imported: int = 0
     resident_days_imported: int = 0
     care_episodes_imported: int = 0
@@ -213,7 +216,8 @@ def ingest_file(
     _read_pay_columns(spec, mapped_sheets)
     _read_identity_columns(spec, mapped_sheets)
     prepare_status_filters(spec, mapped_sheets)
-    results = run_spec(spec, mapped_sheets)
+    rules = {rule.category: rule.treatment for rule in PayCategoryRule.query.filter_by(organization_id=facility.organization_id)}
+    results = run_spec(spec, mapped_sheets, rules)
     for result in results:
         if not result.records:
             raise MappingError(
@@ -243,22 +247,22 @@ def ingest_file(
     for r in results:
         if r.kind == "staff":
             _import_staff(facility, r.records, outcome)
-    rules = {
-        rule.category: rule.treatment
-        for rule in PayCategoryRule.query.filter_by(
-            organization_id=getattr(facility, "organization_id", None)
-        )
-    }
     for r in results:
         if r.kind == "shifts":
+            sheet = next(s for s in mapped_sheets if s.name == r.sheet)
+            target = next(t for t in spec["targets"] if t["kind"] == "shifts" and t["sheet"] == r.sheet)
+            organization = db.session.get(Organization, facility.organization_id)
+            from .quality import apply_elapsed_minutes
+            zone_name = target.get("clock_timezone") or (organization.timezone if organization else "Australia/Sydney")
+            target["clock_timezone"] = zone_name
+            apply_elapsed_minutes(r.records, zone_name)
             r.records, ruled_out, r.pay_categories = split_records(
                 r.records, rules, record_minutes
             )
+            r.pay_excluded_records = [rec for rec in ruled_out if rec.get("staff_id") and isinstance(rec.get("date"), date)]
             r.rows_filtered += sum(
                 item["rows"] for item in r.pay_categories if item["treatment"] != "worked"
             )
-            sheet = next(s for s in mapped_sheets if s.name == r.sheet)
-            target = next(t for t in spec["targets"] if t["kind"] == "shifts" and t["sheet"] == r.sheet)
             auto_type, basis = classify_shift_evidence(filename, sheet, target)
             if evidence_type in ("worked", "rostered", "unverified"):
                 auto_type, basis = evidence_type, "server-side evidence override"
@@ -268,7 +272,8 @@ def ingest_file(
                 auto_type = "worked"
                 basis = f"Provider verification: {target['verified_source']}"
             r.evidence_type = auto_type
-            r.evidence_basis = basis
+            r.evidence_basis = (f"{basis}; clock intervals use elapsed time in {zone_name}"
+                                if any(rec.get("_timezone_name") for rec in r.records) else basis)
             from .quality import validate_shifts
 
             if {"start_time", "end_time"} <= set(target.get("fields", {})) and "break_minutes" not in target.get("fields", {}):
@@ -279,13 +284,12 @@ def ingest_file(
             local_today = facility_today(facility)
             validate_shifts(r.records, evidence_type=auto_type, today=local_today)
             outcome.warnings.extend(check_shifts(r.records, today=local_today))
-            organization = db.session.get(Organization, facility.organization_id)
             outcome.warnings.extend(daylight_saving_warnings(
-                r.records, organization.timezone if organization else "Australia/Sydney"
+                r.records, zone_name
             ))
             _import_shifts(
                 facility, r.records, outcome, evidence_type=auto_type,
-                ruled_out=[*ruled_out, *r.excluded_records],
+                ruled_out=[*r.pay_excluded_records, *r.excluded_records],
             )
         elif r.kind == "staff":
             continue
@@ -424,6 +428,11 @@ def record_credential_gap(member, new_expiry: date, today: date):
 
 
 def _import_staff(facility, records: list[dict], outcome: ImportOutcome):
+    shown_fields = ("name", "source_role", "employment_type", "classification",
+                    "registration_number", "registration_expiry", "eligibility_status")
+    def snapshot(member):
+        return {key: str(getattr(member, key)) if getattr(member, key) is not None else None
+                for key in shown_fields}
     directory = _staff_directory(facility)
     for rec in records:
         _validate_staff_identity(directory, rec, outcome.filename)
@@ -436,6 +445,7 @@ def _import_staff(facility, records: list[dict], outcome: ImportOutcome):
             role = "PCW" if bucket == "PCA" else bucket
 
         member = _record_for_role(directory.get(sid), raw_role)
+        before = snapshot(member) if member else None
         if member is None:
             member = _add_staff_record(
                 facility, directory, sid, name, role, raw_role, status, reason
@@ -463,6 +473,17 @@ def _import_staff(facility, records: list[dict], outcome: ImportOutcome):
         if classification:
             member.classification = classification
         outcome.staff_imported += 1
+        after = snapshot(member)
+        if before is None:
+            outcome.staff_new += 1
+        elif before != after:
+            outcome.staff_updated += 1
+        if before != after and len(outcome.staff_changes) < 20:
+            outcome.staff_changes.append({"staff_id": sid, "name": member.name,
+                "action": "New profile" if before is None else "Update",
+                "changes": [{"field": key, "before": before.get(key) if before else None,
+                             "after": after[key]} for key in shown_fields
+                            if (before or {}).get(key) != after[key]]})
 
 
 def _target_columns(target) -> set:
@@ -592,10 +613,10 @@ def _read_pay_columns(spec, sheets):
     for target in spec.get("targets", []):
         if target.get("kind") != "shifts" or "pay_category" in target.get("fields", {}):
             continue
-        if target.get("all_lines_worked"):
-            continue
         sheet = next((s for s in sheets if s.name == target.get("sheet")), sheets[0])
         column = pay_column(sheet.headers, sheet.rows, _target_columns(target))
+        if target.get("all_lines_worked") and not column:
+            continue
         row_filter = target.get("row_filter") or {}
         if column and not (row_filter.get("column") == column and row_filter.get("include_values")):
             target.setdefault("fields", {})["pay_category"] = {"column": column}
@@ -768,6 +789,8 @@ def _import_shifts(
         start, end = rec.get("start_time"), rec.get("end_time")
         coverage_known = isinstance(start, time) and isinstance(end, time)
         duration = None
+        if coverage_known and rec.get("_elapsed_minutes") is not None:
+            duration = _whole_minutes(rec["_elapsed_minutes"]) - break_minutes
         if not coverage_known:
             duration = _whole_minutes(rec["minutes"]) - break_minutes
             start = end = time(0, 0)
@@ -822,6 +845,7 @@ def _import_shifts(
             break_minutes=break_minutes,
             duration_minutes=duration,
             coverage_known=coverage_known,
+            timezone_name=rec.get("_timezone_name"),
             is_agency=bool(rec.get("is_agency", False)),
             pay_category=pay_category,
             evidence_type=evidence_type,

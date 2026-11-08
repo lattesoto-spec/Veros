@@ -64,6 +64,8 @@ def workspace_context(facility: Facility | None) -> dict:
     )
     if latest_day:
         period_start, period_end = quarter_bounds(latest_day)
+        from carelog.domain.compliance import assessment_end
+        period_end = assessment_end(facility.id, latest_day)
         period = (
             f"{period_start.strftime('%d %b')} to {period_end.strftime('%d %b %Y')}"
         )

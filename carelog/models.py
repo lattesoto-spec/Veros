@@ -318,6 +318,7 @@ class Shift(db.Model):
     source_file = db.Column(db.Text)
     source_sheet = db.Column(db.Text)
     source_page = db.Column(db.Integer)
+    timezone_name = db.Column(db.Text)
 
 
 class PayCategoryRule(db.Model):

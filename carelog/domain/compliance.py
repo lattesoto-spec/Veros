@@ -10,7 +10,6 @@ from decimal import Decimal
 
 
 from carelog.domain.care_minutes import (
-    _minutes_between,
     active_residents_on,
     quarter_bounds,
     resident_day_is_occupied,
@@ -18,7 +17,7 @@ from carelog.domain.care_minutes import (
 from carelog.domain import eligibility
 from carelog.models import CareEpisode, Resident, ResidentDay, Shift, Staff, db
 
-CALC_VERSION = "2026.11.11"
+CALC_VERSION = "2026.11.12"
 
 # Canonical reporting buckets. The mapping engine normalizes to PCW; the
 # government statement calls the bucket PCA — they are the same bucket.
@@ -30,12 +29,31 @@ def bucket_role(role: str) -> str:
 
 
 def worked_minutes(shift: Shift) -> int:
+    if time_evidence_problem(shift):
+        return 0
     if shift.duration_minutes is not None:
         return max(shift.duration_minutes, 0)
-    return max(
-        _minutes_between(shift.start_time, shift.end_time) - (shift.break_minutes or 0),
-        0,
-    )
+    try:
+        from carelog.domain.intervals import elapsed_minutes
+        from carelog.domain.clock import facility_zone_name
+        gross = elapsed_minutes(shift.date, shift.start_time, shift.end_time,
+                                shift.timezone_name or facility_zone_name(shift.facility_id))
+        return max(int(gross) - (shift.break_minutes or 0), 0)
+    except ValueError:
+        return 0  # An unknown fold cannot contribute guessed worked minutes.
+
+
+def time_evidence_problem(shift):
+    if not shift.coverage_known:
+        return None
+    from carelog.domain.intervals import elapsed_minutes
+    from carelog.domain.clock import facility_zone_name
+    try:
+        elapsed_minutes(shift.date, shift.start_time, shift.end_time,
+                        shift.timezone_name or facility_zone_name(shift.facility_id))
+    except ValueError as error:
+        return str(error)
+    return None
 
 
 # ------------------------------------------------------------- daily stats
@@ -204,7 +222,12 @@ def rn_coverage(
         )
         .all()
     )
-    intervals, withheld, unknown = [], [], False
+    from carelog.domain.clock import facility_zone_name
+    from carelog.domain.intervals import clock_change_day
+    zones = {shift.timezone_name or facility_zone_name(facility_id) for shift, _ in shifts if shift.coverage_known}
+    change_day = any(clock_change_day(day, zone) for zone in zones or {facility_zone_name(facility_id)})
+    mixed_zones = len(zones) > 1
+    intervals, withheld, unknown = [], [], change_day or mixed_zones
     # A duration-only RN row shows work happened but not when, so it cannot
     # settle what a gap at midnight on the neighbouring date means.
     evidenced_dates = {shift.date for shift, _ in shifts} - {
@@ -214,6 +237,9 @@ def rn_coverage(
     }
     for shift, staff in shifts:
         if eligibility.bucket_for(staff.role) != "RN" and not eligibility.could_be_rn(staff):
+            continue
+        if time_evidence_problem(shift):
+            unknown = True
             continue
         if not shift.coverage_known or shift.start_time == shift.end_time:
             if shift.date == day:
@@ -304,6 +330,7 @@ def rn_coverage(
         and not any(g["reportable"] or g.get("unassessed") for g in gaps),
         "unassessed_minutes": sum(g["minutes"] for g in gaps if g.get("unassessed")),
         "coverage_known": not unknown,
+        "time_basis": "Clock-change day: RN continuity is unassessed; worked totals use elapsed time." if change_day else "Mixed source clock timezones: RN continuity is unassessed." if mixed_zones else None,
         "gaps": len(gaps),
         "timeline": timeline,
         "gap_intervals": gaps,
@@ -424,6 +451,8 @@ def detect_gaps(facility, today: date) -> list[dict]:
                 ),
             }
         )
+    elif not cov["coverage_known"]:
+        alerts.append({"severity": "medium", "message": cov.get("time_basis") or "RN clock evidence is incomplete; continuity is unassessed, not a confirmed gap."})
     elif not cov["full_coverage"] and cov["covered_minutes"] > 0:
         alerts.append(
             {
@@ -695,6 +724,12 @@ def quarterly_tests(facility, start: date, end: date) -> dict:
 
     if t["excluded_minutes"]:
         limitations.append(f"{t['excluded_minutes']} worked minutes are withheld pending eligibility, effective-date or registration review.")
+    unresolved_clocks = sum(bool(time_evidence_problem(shift)) for shift in Shift.query.filter(
+        Shift.facility_id == facility.id, Shift.evidence_type == "worked",
+        Shift.date >= start, Shift.date <= end,
+    ))
+    if unresolved_clocks:
+        limitations.append(f"{unresolved_clocks} clock interval(s) have ambiguous or nonexistent local times. They contribute zero minutes until corrected against elapsed-time evidence.")
     if t["zero_bed_day_worked_dates"]:
         limitations.append("Eligible worked minutes occur on zero-occupied-bed-day dates: " + ", ".join(t["zero_bed_day_worked_dates"]) + ". Reconcile their allocation before a verdict.")
     # A date is only evidenced by care staff. One cleaner's shift does not show
