@@ -96,9 +96,11 @@ def test_partial_period_and_zero_occupancy_never_yield_quarterly_pass(app, facil
         assert any("zero-occupied" in issue for issue in conflict["limitations"])
 
 
-def test_alerts_do_not_round_away_four_minute_shortfall(app, facility):
+def test_alerts_do_not_round_away_four_minute_shortfall(app, facility, monkeypatch):
     with app.app_context():
         day = date(2026, 7, 1)
+        # A complete one-day assessment; later dates are not yet due.
+        monkeypatch.setattr("carelog.domain.clock.facility_today", lambda _facility: day)
         FacilityTarget.query.filter_by(facility_id=facility.id, quarter_start=day).one().ancc_target = 200
         member = Staff(facility_id=facility.id, staff_id="RN", name="Nurse", role="RN", eligibility_status="approved", registration_number="SYNTHETIC", registration_expiry=date(2030, 1, 1))
         db.session.add(member)
@@ -137,3 +139,18 @@ def test_missing_target_is_null_and_daily_status_ignores_legacy_targets(app, fac
         db.session.commit()
         assert all(t["target"] is None for t in quarterly_tests(facility, day, day)["tests"])
         assert daily_stats(facility.id, day, 0, 0)["status"] == "unavailable"
+
+
+def test_missing_quarter_dates_are_an_evidence_gap_not_a_confirmed_shortfall(app, facility):
+    with app.app_context():
+        day = date(2026, 7, 1)
+        member = Staff(facility_id=facility.id, staff_id="RN", name="Nurse", role="RN", eligibility_status="approved", registration_number="SYNTHETIC", registration_expiry=date(2030, 1, 1))
+        db.session.add(member)
+        db.session.flush()
+        for i in range(100):
+            db.session.add(ResidentDay(facility_id=facility.id, resident_id=str(i), date=day, occupied=True, service_type="permanent"))
+        db.session.add(Shift(facility_id=facility.id, staff_id=member.id, date=day, start_time=time(0), end_time=time(1), duration_minutes=100, evidence_type="worked"))
+        db.session.commit()
+        messages = [alert["message"] for alert in detect_gaps(facility, day)]
+        assert any("cannot be assessed" in m and "not a quarter result" in m for m in messages)
+        assert not any("below its AN-ACC target" in m or "total minutes short" in m for m in messages)

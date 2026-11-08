@@ -400,3 +400,30 @@ def test_a_duration_row_next_door_leaves_a_midnight_gap_unassessed(facility):
                          end_time=time(0), coverage_known=False, duration_minutes=480, evidence_type="worked"))
     db.session.commit()
     assert rn_coverage(facility.id, date(2026, 8, 1))["unassessed_minutes"] >= 420
+
+
+def test_missing_dates_show_recorded_dates_only_and_withhold_the_quarter_shortfall(facility):
+    nurse = member(facility)
+    complete_quarter(facility, nurse)
+    Shift.query.filter(Shift.date >= date(2026, 9, 1)).delete()
+    db.session.commit()
+    result = quarterly_tests(facility, date(2026, 7, 1), date(2026, 9, 30))
+    total = result["tests"][0]
+    assert result["provisional"] is True and total["passed"] is None
+    # Statutory arithmetic is untouched: the full quarter's bed days remain the denominator.
+    assert result["totals"]["bed_days"] == 92
+    assert total["assessment_value_available"] is False
+    assert total["display_basis"] == "Recorded dates only; not a quarter result"
+    assert total["display_shortfall_minutes"] is None
+    observed = result["totals"]["observed"]
+    assert observed["days"] == 62 and observed["assessment_days"] == 92 and observed["bed_days"] == 62
+    assert total["display_achieved"] > total["achieved"]
+
+
+def test_complete_evidence_displays_the_assessment_value(facility):
+    nurse = member(facility)
+    complete_quarter(facility, nurse)
+    total = quarterly_tests(facility, date(2026, 7, 1), date(2026, 9, 30))["tests"][0]
+    assert total["assessment_value_available"] is True
+    assert total["display_achieved"] == total["achieved"]
+    assert total["display_shortfall_minutes"] == total["shortfall_minutes"]

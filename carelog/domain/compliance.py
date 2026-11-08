@@ -133,7 +133,7 @@ def range_breakdown(
     )
     ledger = ResidentDay.query.filter(
         ResidentDay.facility_id == facility_id,
-        ResidentDay.date >= start,
+        ResidentDay.date >= start - timedelta(days=1),
         ResidentDay.date <= end,
     ).all()
     residents = Resident.query.filter_by(facility_id=facility_id).all()
@@ -149,6 +149,10 @@ def range_breakdown(
                 day, by_day.get(day, []), census.get(day, []), residents, evidence_type
             )
         )
+        from carelog.domain.care_minutes import census_day_issues
+        out[-1]["worked_evidence"] = any(eligibility.bucket_for(staff.role) in eligibility.ELIGIBLE_BUCKETS
+                                         for _, staff in by_day.get(day, []))
+        out[-1]["census_verified"] = not census_day_issues(day, census, residents)
         day += timedelta(days=1)
     return out
 
@@ -172,9 +176,11 @@ def monthly_breakdown(facility_id: int, start: date, end: date) -> list[dict]:
                 "en_minutes": 0,
                 "pca_minutes": 0,
                 "agency_minutes": 0,
+                "observed_rows": [],
             },
         )
         m["days"] += 1
+        m["observed_rows"].append(r)
         m["bed_days"] += r["residents"]
         for k in (
             "total_minutes",
@@ -191,6 +197,7 @@ def monthly_breakdown(facility_id: int, start: date, end: date) -> list[dict]:
         m["care_per_bed_day"] = round(m["total_minutes"] / bd, 1) if bd else 0.0
         m["rn_per_bed_day"] = round(m["rn_minutes"] / bd, 1) if bd else 0.0
         m["label"] = date(m["year"], m["month"], 1).strftime("%B %Y")
+        m["observed"] = observed_position(m.pop("observed_rows"))
         out.append(m)
     return out
 
@@ -363,7 +370,25 @@ def detect_gaps(facility, today: date) -> list[dict]:
             return (f"{label}: averaging {ratio:.1f} of {Decimal(str(target)):.1f} "
                     f"mins/occupied bed day {period}; {deficit.normalize():f} total minutes short "
                     "using exact comparisons before display rounding.")
-        if Decimal(exact["total_minutes"]) < Decimal(str(care_target)) * bd:
+        observed = exact["observed"]
+        incomplete = observed["days"] < observed["assessment_days"]
+        if incomplete:
+            gap = observed["assessment_days"] - observed["days"]
+            recorded = observed["total_per_bed_day"]
+            alerts.append(
+                {
+                    "severity": "medium",
+                    "message": (
+                        f"Quarter position cannot be assessed: {gap} of {observed['assessment_days']} dates "
+                        "lack worked evidence or a reconciled census, so no shortfall is confirmed or ruled out. "
+                        + (f"Recorded dates alone average {recorded:.1f} of {Decimal(str(care_target)):.1f} "
+                           "mins/occupied bed day; this is not a quarter result." if recorded is not None else "")
+                    ).strip(),
+                }
+            )
+        if incomplete:
+            pass
+        elif Decimal(exact["total_minutes"]) < Decimal(str(care_target)) * bd:
             alerts.append(
                 {
                     "severity": "high",
@@ -387,14 +412,14 @@ def detect_gaps(facility, today: date) -> list[dict]:
                     ),
                 }
             )
-        if Decimal(exact["rn_minutes"]) < Decimal(str(rn_target)) * Decimal("0.9") * bd:
+        if not incomplete and Decimal(exact["rn_minutes"]) < Decimal(str(rn_target)) * Decimal("0.9") * bd:
             alerts.append(
                 {
                     "severity": "high",
                     "message": shortfall_message("RN minutes below target", exact["rn_minutes"], Decimal(str(rn_target)) * Decimal("0.9")),
                 }
             )
-        if Decimal(exact["rn_en_minutes"]) < Decimal(str(rn_target)) * bd:
+        if not incomplete and Decimal(exact["rn_en_minutes"]) < Decimal(str(rn_target)) * bd:
             alerts.append(
                 {
                     "severity": "high",
@@ -684,7 +709,20 @@ def quarter_totals(facility_id: int, start: date, end: date) -> dict:
         "ineligible_minutes": sum(r["ineligible_minutes"] for r in rows),
         "agency_minutes": sum(r["agency_minutes"] for r in rows),
         "zero_bed_day_worked_dates": [r["date"].isoformat() for r in rows if r["residents"] == 0 and r["total_minutes"] > 0],
+        "observed": observed_position(rows),
     }
+
+
+def observed_position(rows):
+    """A labelled display subset; never substitutes for statutory totals."""
+    selected = [r for r in rows if r.get("worked_evidence") and r.get("census_verified") and r["residents"] > 0]
+    bed_days = sum(r["residents"] for r in selected)
+    result = {"days": len(selected), "assessment_days": len(rows), "bed_days": bed_days,
+              "dates": [r["date"].isoformat() for r in selected]}
+    for field in ("total_minutes", "rn_minutes", "en_minutes", "pca_minutes", "rn_en_minutes"):
+        result[field] = sum(r[field] for r in selected)
+        result[field.replace("_minutes", "_per_bed_day")] = round(result[field] / bed_days, 1) if bed_days else None
+    return result
 
 
 def per_bed_day(minutes: float, bed_days: int) -> float:
@@ -794,6 +832,9 @@ def quarterly_tests(facility, start: date, end: date) -> dict:
         target = Decimal(str(target))
         achieved_exact = Decimal(minutes) / Decimal(bd) if bd else Decimal(0)
         shortfall = max(target * bd - minutes, Decimal(0))
+        observed = t["observed"]
+        incomplete = observed["days"] < t["days"]
+        observed_key = {"total_care": "total_per_bed_day", "rn_only": "rn_per_bed_day", "rn_plus_en": "rn_en_per_bed_day"}[key]
         return {
             "key": key,
             "label": label,
@@ -807,6 +848,10 @@ def quarterly_tests(facility, start: date, end: date) -> dict:
             "shortfall": float(round(shortfall / bd, 3)) if bd and configured else None,
             "shortfall_minutes": float(shortfall) if configured else None,
             "provisional": bool(limitations),
+            "display_achieved": observed[observed_key] if incomplete else float(round(achieved_exact, 1)),
+            "display_basis": "Recorded dates only; not a quarter result" if incomplete else "Assessment period",
+            "assessment_value_available": not incomplete,
+            "display_shortfall_minutes": None if limitations else float(shortfall),
         }
 
     tests = [

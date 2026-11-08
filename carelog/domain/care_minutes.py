@@ -126,6 +126,42 @@ def _social_leave_issues(facility_id, end) -> list[str]:
     ]
 
 
+def census_day_issues(day, by_day, residents):
+    """The same identity and service checks for assessment and display basis."""
+    issues = []
+    ledger = by_day.get(day, [])
+    if not ledger:
+        issues.append(f"{day}: no verified resident-day census")
+    else:
+        ids = {row.resident_id for row in ledger}
+        expected = {
+            r.resident_id
+            for r in residents
+            if r.admitted_date
+            and r.admitted_date <= day
+            and (r.discharged_date is None or r.discharged_date > day)
+        }
+        missing = expected - ids
+        if missing:
+            issues.append(f"{day}: census omits {len(missing)} active resident(s)")
+        previous = {r.resident_id for r in by_day.get(day - timedelta(days=1), [])}
+        discharged = {
+            r.resident_id
+            for r in residents
+            if r.discharged_date and r.discharged_date <= day
+        }
+        if previous - ids - discharged and (residents or len(ids) < len(previous)):
+            issues.append(
+                f"{day}: census identities dropped without recorded discharge"
+            )
+        invalid = sum(bool(resident_day_problem(row)) for row in ledger)
+        if invalid:
+            issues.append(
+                f"{day}: {invalid} resident-day row(s) have unverified service or leave evidence"
+            )
+    return issues
+
+
 def denominator_issues(facility_id, start, end):
     """Reconcile complete census identities, not merely distinct dates."""
     rows = ResidentDay.query.filter(
@@ -140,36 +176,7 @@ def denominator_issues(facility_id, start, end):
     issues = _social_leave_issues(facility_id, end)
     day = start
     while day <= end:
-        ledger = by_day.get(day, [])
-        if not ledger:
-            issues.append(f"{day}: no verified resident-day census")
-        else:
-            ids = {row.resident_id for row in ledger}
-            expected = {
-                r.resident_id
-                for r in residents
-                if r.admitted_date
-                and r.admitted_date <= day
-                and (r.discharged_date is None or r.discharged_date > day)
-            }
-            missing = expected - ids
-            if missing:
-                issues.append(f"{day}: census omits {len(missing)} active resident(s)")
-            previous = {r.resident_id for r in by_day.get(day - timedelta(days=1), [])}
-            discharged = {
-                r.resident_id
-                for r in residents
-                if r.discharged_date and r.discharged_date <= day
-            }
-            if previous - ids - discharged and (residents or len(ids) < len(previous)):
-                issues.append(
-                    f"{day}: census identities dropped without recorded discharge"
-                )
-            invalid = sum(bool(resident_day_problem(row)) for row in ledger)
-            if invalid:
-                issues.append(
-                    f"{day}: {invalid} resident-day row(s) have unverified service or leave evidence"
-                )
+        issues.extend(census_day_issues(day, by_day, residents))
         day += timedelta(days=1)
     # Keep every affected date while presenting consecutive equal problems once.
     grouped, other = {}, []

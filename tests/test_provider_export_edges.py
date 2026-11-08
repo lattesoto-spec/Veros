@@ -161,22 +161,23 @@ def test_current_quarter_forecast_does_not_project_already_elapsed_missing_dates
     assert forecast["provisional"] is True and forecast["on_track"] is None
 
 
-def test_alert_precision_and_ended_period_wording_are_consistent(home):  # noqa: F811
+def test_alert_precision_and_ended_period_wording_are_consistent(home, monkeypatch):  # noqa: F811
     app, ids, facility = home
+    monkeypatch.setattr("carelog.domain.clock.facility_today", lambda _facility: date(2026, 7, 1))
     ResidentDay.query.filter_by(facility_id=facility.id).delete()
     for index in range(10):
-        db.session.add(ResidentDay(facility_id=facility.id, resident_id=f"R{index}", date=date(2026, 8, 25), occupied=True, service_type="permanent"))
+        db.session.add(ResidentDay(facility_id=facility.id, resident_id=f"R{index}", date=date(2026, 7, 1), occupied=True, service_type="permanent"))
     nurses = Staff(facility_id=facility.id, staff_id="RN", name="Nurse", role="RN", source_role="Registered Nurse", eligibility_status="approved", registration_number="SYNTHETIC", registration_expiry=date(2027, 12, 31))
     db.session.add(nurses)
     db.session.flush()
-    db.session.add(Shift(facility_id=facility.id, staff_id=nurses.id, date=date(2026, 8, 25), start_time=time(0), end_time=time(0), duration_minutes=395, coverage_known=False, evidence_type="worked"))
+    db.session.add(Shift(facility_id=facility.id, staff_id=nurses.id, date=date(2026, 7, 1), start_time=time(0), end_time=time(0), duration_minutes=395, coverage_known=False, evidence_type="worked"))
     for index, minutes in enumerate((480, 480, 480, 311)):
         member = Staff(facility_id=facility.id, staff_id=f"P{index}", name=f"Carer {index}", role="PCW", source_role="Personal Care Worker", eligibility_status="approved")
         db.session.add(member)
         db.session.flush()
-        db.session.add(Shift(facility_id=facility.id, staff_id=member.id, date=date(2026, 8, 25), start_time=time(0), end_time=time(0), duration_minutes=minutes, coverage_known=False, evidence_type="worked"))
+        db.session.add(Shift(facility_id=facility.id, staff_id=member.id, date=date(2026, 7, 1), start_time=time(0), end_time=time(0), duration_minutes=minutes, coverage_known=False, evidence_type="worked"))
     db.session.commit()
-    messages = [row["message"] for row in detect_gaps(facility, date(2026, 8, 25))]
+    messages = [row["message"] for row in detect_gaps(facility, date(2026, 7, 1))]
     assert any("214.6 of 215.0" in message and "4 total minutes short" in message for message in messages)
     assert any("39.5 of 39.6" in message and "1 total minutes short" in message for message in messages)
     assert all("this quarter" not in message for message in messages)
