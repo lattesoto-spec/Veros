@@ -37,7 +37,18 @@ DAILY_COLUMNS = [
     ("agency_minutes", "Agency minutes"),
     ("care_per_resident", "Care mins / resident"),
     ("rn_per_resident", "RN mins / resident"),
+    ("worked_evidence", "Countable worked time"),
+    ("census_verified", "Census reconciled"),
 ]
+
+
+def _daily_cell(row, key):
+    value = row[key]
+    if key == "date":
+        return value.isoformat()
+    if isinstance(value, bool):
+        return "Yes" if value else "No - treat as missing, not zero"
+    return value
 
 
 def daily_csv(facility, start: date, end: date) -> str:
@@ -46,7 +57,7 @@ def daily_csv(facility, start: date, end: date) -> str:
     w = csv.writer(buf)
     w.writerow([label for _, label in DAILY_COLUMNS])
     for r in rows:
-        w.writerow([r[key] for key, _ in DAILY_COLUMNS])
+        w.writerow([_daily_cell(r, key) for key, _ in DAILY_COLUMNS])
     return buf.getvalue()
 
 
@@ -64,10 +75,7 @@ def summary_xlsx(facility, start: date, end: date) -> bytes:
         c.font = bold
     for r in range_breakdown(facility.id, start, end):
         ws.append(
-            [
-                r[key] if key != "date" else r[key].isoformat()
-                for key, _ in DAILY_COLUMNS
-            ]
+            [_daily_cell(r, key) for key, _ in DAILY_COLUMNS]
         )
 
     wm = wb.create_sheet("Monthly")
@@ -250,7 +258,9 @@ def board_pdf(facility, today: date) -> bytes:
                 small,
             )
         )
-        note = " (provisional)" if fc["provisional"] else ""
+        recorded_only = tests["tests"][0].get("assessment_value_available") is False
+        note = (" (provisional; dates without evidence count as zero)" if recorded_only
+                else " (provisional)" if fc["provisional"] else "")
         kpi_rows = [
             [
                 "Quarter-to-date average",

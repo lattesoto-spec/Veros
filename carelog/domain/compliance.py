@@ -159,11 +159,13 @@ def range_breakdown(
 
 
 def monthly_breakdown(facility_id: int, start: date, end: date) -> list[dict]:
-    """Aggregate range_breakdown rows into calendar months."""
+    """Aggregate range_breakdown rows into calendar months.
+
+    Every calendar date in the range counts toward a month's evidence check,
+    including dates with no census and no worked time.
+    """
     months: dict[tuple, dict] = {}
     for r in range_breakdown(facility_id, start, end):
-        if r["residents"] == 0 and r["total_minutes"] == 0:
-            continue
         key = (r["date"].year, r["date"].month)
         m = months.setdefault(
             key,
@@ -171,6 +173,7 @@ def monthly_breakdown(facility_id: int, start: date, end: date) -> list[dict]:
                 "year": key[0],
                 "month": key[1],
                 "days": 0,
+                "calendar_days": 0,
                 "bed_days": 0,
                 "total_minutes": 0,
                 "rn_minutes": 0,
@@ -180,8 +183,11 @@ def monthly_breakdown(facility_id: int, start: date, end: date) -> list[dict]:
                 "observed_rows": [],
             },
         )
-        m["days"] += 1
+        m["calendar_days"] += 1
         m["observed_rows"].append(r)
+        if r["residents"] == 0 and r["total_minutes"] == 0:
+            continue
+        m["days"] += 1
         m["bed_days"] += r["residents"]
         for k in (
             "total_minutes",
@@ -199,11 +205,11 @@ def monthly_breakdown(facility_id: int, start: date, end: date) -> list[dict]:
         m["rn_per_bed_day"] = round(m["rn_minutes"] / bd, 1) if bd else 0.0
         m["label"] = date(m["year"], m["month"], 1).strftime("%B %Y")
         m["observed"] = observed_position(m.pop("observed_rows"))
-        m["evidence_complete"] = m["observed"]["days"] >= m["days"]
+        m["evidence_complete"] = m["observed"]["days"] >= m["calendar_days"]
         m["evidence_note"] = (
             "Complete"
             if m["evidence_complete"]
-            else f"{m['observed']['days']} of {m['days']} dates have countable worked time and a reconciled census; "
+            else f"{m['observed']['days']} of {m['calendar_days']} dates have countable worked time and a reconciled census; "
             "the others are included as zero minutes"
         )
         out.append(m)
@@ -395,6 +401,11 @@ def detect_gaps(facility, today: date) -> list[dict]:
                     f"mins/occupied bed day {period}; {deficit.normalize():f} total minutes short "
                     "using exact comparisons before display rounding.")
 
+        def scoped(key, text):
+            if by_key[key]["passed"] is None:
+                return text.rstrip(".") + " (quarter to date; not a quarter result)."
+            return text
+
         def below(key):
             return by_key[key]["passed"] is False or by_key[key]["on_track"] is False
 
@@ -414,7 +425,7 @@ def detect_gaps(facility, today: date) -> list[dict]:
                 alerts.append(
                     {
                         "severity": "high",
-                        "message": shortfall_message("Facility is below its AN-ACC target", exact["total_minutes"], care_target),
+                        "message": scoped("total_care", shortfall_message("Facility is below its AN-ACC target", exact["total_minutes"], care_target)),
                     }
                 )
             elif fc and fc["on_track"] is False:
@@ -438,14 +449,14 @@ def detect_gaps(facility, today: date) -> list[dict]:
                 alerts.append(
                     {
                         "severity": "high",
-                        "message": shortfall_message("RN minutes below target", exact["rn_minutes"], Decimal(str(rn_target)) * Decimal("0.9")),
+                        "message": scoped("rn_only", shortfall_message("RN minutes below target", exact["rn_minutes"], Decimal(str(rn_target)) * Decimal("0.9"))),
                     }
                 )
             if below("rn_plus_en"):
                 alerts.append(
                     {
                         "severity": "high",
-                        "message": shortfall_message("RN + EN minutes below target", exact["rn_en_minutes"], rn_target),
+                        "message": scoped("rn_plus_en", shortfall_message("RN + EN minutes below target", exact["rn_en_minutes"], rn_target)),
                     }
                 )
 
@@ -644,6 +655,10 @@ def forecast_quarter(
     from carelog.domain.care_minutes import denominator_issues
 
     census_issues = denominator_issues(facility.id, q_start, today)
+    # The forecast is provisional for every reason the quarter tests are.
+    for limit in quarterly_tests(facility, q_start, today)["limitations"]:
+        if not limit.startswith(("Quarter to date", "Ended quarter")) and limit not in census_issues:
+            census_issues.append(limit)
     gap_dates = [r["date"] for r in qtd if r["residents"] > 0 and not r["worked_evidence"]]
     if gap_dates:
         census_issues.append(
@@ -727,6 +742,8 @@ def present_test(row: dict) -> dict:
         shortfall_label = "-" if not shortfall else "<0.001 min"
     else:
         shortfall_label = f"{shortfall:,.3f}".rstrip("0").rstrip(".") + " min"
+        if row.get("passed") is None:
+            shortfall_label += " to date"
     return {
         "achieved": value,
         "achieved_label": achieved_label,
@@ -900,7 +917,7 @@ def quarterly_tests(facility, start: date, end: date) -> dict:
             "display_achieved": observed[observed_key] if incomplete else float(round(achieved_exact, 1)),
             "display_basis": "Recorded dates only; not a quarter result" if incomplete else "Assessment period",
             "assessment_value_available": not incomplete,
-            "display_shortfall_minutes": None if limitations else float(shortfall),
+            "display_shortfall_minutes": None if not evidence_clear else float(shortfall),
         }
 
     tests = [

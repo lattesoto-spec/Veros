@@ -621,7 +621,12 @@ def _obd_table(stats: dict) -> Table:
 
 
 def _care_minutes_per_obd_table(stats: dict, facility) -> Table:
-    data = [["Role", "Care minutes per OBD", "Target"]]
+    incomplete = stats["tests"]["tests"][0].get("assessment_value_available") is False
+    heading = (
+        Paragraph("Care minutes per OBD<br/>(dates without evidence count as zero)", getSampleStyleSheet()["BodyText"])
+        if incomplete else "Care minutes per OBD"
+    )
+    data = [["Role", heading, "Target"]]
     approved = stats["tests"]["target_reconciliation"]["target_source"]
     target_map = {
         "RN": stats["tests"]["tests"][1]["target"] if approved else "Not available",
@@ -664,7 +669,7 @@ def _compliance_tests_table(stats: dict) -> Table:
             [
                 row["label"],
                 shown["achieved_label"],
-                f"{row['target']:.1f}" if row["target"] else "Not approved",
+                f"{row['target']:.1f}" if row["target"] is not None else "Not approved",
                 result,
                 shown["shortfall_label"],
             ]

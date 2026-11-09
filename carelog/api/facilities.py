@@ -19,7 +19,9 @@ from carelog.domain import eligibility as el
 from carelog.domain.care_minutes import (
     quarter_bounds,
 )
+from carelog.domain.clock import facility_today
 from carelog.domain.compliance import (
+    assessment_end,
     quarterly_tests,
 )
 from carelog.ingestion.analyzer import ai_ready
@@ -241,16 +243,20 @@ def facilities_view():
     summary = {}
     for f in facilities:
         latest = (
-            Shift.query.filter_by(facility_id=f.id, evidence_type="worked")
+            Shift.query.filter(
+                Shift.facility_id == f.id, Shift.evidence_type == "worked",
+                Shift.date <= facility_today(f),
+            )
             .order_by(Shift.date.desc())
             .first()
         )
         period_status = None
         if latest:
             period_start, _ = quarter_bounds(latest.date)
-            result = quarterly_tests(f, period_start, latest.date)
+            result = quarterly_tests(f, period_start, assessment_end(f, latest.date))
             if result["totals"]["bed_days"]:
                 period_status = result["passed"] if result["complete_quarter"] else (
+                    "Incomplete ended quarter: review evidence" if result["ended_quarter"] else
                     "Quarter to date: on track" if result["on_track"] is True else
                     "Quarter to date: below threshold" if result["on_track"] is False else
                     None
